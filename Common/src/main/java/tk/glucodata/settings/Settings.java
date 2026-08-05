@@ -21,8 +21,6 @@
 
 package tk.glucodata.settings;
 
-import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
-import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE;
 import static android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
 import static android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
 import static android.content.pm.PackageManager.DONT_KILL_APP;
@@ -85,6 +83,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
+import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
@@ -95,6 +94,8 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatDelegate;
+import androidx.appcompat.widget.SwitchCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.os.LocaleListCompat;
 import androidx.core.widget.NestedScrollView;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -113,17 +114,21 @@ import tk.glucodata.BooleanSupplier;
 import tk.glucodata.BuildConfig;
 import tk.glucodata.CheckDirectionBox;
 import tk.glucodata.CheckDirectionRadio;
+import tk.glucodata.ClinicalUi;
 import tk.glucodata.Floating;
 import tk.glucodata.GlucoseCurve;
 import tk.glucodata.HealthConnection;
+import tk.glucodata.IntakeBackendSettings;
 import tk.glucodata.LabelAdapter;
 import tk.glucodata.Layout;
+import tk.glucodata.LegacySettingsRoutes;
 import tk.glucodata.Libreview;
 import tk.glucodata.Log;
 import tk.glucodata.MainActivity;
 import tk.glucodata.Menus;
 import tk.glucodata.MeterList;
 import tk.glucodata.Natives;
+import tk.glucodata.OrientationPolicy;
 import tk.glucodata.Notify;
 import tk.glucodata.NumAlarm;
 import tk.glucodata.R;
@@ -257,7 +262,7 @@ void finish() {
     settinglayout.setVisibility(GONE);
     
     try {
-        activity.setRequestedOrientation(Natives.getScreenOrientation());
+        activity.setRequestedOrientation(OrientationPolicy.requestedOrientation());
         }
         catch(       Throwable  error) {
         String mess=error!=null?error.getMessage():null;
@@ -386,7 +391,110 @@ static public Spinner getProfileSpinner(MainActivity context) {
     return spin;
     }
 
+private static LinearLayout clinicalAdvancedAlarmCard(MainActivity context,
+        View[] alarm,int ringtoneKind) {
+    CheckDirectionBox toggle=(CheckDirectionBox)alarm[0];
+    EditText threshold=(EditText)alarm[1];
+    Button ringtone=(Button)alarm[2];
+    LinearLayout thresholdRow=clinicalAlarmThresholdRow(context,threshold);
+    clinicalStyleAction(ringtone);
+    LinearLayout card=clinicalExpandableCard(context,
+            clinicalToggleRow(context,toggle,
+                    context.getString(R.string.settings_alarm_level_hint)),
+            thresholdRow,ringtone);
+    Runnable sync=()->clinicalSyncExpandable(toggle.isChecked(),thresholdRow,ringtone);
+    toggle.setOnCheckedChangeListener((button,isChecked)->sync.run());
+    sync.run();
+    ringtone.setOnClickListener(view->new tk.glucodata.RingTones(ringtoneKind).mkviews(
+            context,toggle.getText().toString(),card));
+    return card;
+    }
+
+private static void clinicalAdvancedAlarm(MainActivity context,View parent) {
+    View[] veryLow=mkalarm(context,context.getString(R.string.verylowglucosealarm),
+            Natives.hasalarmverylow(),Natives.alarmverylow(),5);
+    View[] preLow=mkalarm(context,context.getString(R.string.prelowglucosealarm),
+            Natives.hasalarmprelow(),Natives.alarmprelow(),7);
+    View[] veryHigh=mkalarm(context,context.getString(R.string.veryhighglucosealarm),
+            Natives.hasalarmveryhigh(),Natives.alarmveryhigh(),6);
+    View[] preHigh=mkalarm(context,context.getString(R.string.prehighglucosealarm),
+            Natives.hasalarmprehigh(),Natives.alarmprehigh(),8);
+
+    Button close=clinicalHeaderButton(context,R.string.closename);
+    LinearLayout schedules=ClinicalUi.actionRow(context,
+            context.getString(R.string.schedules),
+            context.getString(R.string.settings_schedules_hint));
+    LinearLayout alarmHelp=ClinicalUi.actionRow(context,
+            context.getString(R.string.helpname),
+            context.getString(R.string.settings_advanced_help_hint));
+
+    LinearLayout content=clinicalScreenContent(context);
+    content.addView(ClinicalUi.header(context,
+            context.getString(R.string.settings_advanced_alarm_title),close));
+    TextView intro=ClinicalUi.body(context,
+            context.getString(R.string.settings_advanced_alarm_intro));
+    intro.setPaddingRelative(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
+            ClinicalUi.dp(context,6));
+    content.addView(intro);
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_schedule_section)));
+    content.addView(ClinicalUi.card(context,schedules));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_urgent_alerts_section)));
+    LinearLayout veryLowCard=clinicalAdvancedAlarmCard(context,veryLow,5);
+    LinearLayout veryHighCard=clinicalAdvancedAlarmCard(context,veryHigh,6);
+    LinearLayout.LayoutParams cardGap=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    cardGap.topMargin=ClinicalUi.dp(context,12);
+    veryHighCard.setLayoutParams(cardGap);
+    content.addView(veryLowCard);
+    content.addView(veryHighCard);
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_early_alerts_section)));
+    LinearLayout preLowCard=clinicalAdvancedAlarmCard(context,preLow,7);
+    LinearLayout preHighCard=clinicalAdvancedAlarmCard(context,preHigh,8);
+    LinearLayout.LayoutParams preGap=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    preGap.topMargin=ClinicalUi.dp(context,12);
+    preHighCard.setLayoutParams(preGap);
+    content.addView(preLowCard);
+    content.addView(preHighCard);
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_support_section)));
+    content.addView(ClinicalUi.card(context,alarmHelp));
+
+    ScrollView screen=ClinicalUi.scrollScreen(context,content);
+    context.addMyContentView(screen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    ((Button)veryLow[2]).setOnClickListener(view->new tk.glucodata.RingTones(5).mkviews(
+            context,context.getString(R.string.verylowglucosealarm),screen));
+    ((Button)veryHigh[2]).setOnClickListener(view->new tk.glucodata.RingTones(6).mkviews(
+            context,context.getString(R.string.veryhighglucosealarm),screen));
+    ((Button)preLow[2]).setOnClickListener(view->new tk.glucodata.RingTones(7).mkviews(
+            context,context.getString(R.string.prelowglucosealarm),screen));
+    ((Button)preHigh[2]).setOnClickListener(view->new tk.glucodata.RingTones(8).mkviews(
+            context,context.getString(R.string.prehighglucosealarm),screen));
+    Runnable saver=()->Natives.setAdvancedAlarms(
+            str2float(((EditText)veryLow[1]).getText().toString()),
+            str2float(((EditText)veryHigh[1]).getText().toString()),
+            ((CheckDirectionBox)veryLow[0]).isChecked(),
+            ((CheckDirectionBox)veryHigh[0]).isChecked(),
+            ((CheckDirectionBox)preLow[0]).isChecked(),
+            ((CheckDirectionBox)preHigh[0]).isChecked(),
+            str2float(((EditText)preLow[1]).getText().toString()),
+            str2float(((EditText)preHigh[1]).getText().toString()));
+    MainActivity.setonback(()-> {
+        saver.run();
+        removeContentView(screen);
+        alarmsettings(context,parent);
+        });
+    close.setOnClickListener(view->MainActivity.doonback());
+    schedules.setOnClickListener(view->scheduleProfiles(context,screen));
+    alarmHelp.setOnClickListener(view->help(R.string.advancedAlarmshelp,context));
+    }
+
 static private void advancedalarm(MainActivity context,View parview) {
+    if(useClinicalPhoneChild(isWearable)) {
+        clinicalAdvancedAlarm(context,parview);
+        return;
+        }
     View[] verylowalarm= mkalarm(context,context.getString(R.string.verylowglucosealarm),Natives.hasalarmverylow(),Natives.alarmverylow(),5);
     View[] prelowalarm= mkalarm(context,context.getString(R.string.prelowglucosealarm),Natives.hasalarmprelow(),Natives.alarmprelow(),7);
     View[] veryhighalarm=mkalarm(context,context.getString(R.string.veryhighglucosealarm),Natives.hasalarmveryhigh(),Natives.alarmveryhigh(),6);
@@ -505,12 +613,27 @@ static private class ProfileScheduleAdapter extends RecyclerView.Adapter<Profile
     public ProfileScheduleHolder onCreateViewHolder(ViewGroup parent, int viewType) {
          var view=new TextView( parent.getContext());
           view.setTransformationMethod(null);
-          view.setTextSize(TypedValue.COMPLEX_UNIT_PX, Applic.largefontsize);
-          view.setLayoutParams(new ViewGroup.LayoutParams(  MATCH_PARENT, WRAP_CONTENT));
-          if(isWearable)
+          if(isWearable) {
+              view.setTextSize(TypedValue.COMPLEX_UNIT_PX, Applic.largefontsize);
+              view.setLayoutParams(new ViewGroup.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
               view.setGravity(Gravity.CENTER);
-          else
-              view.setGravity(MainActivity.rtl?Gravity.RIGHT:Gravity.LEFT);
+              }
+          else {
+              view.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
+              view.setTextColor(ClinicalUi.primaryText(parent.getContext()));
+              view.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+              view.setMinimumHeight(ClinicalUi.dp(parent.getContext(),64));
+              view.setPaddingRelative(ClinicalUi.dp(parent.getContext(),16),
+                      ClinicalUi.dp(parent.getContext(),8),
+                      ClinicalUi.dp(parent.getContext(),16),
+                      ClinicalUi.dp(parent.getContext(),8));
+              view.setBackground(ClinicalUi.surface(parent.getContext(),false,true));
+              RecyclerView.LayoutParams params=new RecyclerView.LayoutParams(
+                      MATCH_PARENT,WRAP_CONTENT);
+              params.topMargin=ClinicalUi.dp(parent.getContext(),5);
+              params.bottomMargin=ClinicalUi.dp(parent.getContext(),5);
+              view.setLayoutParams(params);
+              }
            return new ProfileScheduleHolder(view,this,layout);
           }
 
@@ -535,7 +658,105 @@ static private class ProfileScheduleAdapter extends RecyclerView.Adapter<Profile
             return Natives.nrScheduledProfiles();
            }
     }
+
+private static void clinicalChangeProfile(MainActivity context,int previousIndex,
+        ProfileScheduleAdapter adapter,View parent) {
+    int index=previousIndex<0?Natives.nrScheduledProfiles():previousIndex;
+    if(index>=10) {
+        Applic.argToaster(context,"Too many schedules",Toast.LENGTH_LONG);
+        return;
+        }
+    EnableControls(parent,false);
+    short[] minuteProfile=Natives.getScheduleProfile(index);
+    Spinner profile=getProfileSpinner(context);
+    profile.setSelection(minuteProfile[1]);
+    clinicalStyleSpinner(profile);
+    profile.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+        @Override public void onItemSelected(AdapterView<?> owner,View view,int position,long id) {
+            minuteProfile[1]=(short)position;
+            }
+        @Override public void onNothingSelected(AdapterView<?> owner) {}
+        });
+
+    Button time=ClinicalUi.button(context,
+            String.format(Locale.US,"%02d:%02d",minuteProfile[0]/60,minuteProfile[0]%60),
+            ClinicalUi.ButtonRole.SECONDARY);
+    time.setMinimumWidth(ClinicalUi.dp(context,112));
+    time.setOnClickListener(view->context.getnumberview().gettimepicker(context,
+            minuteProfile[0]/60,minuteProfile[0]%60,(hour,minute)-> {
+                minuteProfile[0]=(short)(hour*60+minute);
+                time.setText(String.format(Locale.US,"%02d:%02d",hour,minute));
+                },()->{}));
+    Button cancel=clinicalHeaderButton(context,R.string.cancel);
+    Button save=ClinicalUi.button(context,context.getString(R.string.save),
+            ClinicalUi.ButtonRole.PRIMARY);
+    Button delete=ClinicalUi.button(context,context.getString(R.string.delete),
+            ClinicalUi.ButtonRole.DANGER);
+    delete.setVisibility(previousIndex<0?GONE:VISIBLE);
+
+    LinearLayout content=clinicalScreenContent(context);
+    content.addView(ClinicalUi.header(context,
+            context.getString(previousIndex<0?R.string.settings_schedule_new_title:
+                    R.string.settings_schedule_edit_title),cancel));
+    TextView intro=ClinicalUi.body(context,
+            context.getString(R.string.settings_schedule_editor_intro));
+    intro.setPaddingRelative(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
+            ClinicalUi.dp(context,6));
+    content.addView(intro);
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_schedule_details_section)));
+    content.addView(ClinicalUi.card(context,
+            ClinicalUi.fieldRow(context,context.getString(R.string.settings_time),time),
+            clinicalLabeledSpinner(context,R.string.profile,profile)));
+    LinearLayout actions=new LinearLayout(context);
+    actions.setOrientation(LinearLayout.HORIZONTAL);
+    actions.setGravity(Gravity.CENTER_VERTICAL);
+    actions.setPadding(0,ClinicalUi.dp(context,24),0,0);
+    if(previousIndex>=0)
+        actions.addView(delete,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+    if(previousIndex>=0) {
+        Space gap=new Space(context);
+        actions.addView(gap,new LinearLayout.LayoutParams(ClinicalUi.dp(context,12),1));
+        }
+    actions.addView(save,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+    content.addView(actions);
+    ScrollView screen=ClinicalUi.scrollScreen(context,content);
+    context.addMyContentView(screen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    MainActivity.setonback(()-> {
+        removeContentView(screen);
+        EnableControls(parent,true);
+        });
+    cancel.setOnClickListener(view->MainActivity.doonback());
+    delete.setOnClickListener(view->{
+        removeScheduleProfile(index);
+        adapter.notifyItemRemoved(index);
+        NumAlarm.handlealarm(Applic.app);
+        MainActivity.doonback();
+        });
+    save.setOnClickListener(view->{
+        int stored=Natives.setScheduleProfile(previousIndex,minuteProfile[0],minuteProfile[1]);
+        if(stored<0) {
+            Applic.argToaster(context,"Too many schedules",Toast.LENGTH_SHORT);
+            return;
+            }
+        if(stored==index) {
+            if(previousIndex<0)
+                adapter.notifyItemInserted(stored);
+            else
+                adapter.notifyItemChanged(stored);
+            }
+        else
+            adapter.notifyDataSetChanged();
+        NumAlarm.handlealarm(Applic.app);
+        MainActivity.doonback();
+        });
+    }
+
 static private void changeProfile(MainActivity act,int wasindex, ProfileScheduleAdapter adapt,View parview) {
+    if(useClinicalPhoneChild(isWearable)) {
+        clinicalChangeProfile(act,wasindex,adapt,parview);
+        return;
+        }
     if(!isWearable)
         EnableControls(parview,false);
     int index;
@@ -645,7 +866,53 @@ static private void changeProfile(MainActivity act,int wasindex, ProfileSchedule
                 });
          }
     }
+
+private static void clinicalScheduleProfiles(MainActivity context,View parent) {
+    EnableControls(parent,false);
+    Button close=clinicalHeaderButton(context,R.string.closename);
+    Button add=ClinicalUi.button(context,context.getString(R.string.settings_add_schedule),
+            ClinicalUi.ButtonRole.PRIMARY);
+    LinearLayout scheduleHelp=ClinicalUi.actionRow(context,
+            context.getString(R.string.helpname),context.getString(R.string.settings_schedule_help_hint));
+    RecyclerView list=new RecyclerView(context);
+    list.setLayoutManager(new LinearLayoutManager(context));
+    list.setClipToPadding(false);
+    list.setPadding(ClinicalUi.dp(context,2),ClinicalUi.dp(context,5),
+            ClinicalUi.dp(context,2),ClinicalUi.dp(context,12));
+    list.setBackgroundColor(ClinicalUi.window(context));
+
+    LinearLayout content=clinicalScreenContent(context);
+    content.setLayoutParams(new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    content.addView(ClinicalUi.header(context,
+            context.getString(R.string.settings_schedules_title),close));
+    TextView summary=ClinicalUi.body(context,context.getString(
+            R.string.settings_schedules_count,Natives.nrScheduledProfiles()));
+    summary.setPaddingRelative(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
+            ClinicalUi.dp(context,8));
+    content.addView(summary);
+    content.addView(list,new LinearLayout.LayoutParams(MATCH_PARENT,0,1.0f));
+    content.addView(ClinicalUi.card(context,scheduleHelp));
+    LinearLayout.LayoutParams addParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    addParams.topMargin=ClinicalUi.dp(context,14);
+    add.setLayoutParams(addParams);
+    content.addView(add);
+    context.addMyContentView(content,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    ProfileScheduleAdapter adapter=new ProfileScheduleAdapter(content);
+    list.setAdapter(adapter);
+    MainActivity.setonback(()-> {
+        removeContentView(content);
+        EnableControls(parent,true);
+        });
+    close.setOnClickListener(view->MainActivity.doonback());
+    add.setOnClickListener(view->changeProfile(context,-1,adapter,content));
+    scheduleHelp.setOnClickListener(view->help(R.string.schedulehelp,context));
+    }
+
 static public void scheduleProfiles(MainActivity act,View parview) {
+    if(useClinicalPhoneChild(isWearable)) {
+        clinicalScheduleProfiles(act,parview);
+        return;
+        }
     if(!isWearable)
         EnableControls(parview,false);
     if(doLog) {Log.i(LOG_ID,"scheduleProfiles");};
@@ -717,9 +984,246 @@ static public void setProfile(MainActivity act,int profile) {
                 act.recreate();
                 }
            }
-       }
+        }
+
+private static LinearLayout clinicalAlarmThresholdRow(MainActivity context,
+        EditText value) {
+    value.setVisibility(VISIBLE);
+    clinicalStyleInput(value);
+    LinearLayout row=ClinicalUi.fieldRow(context,
+            context.getString(R.string.settings_threshold_value),value);
+    row.addView(clinicalUnitLabel(context));
+    return row;
+    }
+
+private static void clinicalSyncExpandable(boolean enabled,View... details) {
+    for(View detail:details)
+        if(detail!=null)
+            detail.setVisibility(enabled?VISIBLE:GONE);
+    }
+
+private static void clinicalAlarmSettings(MainActivity context,View parent) {
+    View[] lowAlarm=mkalarm(context,context.getString(R.string.lowglucosealarm),
+            Natives.hasalarmlow(),Natives.alarmlow(),0);
+    View[] highAlarm=mkalarm(context,context.getString(R.string.highglucosealarm),
+            Natives.hasalarmhigh(),Natives.alarmhigh(),1);
+    CheckDirectionBox lowToggle=(CheckDirectionBox)lowAlarm[0];
+    CheckDirectionBox highToggle=(CheckDirectionBox)highAlarm[0];
+    EditText lowValue=(EditText)lowAlarm[1];
+    EditText highValue=(EditText)highAlarm[1];
+    Button lowTone=(Button)lowAlarm[2];
+    Button highTone=(Button)highAlarm[2];
+    lowValue.setText(float2string(Natives.alarmlow()));
+    highValue.setText(float2string(Natives.alarmhigh()));
+    clinicalStyleAction(lowTone);
+    clinicalStyleAction(highTone);
+
+    CheckDirectionBox valueAvailable=new CheckDirectionBox(context);
+    boolean hasValue=Natives.hasvaluealarm();
+    valueAvailable.setChecked(hasValue);
+    valueAvailable.setText(R.string.valueavailablenotification);
+    Button valueTone=getbutton(context,R.string.ringtonename);
+    clinicalStyleAction(valueTone);
+
+    CheckDirectionBox signalLoss=new CheckDirectionBox(context);
+    boolean hasLoss=Natives.hasalarmloss();
+    signalLoss.setChecked(hasLoss);
+    signalLoss.setText(R.string.lossofsignalalarm);
+    EditText lossWait=new EditText(context);
+    lossWait.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);
+    lossWait.setImeOptions(editoptions);
+    lossWait.setText(String.valueOf(Natives.readalarmsuspension(4)));
+    clinicalStyleInput(lossWait);
+    TextView minutes=ClinicalUi.body(context,context.getString(R.string.minutes));
+    minutes.setGravity(Gravity.CENTER_VERTICAL);
+    minutes.setPaddingRelative(ClinicalUi.dp(context,8),0,ClinicalUi.dp(context,6),0);
+    LinearLayout waitRow=ClinicalUi.fieldRow(context,
+            context.getString(R.string.settings_signal_wait),lossWait,minutes);
+    Button lossTone=getbutton(context,R.string.ringtonename);
+    clinicalStyleAction(lossTone);
+
+    RadioGroup soundType=new RadioGroup(context);
+    int soundId=0;
+    soundType.addView(getradiobuttonId(context,R.string.alarm,soundId++));
+    soundType.addView(getradiobuttonId(context,R.string.notification,soundId++));
+    soundType.addView(getradiobuttonId(context,R.string.media,soundId));
+    soundType.check(getalarmSoundType());
+    soundType.setPaddingRelative(ClinicalUi.dp(context,10),ClinicalUi.dp(context,4),
+            ClinicalUi.dp(context,10),ClinicalUi.dp(context,4));
+    for(int index=0;index<soundType.getChildCount();index++) {
+        View child=soundType.getChildAt(index);
+        child.setMinimumHeight(ClinicalUi.dp(context,PHONE_SETTINGS_MIN_TOUCH_DP));
+        if(child instanceof TextView text) {
+            text.setTextColor(ClinicalUi.primaryText(context));
+            text.setTextSize(TypedValue.COMPLEX_UNIT_SP,15.0f);
+            }
+        }
+
+    Spinner profile=getProfileSpinner(context);
+    int profilePosition=Natives.getProfile();
+    profile.setSelection(profilePosition);
+    clinicalStyleSpinner(profile);
+
+    Button done=clinicalHeaderButton(context,R.string.closename);
+    Button advanced=getbutton(context,R.string.advanced);
+    Button alarmHelp=getbutton(context,R.string.helpname);
+    clinicalStyleAction(advanced);
+    clinicalStyleAction(alarmHelp);
+
+    LinearLayout content=clinicalScreenContent(context);
+    content.addView(ClinicalUi.header(context,
+            context.getString(R.string.settings_alarm_title),done));
+    TextView intro=ClinicalUi.body(context,context.getString(R.string.settings_alarm_intro));
+    intro.setPaddingRelative(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
+            ClinicalUi.dp(context,6));
+    content.addView(intro);
+
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_profile_section)));
+    content.addView(ClinicalUi.card(context,
+            clinicalLabeledSpinner(context,R.string.profile,profile)));
+
+    LinearLayout lowThreshold=clinicalAlarmThresholdRow(context,lowValue);
+    LinearLayout highThreshold=clinicalAlarmThresholdRow(context,highValue);
+    LinearLayout lowCard=clinicalExpandableCard(context,
+            clinicalToggleRow(context,lowToggle,
+                    context.getString(R.string.settings_low_alarm_hint)),
+            lowThreshold,lowTone);
+    LinearLayout highCard=clinicalExpandableCard(context,
+            clinicalToggleRow(context,highToggle,
+                    context.getString(R.string.settings_high_alarm_hint)),
+            highThreshold,highTone);
+    LinearLayout.LayoutParams highParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    highParams.topMargin=ClinicalUi.dp(context,12);
+    highCard.setLayoutParams(highParams);
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_primary_alerts_section)));
+    content.addView(lowCard);
+    content.addView(highCard);
+
+    LinearLayout valueCard=clinicalExpandableCard(context,
+            clinicalToggleRow(context,valueAvailable,
+                    context.getString(R.string.settings_value_alarm_hint)),valueTone);
+    LinearLayout lossCard=clinicalExpandableCard(context,
+            clinicalToggleRow(context,signalLoss,
+                    context.getString(R.string.settings_signal_alarm_hint)),waitRow,lossTone);
+    LinearLayout.LayoutParams lossParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    lossParams.topMargin=ClinicalUi.dp(context,12);
+    lossCard.setLayoutParams(lossParams);
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_signal_section)));
+    content.addView(valueCard);
+    content.addView(lossCard);
+
+    LinearLayout soundCard=new LinearLayout(context);
+    soundCard.setOrientation(LinearLayout.VERTICAL);
+    soundCard.setPadding(ClinicalUi.dp(context,14),ClinicalUi.dp(context,10),
+            ClinicalUi.dp(context,14),ClinicalUi.dp(context,10));
+    soundCard.setBackground(ClinicalUi.surface(context,false,false));
+    TextView soundLabel=ClinicalUi.body(context,
+            context.getString(R.string.settings_sound_mode));
+    soundLabel.setTextColor(ClinicalUi.primaryText(context));
+    soundLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP,15.0f);
+    soundCard.addView(soundLabel);
+    soundCard.addView(soundType,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_delivery_section)));
+    content.addView(soundCard);
+
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_more_alerts_section)));
+    content.addView(ClinicalUi.card(context,advanced,alarmHelp));
+
+    ScrollView screen=ClinicalUi.scrollScreen(context,content);
+    context.addMyContentView(screen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+
+    Runnable syncLow=()->clinicalSyncExpandable(lowToggle.isChecked(),lowThreshold,lowTone);
+    Runnable syncHigh=()->clinicalSyncExpandable(highToggle.isChecked(),highThreshold,highTone);
+    Runnable syncValue=()->clinicalSyncExpandable(valueAvailable.isChecked(),valueTone);
+    Runnable syncLoss=()->clinicalSyncExpandable(signalLoss.isChecked(),waitRow,lossTone);
+    lowToggle.setOnCheckedChangeListener((button,isChecked)->syncLow.run());
+    highToggle.setOnCheckedChangeListener((button,isChecked)->syncHigh.run());
+    valueAvailable.setOnCheckedChangeListener((button,isChecked)->syncValue.run());
+    signalLoss.setOnCheckedChangeListener((button,isChecked)->syncLoss.run());
+    syncLow.run();
+    syncHigh.run();
+    syncValue.run();
+    syncLoss.run();
+
+    soundType.setOnCheckedChangeListener((group,id)->Natives.setalarmSoundType(id));
+    BooleanSupplier saver=()-> {
+        boolean lossEnabled=signalLoss.isChecked();
+        if(lossEnabled) {
+            String value=lossWait.getText().toString();
+            try {
+                short wait=Short.parseShort(value);
+                if(wait!=Natives.readalarmsuspension(4)) {
+                    Natives.writealarmsuspension(4,wait);
+                    SuperGattCallback.glucosealarms.setLossAlarm();
+                    }
+                }
+            catch(Throwable error) {
+                Log.stack(LOG_ID,"parseShort",error);
+                Applic.argToaster(context,context.getString(R.string.cantsetminutes)+value,
+                        Toast.LENGTH_SHORT);
+                return false;
+                }
+            }
+        Natives.setalarms(str2float(lowValue.getText().toString()),
+                str2float(highValue.getText().toString()),lowToggle.isChecked(),
+                highToggle.isChecked(),valueAvailable.isChecked(),lossEnabled);
+        return true;
+        };
+
+    done.setOnClickListener(view->{
+        if(!saver.getAsBoolean())
+            return;
+        context.poponback();
+        removeContentView(screen);
+        parent.setVisibility(VISIBLE);
+        tk.glucodata.help.hidekeyboard(context);
+        });
+    context.setonback(()-> {
+        saver.getAsBoolean();
+        parent.setVisibility(VISIBLE);
+        tk.glucodata.help.hidekeyboard(context);
+        removeContentView(screen);
+        });
+    profile.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+        @Override public void onItemSelected(AdapterView<?> owner,View view,int position,long id) {
+            if(position!=profilePosition) {
+                saver.getAsBoolean();
+                removeContentView(screen);
+                MainActivity.poponback();
+                setProfile(context,position);
+                alarmsettings(context,parent);
+                }
+            }
+        @Override public void onNothingSelected(AdapterView<?> owner) {}
+        });
+    advanced.setOnClickListener(view->{
+        saver.getAsBoolean();
+        context.poponback();
+        removeContentView(screen);
+        advancedalarm(context,parent);
+        });
+    alarmHelp.setOnClickListener(view->help(R.string.alarmhelp,context));
+    lowTone.setOnClickListener(view->new tk.glucodata.RingTones(0).mkviews(
+            context,context.getString(R.string.lowglucosealarm),screen));
+    highTone.setOnClickListener(view->new tk.glucodata.RingTones(1).mkviews(
+            context,context.getString(R.string.highglucosealarm),screen));
+    valueTone.setOnClickListener(view->new tk.glucodata.RingTones(2).mkviews(
+            context,context.getString(R.string.valuenotification),screen));
+    lossTone.setOnClickListener(view->new tk.glucodata.RingTones(4).mkviews(
+            context,context.getString(R.string.lossofsignal),screen));
+    }
+
 static private void alarmsettings(MainActivity context,View parview) {
     parview.setVisibility(GONE);
+    if(useClinicalPhoneChild(isWearable)) {
+        clinicalAlarmSettings(context,parview);
+        return;
+        }
     TextView alarmlow,alarmhigh;
     View[] lowalarm= mkalarm(context,context.getString(R.string.lowglucosealarm),Natives.hasalarmlow(),Natives.alarmlow(),0);
     View[] highalarm=mkalarm(context,context.getString(R.string.highglucosealarm),Natives.hasalarmhigh(),Natives.alarmhigh(),1);
@@ -1006,7 +1510,218 @@ static private Spinner languagespinner(MainActivity context) {
 static void mkrangelabel(TextView view,int res,float low, float high) {
      view.setText(view.getContext().getString(res)+" "+float2string(low)+"-"+float2string(high));
    }
+
+private static void clinicalDisplaySettings(MainActivity context,Settings settings) {
+    EditText graphLow=new EditText(context);
+    EditText graphHigh=new EditText(context);
+    EditText targetLow=new EditText(context);
+    EditText targetHigh=new EditText(context);
+    for(EditText input:new EditText[]{graphLow,graphHigh,targetLow,targetHigh}) {
+        input.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        input.setImeOptions(editoptions);
+        }
+    graphLow.setText(float2string(Natives.graphlow()));
+    graphHigh.setText(float2string(Natives.graphhigh()));
+    targetLow.setText(float2string(Natives.targetlow()));
+    targetHigh.setText(float2string(Natives.targethigh()));
+
+    String oldThreshold=float2string(Natives.getthreshold());
+    EditText threshold=getnumedit(context,oldThreshold);
+    clinicalStyleInput(threshold);
+
+    CheckDirectionBox manualTime=getcheckbox(context,R.string.time,!Natives.getfixatex());
+    CheckDirectionBox axisLeft=getcheckbox(context,R.string.glucoseaxisleft,Natives.getlevelleft());
+    axisLeft.setOnCheckedChangeListener((button,isChecked)->Natives.setlevelleft(isChecked));
+    CheckDirectionBox predict=getcheckbox(context,R.string.dexfuture,Natives.getdexcomPredict());
+    predict.setOnCheckedChangeListener((button,isChecked)->Natives.setdexcomPredict(isChecked));
+    CheckDirectionBox clampNow=getcheckbox(context,R.string.clampnow,Natives.getcurrentRelative());
+    clampNow.setOnCheckedChangeListener((button,isChecked)->Natives.setcurrentRelative(isChecked));
+    CheckDirectionBox twelveHour=getcheckbox(context,R.string.hour12,!Natives.gethour24());
+    twelveHour.setOnCheckedChangeListener((button,isChecked)->Applic.sethour24(!isChecked));
+
+    CheckDirectionBox graphScans=getcheckbox(context,R.string.scansname,
+            Natives.getshowscans());
+    graphScans.setOnCheckedChangeListener((button,isChecked)-> {
+        Natives.setshowscans(isChecked);
+        context.requestRender();
+        });
+    CheckDirectionBox graphCalibratedScans=getcheckbox(context,R.string.calibrated,
+            Natives.getshowcalibratedscans());
+    graphCalibratedScans.setOnCheckedChangeListener((button,isChecked)-> {
+        Natives.setshowcalibratedscans(isChecked);
+        context.requestRender();
+        });
+    CheckDirectionBox graphStream=getcheckbox(context,R.string.streamname,
+            Natives.getshowstream());
+    graphStream.setOnCheckedChangeListener((button,isChecked)-> {
+        Natives.setshowstream(isChecked);
+        context.requestRender();
+        });
+    CheckDirectionBox graphCalibratedStream=getcheckbox(context,R.string.calibrated,
+            Natives.getshowcalibratedstream());
+    graphCalibratedStream.setOnCheckedChangeListener((button,isChecked)-> {
+        Natives.setshowcalibratedstream(isChecked);
+        context.requestRender();
+        });
+    CheckDirectionBox graphHistory=getcheckbox(context,R.string.historyname,
+            Natives.getshowhistories());
+    graphHistory.setOnCheckedChangeListener((button,isChecked)-> {
+        Natives.setshowhistories(isChecked);
+        context.requestRender();
+        });
+    CheckDirectionBox graphCalibratedHistory=getcheckbox(context,R.string.calibrated,
+            Natives.getshowcalibratedhistories());
+    graphCalibratedHistory.setOnCheckedChangeListener((button,isChecked)-> {
+        Natives.setshowcalibratedhistories(isChecked);
+        context.requestRender();
+        });
+    CheckDirectionBox graphAmounts=getcheckbox(context,R.string.amountsname,
+            Natives.getshownumbers());
+    graphAmounts.setOnCheckedChangeListener((button,isChecked)-> {
+        Natives.setshownumbers(isChecked);
+        context.requestRender();
+        });
+    CheckDirectionBox graphMeals=getcheckbox(context,R.string.mealsname,
+            Natives.getshowmeals());
+    graphMeals.setOnCheckedChangeListener((button,isChecked)-> {
+        Natives.setshowmeals(isChecked);
+        context.requestRender();
+        });
+    CheckDirectionBox graphFloating=getcheckbox(context,R.string.floatname,
+            Natives.getfloatglucose());
+    graphFloating.setOnCheckedChangeListener((button,isChecked)->
+            Floating.setfloatglucose(context,isChecked));
+    CheckDirectionBox graphDarkMode=getcheckbox(context,R.string.darkmode,
+            Natives.getInvertColors());
+    graphDarkMode.setOnCheckedChangeListener((button,isChecked)->
+            Natives.setInvertColors(isChecked));
+    CheckDirectionBox graphSystemUi=getcheckbox(context,R.string.system_ui,
+            Natives.getsystemui());
+    graphSystemUi.setOnCheckedChangeListener((button,isChecked)-> {
+        Natives.setsystemui(isChecked);
+        context.selectionSystemUI();
+        });
+
+    Spinner language=languagespinner(context);
+    Button close=clinicalHeaderButton(context,R.string.closename);
+    LinearLayout content=clinicalScreenContent(context);
+    content.addView(ClinicalUi.header(context,
+            context.getString(R.string.settings_display_title),close));
+    TextView intro=ClinicalUi.body(context,context.getString(R.string.settings_display_intro));
+    intro.setPaddingRelative(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
+            ClinicalUi.dp(context,6));
+    content.addView(intro);
+
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_graph_readings_section)));
+    content.addView(ClinicalUi.card(context,
+            clinicalToggleRow(context,graphScans,
+                    context.getString(R.string.settings_graph_scans_hint)),
+            clinicalToggleRow(context,graphCalibratedScans,
+                    context.getString(R.string.settings_graph_calibrated_scans_hint)),
+            clinicalToggleRow(context,graphStream,
+                    context.getString(R.string.settings_graph_stream_hint)),
+            clinicalToggleRow(context,graphCalibratedStream,
+                    context.getString(R.string.settings_graph_calibrated_stream_hint)),
+            clinicalToggleRow(context,graphHistory,
+                    context.getString(R.string.settings_graph_history_hint)),
+            clinicalToggleRow(context,graphCalibratedHistory,
+                    context.getString(R.string.settings_graph_calibrated_history_hint))));
+
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_graph_records_section)));
+    content.addView(ClinicalUi.card(context,
+            clinicalToggleRow(context,graphAmounts,
+                    context.getString(R.string.settings_graph_amounts_hint)),
+            clinicalToggleRow(context,graphMeals,
+                    context.getString(R.string.settings_graph_meals_hint))));
+
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_graph_presentation_section)));
+    content.addView(ClinicalUi.card(context,
+            clinicalToggleRow(context,graphFloating,
+                    context.getString(R.string.settings_graph_floating_hint)),
+            clinicalToggleRow(context,graphDarkMode,
+                    context.getString(R.string.settings_graph_dark_hint)),
+            clinicalToggleRow(context,graphSystemUi,
+                    context.getString(R.string.settings_graph_system_ui_hint))));
+
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_ranges_section)));
+    LinearLayout graphRow=clinicalRangeRow(context,R.string.graphrange,graphLow,graphHigh);
+    LinearLayout targetRow=clinicalRangeRow(context,R.string.targetrange,targetLow,targetHigh);
+    LinearLayout thresholdRow=ClinicalUi.fieldRow(context,
+            context.getString(R.string.threshold),threshold);
+    content.addView(ClinicalUi.card(context,graphRow,targetRow,thresholdRow));
+
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_chart_section)));
+    content.addView(ClinicalUi.card(context,
+            clinicalToggleRow(context,manualTime,
+                    context.getString(R.string.settings_manual_time_hint)),
+            clinicalToggleRow(context,axisLeft,null),
+            clinicalToggleRow(context,predict,null),
+            clinicalToggleRow(context,clampNow,null)));
+
+    LinearLayout colors=ClinicalUi.actionRow(context,context.getString(R.string.colors),
+            context.getString(R.string.settings_colors_hint));
+    LinearLayout theme=ClinicalUi.actionRow(context,context.getString(R.string.theme),
+            context.getString(R.string.settings_theme_hint));
+    LinearLayout iob=ClinicalUi.actionRow(context,"IOB",
+            context.getString(R.string.settings_iob_hint));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_appearance_section)));
+    content.addView(ClinicalUi.card(context,
+            colors,theme,clinicalLabeledSpinner(context,R.string.languagename,language),
+            clinicalToggleRow(context,twelveHour,null),iob));
+
+    LinearLayout displayHelp=ClinicalUi.actionRow(context,
+            context.getString(R.string.helpname),context.getString(R.string.settings_display_help_hint));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_support_section)));
+    content.addView(ClinicalUi.card(context,displayHelp));
+
+    ScrollView screen=ClinicalUi.scrollScreen(context,content);
+    context.addMyContentView(screen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+
+    Runnable saver=()-> {
+        String changedThreshold=threshold.getText().toString();
+        if(!oldThreshold.equals(changedThreshold)) {
+            float value=str2float(changedThreshold);
+            if(!isDisplayThresholdValid(value))
+                Applic.argToaster(context,"A threshold should 0.0 - 0.8",Toast.LENGTH_LONG);
+            else
+                setthreshold(value);
+            }
+        Natives.setfixatex(!manualTime.isChecked());
+        Natives.setGraphRange(str2float(graphLow.getText().toString()),
+                str2float(graphHigh.getText().toString()));
+        Natives.setTargetRange(str2float(targetLow.getText().toString()),
+                str2float(targetHigh.getText().toString()));
+        removeContentView(screen);
+        tk.glucodata.help.hidekeyboard(context);
+        };
+    MainActivity.setonback(saver);
+    close.setOnClickListener(view->{
+        context.poponback();
+        saver.run();
+        });
+    colors.setOnClickListener(view->{
+        MainActivity.doonback();
+        settings.finish();
+        SetColors.show(context);
+        });
+    theme.setOnClickListener(view->SelectTheme.show(context,screen));
+    iob.setOnClickListener(view->tk.glucodata.IOB.mkview(context));
+    displayHelp.setOnClickListener(view->help(R.string.displayhelp,context));
+    }
+
 static private void displaysettings(MainActivity context,Settings settings) {
+
+    if(useClinicalPhoneChild(isWearable)) {
+        clinicalDisplaySettings(context,settings);
+        return;
+        }
 
         TextView graphlabel = new TextView(context);
         graphlabel.setText(R.string.graphrange);
@@ -1130,12 +1845,6 @@ Scans.setOnCheckedChangeListener( (buttonView,  isChecked) -> { Natives.setshows
         });
         var dexfuture=getcheckbox(context,R.string.dexfuture,Natives.getdexcomPredict());
          dexfuture.setOnCheckedChangeListener( (buttonView,  isChecked) -> Natives.setdexcomPredict(isChecked) );
-          CheckDirectionBox reverseorientation =getcheckbox(context,R.string.invertscreen,(Natives.getScreenOrientation()&SCREEN_ORIENTATION_REVERSE_LANDSCAPE)!=0);
-         reverseorientation.setOnCheckedChangeListener( (buttonView,  isChecked) ->  {
-                int ori= (isChecked?SCREEN_ORIENTATION_REVERSE_LANDSCAPE:SCREEN_ORIENTATION_LANDSCAPE);
-                Natives.setScreenOrientation(ori);
-                });
-
     CheckDirectionBox levelleft= new CheckDirectionBox(context);
     levelleft.setText(R.string.glucoseaxisleft);
     levelleft.setChecked(Natives.getlevelleft());
@@ -1153,7 +1862,7 @@ Scans.setOnCheckedChangeListener( (buttonView,  isChecked) -> { Natives.setshows
         lay = new Layout(context, (l, w, h) -> {
                   int[] ret={w,h};
                  return ret;
-               },graphrow,new View[]{scalelabel,fixatex, fixatey},targetrow,new View[]{threslabel,threshold,dexfuture},new View[] {levelleft,reverseorientation},new View[] {hour12,langspin,iob,fixed},new View[]{colbut,themebut,help,close});
+               },graphrow,new View[]{scalelabel,fixatex, fixatey},targetrow,new View[]{threslabel,threshold,dexfuture},new View[] {levelleft},new View[] {hour12,langspin,iob,fixed},new View[]{colbut,themebut,help,close});
 
        themebut.setOnClickListener(v-> {
             SelectTheme.show(context,lay);
@@ -1223,6 +1932,472 @@ Runnable closerun= () -> {
 //       graphrange.setLabelBehavior(LabelFormatter.LABEL_WITHIN_BOUNDS);
 //       graphrange.setLabelBehavior(LabelFormatter.LABEL_FLOATING);
  //      graphrange.setHaloRadius((int)(tk.glucodata.GlucoseCurve.metrics.density*15.0f));
+private static int settingsDp(float value) {
+    return Math.round(value*tk.glucodata.GlucoseCurve.metrics.density);
+    }
+
+/** Contract shared by the programmatic phone settings screens and their tests. */
+static final int PHONE_SETTINGS_MIN_TOUCH_DP=48;
+static final int PHONE_GRAPH_DISPLAY_TOGGLE_COUNT=11;
+static final int PHONE_LEGACY_ACTION_COUNT=9;
+
+static boolean useClinicalPhoneChild(boolean wearable) {
+    return !wearable;
+    }
+
+static boolean isDisplayThresholdValid(float value) {
+    return value>=0.0f&&value<=0.8f;
+    }
+
+private static Button clinicalHeaderButton(Context context,int label) {
+    Button button=ClinicalUi.button(context,context.getString(label),
+            ClinicalUi.ButtonRole.SECONDARY);
+    button.setMinWidth(ClinicalUi.dp(context,64));
+    button.setMinimumHeight(ClinicalUi.dp(context,PHONE_SETTINGS_MIN_TOUCH_DP));
+    return button;
+    }
+
+private static LinearLayout clinicalScreenContent(MainActivity context) {
+    LinearLayout content=ClinicalUi.verticalContent(context);
+    content.setPaddingRelative(
+            MainActivity.systembarLeft+ClinicalUi.dp(context,20),
+            MainActivity.systembarTop+ClinicalUi.dp(context,8),
+            MainActivity.systembarRight+ClinicalUi.dp(context,20),
+            MainActivity.systembarBottom+ClinicalUi.dp(context,30));
+    return content;
+    }
+
+private static void clinicalStyleInput(EditText input) {
+    Context context=input.getContext();
+    input.setSingleLine(true);
+    input.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
+    input.setTextColor(ClinicalUi.primaryText(context));
+    input.setHintTextColor(ClinicalUi.secondaryText(context));
+    input.setGravity(Gravity.CENTER);
+    input.setSelectAllOnFocus(true);
+    input.setMinimumHeight(ClinicalUi.dp(context,PHONE_SETTINGS_MIN_TOUCH_DP));
+    input.setMinWidth(ClinicalUi.dp(context,76));
+    input.setPaddingRelative(ClinicalUi.dp(context,12),0,
+            ClinicalUi.dp(context,12),0);
+    input.setBackground(ClinicalUi.surface(context,false,true));
+    }
+
+private static void clinicalStyleSpinner(Spinner spinner) {
+    Context context=spinner.getContext();
+    spinner.setMinimumHeight(ClinicalUi.dp(context,52));
+    spinner.setPaddingRelative(ClinicalUi.dp(context,12),0,
+            ClinicalUi.dp(context,12),0);
+    spinner.setBackground(ClinicalUi.surface(context,false,true));
+    }
+
+private static void clinicalStyleAction(Button button) {
+    Context context=button.getContext();
+    button.setAllCaps(false);
+    button.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
+    button.setTextColor(ClinicalUi.primaryText(context));
+    button.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+    button.setTextAlignment(View.TEXT_ALIGNMENT_VIEW_START);
+    button.setMinimumHeight(ClinicalUi.dp(context,58));
+    button.setPaddingRelative(ClinicalUi.dp(context,16),ClinicalUi.dp(context,8),
+            ClinicalUi.dp(context,16),ClinicalUi.dp(context,8));
+    button.setBackground(ClinicalUi.surface(context,false,true));
+    button.setStateListAnimator(null);
+    }
+
+private static LinearLayout clinicalToggleRow(MainActivity context,
+        CheckDirectionBox legacy,CharSequence subtitle) {
+    CharSequence title=legacy.getText();
+    LinearLayout row=new LinearLayout(context);
+    row.setOrientation(LinearLayout.HORIZONTAL);
+    row.setGravity(Gravity.CENTER_VERTICAL);
+    row.setMinimumHeight(ClinicalUi.dp(context,subtitle==null?60:72));
+    row.setPaddingRelative(ClinicalUi.dp(context,16),ClinicalUi.dp(context,8),
+            ClinicalUi.dp(context,8),ClinicalUi.dp(context,8));
+    row.setBackground(ClinicalUi.surface(context,false,true));
+
+    LinearLayout copy=new LinearLayout(context);
+    copy.setOrientation(LinearLayout.VERTICAL);
+    copy.setGravity(Gravity.CENTER_VERTICAL);
+    TextView label=new TextView(context);
+    label.setText(title);
+    label.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
+    label.setTextColor(ClinicalUi.primaryText(context));
+    copy.addView(label);
+    if(subtitle!=null&&subtitle.length()>0) {
+        TextView detail=ClinicalUi.body(context,subtitle);
+        detail.setTextSize(TypedValue.COMPLEX_UNIT_SP,13.0f);
+        detail.setPadding(0,ClinicalUi.dp(context,2),0,0);
+        copy.addView(detail);
+        }
+    row.addView(copy,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+
+    SwitchCompat toggle=new SwitchCompat(context);
+    toggle.setShowText(false);
+    toggle.setSwitchMinWidth(ClinicalUi.dp(context,42));
+    toggle.setMinimumWidth(ClinicalUi.dp(context,56));
+    toggle.setMinimumHeight(ClinicalUi.dp(context,PHONE_SETTINGS_MIN_TOUCH_DP));
+    toggle.setPadding(ClinicalUi.dp(context,7),0,ClinicalUi.dp(context,7),0);
+    toggle.setContentDescription(title);
+    toggle.setThumbTintList(ContextCompat.getColorStateList(context,
+            R.color.modern_settings_switch_thumb));
+    toggle.setTrackTintList(ContextCompat.getColorStateList(context,
+            R.color.modern_settings_switch_track));
+    toggle.setEnabled(legacy.isEnabled());
+    toggle.setChecked(legacy.isChecked());
+    toggle.setOnCheckedChangeListener((button,isChecked)-> {
+        if(legacy.isChecked()!=isChecked)
+            legacy.setChecked(isChecked);
+        });
+    row.setEnabled(legacy.isEnabled());
+    row.setVisibility(legacy.getVisibility());
+    row.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+    row.setOnClickListener(view->toggle.toggle());
+    row.addView(toggle,new LinearLayout.LayoutParams(WRAP_CONTENT,
+            ClinicalUi.dp(context,PHONE_SETTINGS_MIN_TOUCH_DP)));
+    return row;
+    }
+
+private static CheckDirectionBox clinicalDirectToggle(MainActivity context,
+        CheckDirectionBox toggle) {
+    toggle.setMinimumHeight(ClinicalUi.dp(context,64));
+    toggle.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
+    toggle.setTextColor(ClinicalUi.primaryText(context));
+    toggle.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+    toggle.setPaddingRelative(ClinicalUi.dp(context,16),ClinicalUi.dp(context,7),
+            ClinicalUi.dp(context,12),ClinicalUi.dp(context,7));
+    toggle.setBackground(ClinicalUi.surface(context,false,true));
+    if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.LOLLIPOP)
+        toggle.setButtonTintList(ContextCompat.getColorStateList(context,
+                R.color.modern_settings_choice_control));
+    return toggle;
+    }
+
+private static LinearLayout clinicalExpandableCard(Context context,View... rows) {
+    LinearLayout card=new LinearLayout(context);
+    card.setOrientation(LinearLayout.VERTICAL);
+    card.setBackground(ClinicalUi.surface(context,false,false));
+    card.setPadding(ClinicalUi.dp(context,6),ClinicalUi.dp(context,6),
+            ClinicalUi.dp(context,6),ClinicalUi.dp(context,6));
+    boolean first=true;
+    for(View row:rows) {
+        if(row==null)
+            continue;
+        if(!first)
+            card.addView(ClinicalUi.divider(context));
+        ViewGroup.LayoutParams current=row.getLayoutParams();
+        row.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT,
+                current==null?WRAP_CONTENT:current.height));
+        card.addView(row);
+        first=false;
+        }
+    return card;
+    }
+
+private static TextView clinicalUnitLabel(Context context) {
+    TextView unit=ClinicalUi.body(context,Natives.getunit()==1?"mmol/L":"mg/dL");
+    unit.setGravity(Gravity.CENTER);
+    unit.setMinWidth(ClinicalUi.dp(context,66));
+    unit.setPaddingRelative(ClinicalUi.dp(context,8),0,ClinicalUi.dp(context,4),0);
+    return unit;
+    }
+
+private static LinearLayout clinicalRangeRow(MainActivity context,int label,
+        EditText low,EditText high) {
+    clinicalStyleInput(low);
+    clinicalStyleInput(high);
+    TextView dash=ClinicalUi.body(context,"\u2013");
+    dash.setGravity(Gravity.CENTER);
+    dash.setPaddingRelative(ClinicalUi.dp(context,5),0,ClinicalUi.dp(context,5),0);
+    return ClinicalUi.fieldRow(context,context.getString(label),low,dash,high);
+    }
+
+private static LinearLayout clinicalLabeledSpinner(MainActivity context,int label,
+        Spinner spinner) {
+    clinicalStyleSpinner(spinner);
+    return ClinicalUi.fieldRow(context,context.getString(label),spinner);
+    }
+
+private static TextView phoneSettingsTitle(Context context) {
+    TextView title=new TextView(context);
+    title.setText(R.string.settings);
+    title.setTextColor(Color.rgb(242,244,243));
+    title.setTextSize(TypedValue.COMPLEX_UNIT_SP,30.0f);
+    title.setTypeface(title.getTypeface(),android.graphics.Typeface.BOLD);
+    title.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+    title.setMinHeight(settingsDp(64.0f));
+    title.setIncludeFontPadding(false);
+    title.setLayoutParams(new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+    return title;
+    }
+
+private static TextView phoneSettingsSection(Context context,int text) {
+    TextView section=new TextView(context);
+    section.setText(text);
+    section.setAllCaps(false);
+    section.setTextColor(Color.rgb(137,146,149));
+    section.setTextSize(TypedValue.COMPLEX_UNIT_SP,13.0f);
+    section.setTypeface(section.getTypeface(),android.graphics.Typeface.BOLD);
+    section.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+    section.setPaddingRelative(settingsDp(4.0f),settingsDp(20.0f),settingsDp(4.0f),settingsDp(8.0f));
+    section.setLayoutParams(new ViewGroup.MarginLayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    return section;
+    }
+
+private static void stylePhoneSettingsAction(View view,boolean fullWidth) {
+    if(view==null)
+        return;
+    ViewGroup.MarginLayoutParams params=new ViewGroup.MarginLayoutParams(fullWidth?MATCH_PARENT:WRAP_CONTENT,WRAP_CONTENT);
+    if(!fullWidth) {
+        params.setMarginStart(settingsDp(2.0f));
+        params.setMarginEnd(settingsDp(2.0f));
+        }
+    view.setLayoutParams(params);
+    view.setMinimumHeight(settingsDp(fullWidth?56.0f:48.0f));
+    view.setBackgroundResource(fullWidth
+            ?R.drawable.modern_settings_item:R.drawable.modern_settings_close);
+    view.setPaddingRelative(settingsDp(fullWidth?16.0f:14.0f),settingsDp(6.0f),settingsDp(fullWidth?14.0f:14.0f),settingsDp(6.0f));
+    if(view instanceof TextView text) {
+        text.setTextSize(TypedValue.COMPLEX_UNIT_SP,fullWidth?16.0f:14.0f);
+        text.setGravity((fullWidth?Gravity.START:Gravity.CENTER)|Gravity.CENTER_VERTICAL);
+        text.setTextAlignment(fullWidth
+                ?View.TEXT_ALIGNMENT_VIEW_START:View.TEXT_ALIGNMENT_CENTER);
+        text.setAllCaps(false);
+        text.setSingleLine(true);
+        text.setTextColor(Color.rgb(236,239,238));
+        if(fullWidth)
+            text.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                    0,0,R.drawable.modern_settings_chevron,0);
+        }
+    if(view instanceof Button button)
+        button.setStateListAnimator(null);
+    }
+
+private static void stylePhoneSettingsUnit(View view) {
+    if(view==null)
+        return;
+    view.setMinimumHeight(settingsDp(44.0f));
+    view.setBackgroundResource(R.drawable.modern_settings_choice);
+    view.setPaddingRelative(settingsDp(12.0f),settingsDp(4.0f),settingsDp(12.0f),settingsDp(4.0f));
+    ViewGroup.MarginLayoutParams params=new ViewGroup.MarginLayoutParams(WRAP_CONTENT,WRAP_CONTENT);
+    params.setMarginStart(settingsDp(2.0f));
+    params.setMarginEnd(settingsDp(2.0f));
+    view.setLayoutParams(params);
+    if(view instanceof TextView text) {
+        text.setTextSize(TypedValue.COMPLEX_UNIT_SP,14.0f);
+        text.setGravity(Gravity.CENTER_VERTICAL);
+        text.setTextColor(ContextCompat.getColorStateList(view.getContext(),
+                R.color.modern_settings_choice_text));
+        }
+    if(view instanceof androidx.appcompat.widget.AppCompatRadioButton choice)
+        choice.setSupportButtonTintList(ContextCompat.getColorStateList(view.getContext(),
+                R.color.modern_settings_choice_control));
+    }
+
+private static LinearLayout phoneSettingsHeader(Context context,TextView title,
+        Button close) {
+    LinearLayout header=new LinearLayout(context);
+    header.setOrientation(LinearLayout.HORIZONTAL);
+    header.setGravity(Gravity.CENTER_VERTICAL);
+    header.setMinimumHeight(settingsDp(68.0f));
+    header.addView(title);
+    stylePhoneSettingsAction(close,false);
+    close.setTextColor(Color.rgb(199,205,203));
+    close.setMinWidth(settingsDp(64.0f));
+    header.addView(close);
+    return header;
+    }
+
+private static LinearLayout phoneSettingsUnitRow(Context context,TextView label,
+        View first,View second) {
+    LinearLayout row=new LinearLayout(context);
+    row.setOrientation(LinearLayout.HORIZONTAL);
+    row.setGravity(Gravity.CENTER_VERTICAL);
+    row.setMinimumHeight(settingsDp(60.0f));
+    row.setPaddingRelative(settingsDp(16.0f),settingsDp(6.0f),settingsDp(6.0f),settingsDp(6.0f));
+    row.setBackgroundResource(R.drawable.modern_settings_item);
+    label.setPadding(0,0,settingsDp(8.0f),0);
+    label.setLayoutParams(new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+    row.addView(label);
+    stylePhoneSettingsUnit(first);
+    stylePhoneSettingsUnit(second);
+    row.addView(first);
+    row.addView(second);
+    return row;
+    }
+
+private static LinearLayout phoneSettingsToggleRow(Context context,
+        CheckDirectionBox control) {
+    CharSequence labelText=control.getText();
+    TextView label=new TextView(context);
+    label.setText(labelText);
+    label.setTextColor(Color.rgb(236,239,238));
+    label.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
+    label.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+    label.setSingleLine(false);
+    label.setLayoutParams(new LinearLayout.LayoutParams(0,MATCH_PARENT,1.0f));
+
+    SwitchCompat toggle=new SwitchCompat(context);
+    toggle.setShowText(false);
+    toggle.setSwitchMinWidth(settingsDp(42.0f));
+    toggle.setMinimumWidth(settingsDp(52.0f));
+    toggle.setMinimumHeight(settingsDp(48.0f));
+    toggle.setPadding(settingsDp(6.0f),0,settingsDp(6.0f),0);
+    toggle.setContentDescription(labelText);
+    toggle.setThumbTintList(ContextCompat.getColorStateList(context,
+            R.color.modern_settings_switch_thumb));
+    toggle.setTrackTintList(ContextCompat.getColorStateList(context,
+            R.color.modern_settings_switch_track));
+    toggle.setEnabled(control.isEnabled());
+    toggle.setChecked(control.isChecked());
+    toggle.setOnCheckedChangeListener((button,isChecked)-> {
+        if(control.isChecked()!=isChecked)
+            control.setChecked(isChecked);
+        });
+    toggle.setLayoutParams(new LinearLayout.LayoutParams(
+            WRAP_CONTENT,settingsDp(48.0f)));
+
+    LinearLayout row=new LinearLayout(context);
+    row.setOrientation(LinearLayout.HORIZONTAL);
+    row.setGravity(Gravity.CENTER_VERTICAL);
+    row.setMinimumHeight(settingsDp(56.0f));
+    row.setPaddingRelative(settingsDp(16.0f),0,settingsDp(6.0f),0);
+    row.setBackgroundResource(R.drawable.modern_settings_item);
+    row.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+    row.setVisibility(control.getVisibility());
+    row.setOnClickListener(view->toggle.toggle());
+    row.addView(label);
+    row.addView(toggle);
+    return row;
+    }
+
+private static View phoneSettingsDivider(Context context) {
+    View divider=new View(context);
+    divider.setBackgroundColor(Color.rgb(41,47,49));
+    LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(
+            MATCH_PARENT,settingsDp(1.0f));
+    params.setMarginStart(settingsDp(16.0f));
+    params.setMarginEnd(settingsDp(16.0f));
+    divider.setLayoutParams(params);
+    divider.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+    return divider;
+    }
+
+private static LinearLayout phoneSettingsGroup(Context context,View... rows) {
+    LinearLayout group=new LinearLayout(context);
+    group.setOrientation(LinearLayout.VERTICAL);
+    group.setBackgroundResource(R.drawable.modern_settings_group);
+    group.setPadding(settingsDp(4.0f),settingsDp(4.0f),settingsDp(4.0f),settingsDp(4.0f));
+    group.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    boolean first=true;
+    for(View row:rows) {
+        if(row==null||row.getVisibility()==GONE)
+            continue;
+        if(!first)
+            group.addView(phoneSettingsDivider(context));
+        ViewGroup.LayoutParams params=row.getLayoutParams();
+        row.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT,
+                params==null?WRAP_CONTENT:params.height));
+        group.addView(row);
+        first=false;
+        }
+    return group;
+    }
+
+private static void restorePhoneSettingsButtons(ViewGroup group) {
+    for(int index=0;index<group.getChildCount();index++) {
+        View child=group.getChildAt(index);
+        if(child instanceof Button&&!(child instanceof android.widget.CompoundButton)) {
+            ViewGroup.LayoutParams params=child.getLayoutParams();
+            stylePhoneSettingsAction(child,params!=null&&params.width==MATCH_PARENT);
+            }
+        else if(child instanceof ViewGroup nested)
+            restorePhoneSettingsButtons(nested);
+        }
+    }
+
+private static void clinicalLegacySettings(MainActivity context,Settings settings,
+        View parent) {
+    parent.setVisibility(GONE);
+    Button close=clinicalHeaderButton(context,R.string.closename);
+    LinearLayout list=ClinicalUi.actionRow(context,context.getString(R.string.list),
+            context.getString(R.string.settings_legacy_list_hint));
+    LinearLayout statistics=ClinicalUi.actionRow(context,
+            context.getString(R.string.statistics),
+            context.getString(R.string.settings_legacy_statistics_hint));
+    LinearLayout lastScan=ClinicalUi.actionRow(context,
+            context.getString(R.string.last_scan),
+            context.getString(R.string.settings_legacy_last_scan_hint));
+    LinearLayout export=ClinicalUi.actionRow(context,context.getString(R.string.export),
+            context.getString(R.string.settings_legacy_export_hint));
+    LinearLayout watch=ClinicalUi.actionRow(context,context.getString(R.string.watches),
+            context.getString(R.string.settings_legacy_watch_hint));
+    LinearLayout talk=ClinicalUi.actionRow(context,context.getString(R.string.talk),
+            context.getString(R.string.settings_legacy_talk_hint));
+    LinearLayout floating=ClinicalUi.actionRow(context,
+            context.getString(R.string.floatglucose),
+            context.getString(R.string.settings_legacy_floating_hint));
+    LinearLayout reminders=ClinicalUi.actionRow(context,
+            context.getString(R.string.remindersname),
+            context.getString(R.string.settings_legacy_reminders_hint));
+    LinearLayout labels=ClinicalUi.actionRow(context,
+            context.getString(R.string.numberlabels),
+            context.getString(R.string.settings_legacy_labels_hint));
+
+    LinearLayout content=clinicalScreenContent(context);
+    content.addView(ClinicalUi.header(context,
+            context.getString(R.string.settings_legacy_title),close));
+    TextView intro=ClinicalUi.body(context,
+            context.getString(R.string.settings_legacy_intro));
+    intro.setPaddingRelative(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
+            ClinicalUi.dp(context,6));
+    content.addView(intro);
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_legacy_records_section)));
+    content.addView(ClinicalUi.card(context,list,statistics,lastScan,export));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_legacy_utilities_section)));
+    content.addView(ClinicalUi.card(context,watch,talk,floating,reminders,labels));
+
+    ScrollView screen=ClinicalUi.scrollScreen(context,content);
+    context.addMyContentView(screen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    Runnable closeLegacy=()-> {
+        parent.setVisibility(VISIBLE);
+        removeContentView(screen);
+        };
+    context.setonback(closeLegacy);
+    close.setOnClickListener(view->context.doonback());
+
+    // Native graph destinations must be opened only after both Settings layers
+    // are removed. Otherwise their renderer is active behind an invisible overlay
+    // and the next Back press consumes the wrong callback.
+    Runnable dismissSettings=()-> {
+        context.poponback();
+        closeLegacy.run();
+        context.poponback();
+        settings.hidekeyboard();
+        settings.finish();
+        };
+    list.setOnClickListener(view->
+            LegacySettingsRoutes.showList(context,dismissSettings));
+    statistics.setOnClickListener(view->
+            LegacySettingsRoutes.showStatistics(context,dismissSettings));
+    lastScan.setOnClickListener(view->
+            LegacySettingsRoutes.showLastScan(context,dismissSettings));
+    watch.setOnClickListener(view->LegacySettingsRoutes.showWatch(context));
+    talk.setOnClickListener(view->tk.glucodata.Talker.config(context,false));
+    export.setOnClickListener(view-> {
+        GlucoseCurve curve=Applic.app.curve;
+        if(curve!=null)
+            curve.dialogs.showexport(context,curve.getWidth(),curve.getHeight(),screen);
+        });
+    floating.setOnClickListener(view->
+            tk.glucodata.FloatingConfig.show(context,screen));
+    reminders.setOnClickListener(view->
+            new tk.glucodata.setNumAlarm().mkviews(context,screen));
+    labels.setOnClickListener(view->
+            new LabelsClass(context).mklabellayout(screen));
+    }
+
 private    void mksettings(MainActivity context) {
 
     if(settinglayout==null) {
@@ -1244,7 +2419,7 @@ private    void mksettings(MainActivity context) {
 
         mgdl.setText(R.string.mgdL);
 
-         final   int padmg=!isWearable?(int)(tk.glucodata.GlucoseCurve.metrics.density*40.0):0;
+         final int padmg=0;
         mgdl.setPaddingRelative(0,0,padmg,0);
         mmolL.setPadding(0,0,0,0);
         var leftspace=new Space(context);
@@ -1339,7 +2514,7 @@ private    void mksettings(MainActivity context) {
 
             });
    var displayview=getbutton(context,R.string.display);
-    Layout[] thelayout=new Layout[1];
+    ViewGroup[] thelayout=new ViewGroup[1];
     if(!isWearable) {
         changelabels.setText(R.string.numberlabels);
         changelabels.setOnClickListener(v-> {
@@ -1351,6 +2526,7 @@ private    void mksettings(MainActivity context) {
 
 
     View[][] views;
+    LinearLayout phoneSettingsLayout=null;
     final String advhelp=isWearable?null:Natives.advanced();
 
         var calibration=  getbutton(context,R.string.calibration);
@@ -1411,59 +2587,119 @@ private    void mksettings(MainActivity context) {
         }
         }
     else {
-        var alarmmarg=getMargins(alarmbut);
-        var hormarg=(int)(tk.glucodata.GlucoseCurve.metrics.density*30);
-        alarmmarg.setMarginEnd(hormarg);
-        View[] row9;
         var about=getbutton(context,R.string.aboutname);
-           about.setOnClickListener(v-> tk.glucodata.GlucoseCurve.doabout(context));
+        about.setOnClickListener(v-> tk.glucodata.GlucoseCurve.doabout(context));
         var intro=getbutton(context,"Intro");
-         intro.setOnClickListener(v-> help(R.string.introhelp,context));
+        intro.setOnClickListener(v-> help(R.string.introhelp,context));
         if(advhelp!=null) {
             advanced=new Button(context);
             advanced.setText(R.string.advanced);
-            row9= new View[]{help,advanced,intro,about,close} ;
-            }
-        else {
-            row9= new View[]{help,intro,about,close} ;
             }
 
 //      var oldxdrip=getbutton(context,"send old"); oldxdrip.setOnClickListener(v-> tk.glucodata.Natives.sendxdripold());
-      CheckDirectionBox glucosenotify=new CheckDirectionBox(context);
+        CheckDirectionBox glucosenotify=new CheckDirectionBox(context);
         glucosenotify.setText(R.string.glucosestatusbar);
         glucosenotify.setChecked(Natives.getshowalways()) ;
         glucosenotify.setOnCheckedChangeListener( (buttonView,  isChecked) -> Notify.glucosestatus(isChecked) );
-      var floatconfig=getbutton(context,R.string.floatglucose);
-      View[] numdis;
-      var googlescan=getcheckbox(context, R.string.googlescan, Natives.getGoogleScan());
-       googlescan.setOnCheckedChangeListener( (buttonView,  isChecked) -> Natives.setGoogleScan(isChecked) );
+        var googlescan=getcheckbox(context, R.string.googlescan, Natives.getGoogleScan());
+        googlescan.setOnCheckedChangeListener( (buttonView,  isChecked) -> Natives.setGoogleScan(isChecked) );
+        Button mirror=getbutton(context,R.string.mirror);
+        mirror.setOnClickListener(view->new Backup().realmkbackupview(context,false));
+        Button intakeBackend=getbutton(context,R.string.intake_backend_settings_title);
+        intakeBackend.setOnClickListener(view->IntakeBackendSettings.show(context));
+        Button legacy=getbutton(context,R.string.settings_legacy_title);
+        legacy.setOnClickListener(view->
+                clinicalLegacySettings(context,this,thelayout[0]));
 
+        Button logview=null;
         if(doLog) {
-                Button logview;
-                logview=getbutton(context,R.string.logging);
-                logview.setOnClickListener(v->LogConfig.make(context,thelayout[0]));
-                numdis= new View[]{changelabels,logview,googlescan,displayview};
+            logview=getbutton(context,R.string.logging);
+            logview.setOnClickListener(v->LogConfig.make(context,thelayout[0]));
                 }
-          else {
-                numdis= new View[]{changelabels,googlescan,displayview};
-                }
-        floatconfig.setOnClickListener(v-> tk.glucodata.FloatingConfig.show(context,thelayout[0]));
 
-        View[] rowglu=new View[]{floatconfig,calibration,glucosenotify};
-//        View[] rowglu=new View[]{floatconfig,glucosenotify};
-        views=new View[][]{row0, hasnfc?new View[]{nfcsound, globalscan,camera}:null,rowglu,new View[]{exchanges,numalarm,alarmbut},numdis, row9};
+        TextView title=phoneSettingsTitle(context);
+        displayview.setText(R.string.settings_display_title);
+        TextView glucoseSection=phoneSettingsSection(context,R.string.settings_section_glucose);
+        TextView alertsSection=phoneSettingsSection(context,R.string.settings_section_alerts);
+        TextView connectionsSection=phoneSettingsSection(context,
+                R.string.settings_section_connections);
+        TextView preferencesSection=phoneSettingsSection(context,R.string.settings_section_preferences);
+        TextView technicalSection=phoneSettingsSection(context,
+                R.string.settings_section_technical);
+        TextView legacySection=phoneSettingsSection(context,R.string.settings_legacy_title);
+
+        TextView unitLabel=(TextView)row0[0];
+        unitLabel.setTextColor(Color.rgb(170,177,179));
+        unitLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP,14.0f);
+        unitLabel.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+
+        for(View action:new View[]{calibration,displayview,alarmbut,exchanges,
+                intakeBackend,mirror,legacy})
+            stylePhoneSettingsAction(action,true);
+        if(logview!=null)
+            stylePhoneSettingsAction(logview,true);
+
+        LinearLayout unitRow=phoneSettingsUnitRow(context,unitLabel,mmolL,mgdl);
+        LinearLayout glucoseGroup=phoneSettingsGroup(context,
+                unitRow,
+                calibration,
+                phoneSettingsToggleRow(context,glucosenotify),
+                displayview);
+        LinearLayout alertsGroup=phoneSettingsGroup(context,alarmbut);
+        LinearLayout connectionsGroup=phoneSettingsGroup(context,
+                intakeBackend,exchanges,mirror);
+
+        java.util.ArrayList<View> preferenceRows=new java.util.ArrayList<>();
+        preferenceRows.add(phoneSettingsToggleRow(context,googlescan));
+        if(hasnfc) {
+            preferenceRows.add(phoneSettingsToggleRow(context,nfcsound));
+            preferenceRows.add(phoneSettingsToggleRow(context,globalscan));
+            preferenceRows.add(phoneSettingsToggleRow(context,camera));
+            }
+        LinearLayout preferencesGroup=phoneSettingsGroup(context,
+                preferenceRows.toArray(new View[0]));
+        LinearLayout technicalGroup=logview==null?null:
+                phoneSettingsGroup(context,logview);
+        LinearLayout legacyGroup=phoneSettingsGroup(context,legacy);
+
+        phoneSettingsLayout=new LinearLayout(context);
+        phoneSettingsLayout.setOrientation(LinearLayout.VERTICAL);
+        phoneSettingsLayout.setBackgroundColor(Color.rgb(11,13,14));
+        phoneSettingsLayout.addView(phoneSettingsHeader(context,title,close),
+                new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+        phoneSettingsLayout.addView(glucoseSection);
+        phoneSettingsLayout.addView(glucoseGroup);
+        phoneSettingsLayout.addView(alertsSection);
+        phoneSettingsLayout.addView(alertsGroup);
+        phoneSettingsLayout.addView(connectionsSection);
+        phoneSettingsLayout.addView(connectionsGroup);
+        phoneSettingsLayout.addView(preferencesSection);
+        phoneSettingsLayout.addView(preferencesGroup);
+        if(technicalGroup!=null) {
+            phoneSettingsLayout.addView(technicalSection);
+            phoneSettingsLayout.addView(technicalGroup);
+            }
+        phoneSettingsLayout.addView(legacySection);
+        phoneSettingsLayout.addView(legacyGroup);
+        views=null;
         }
 
-    help.setFocusableInTouchMode(true);
-    help.setFocusable(true);
-     help.requestFocus();
-     help.requestFocusFromTouch();
+    View initialFocus=isWearable?help:close;
+    initialFocus.setFocusableInTouchMode(true);
+    initialFocus.setFocusable(true);
+    initialFocus.requestFocus();
+    initialFocus.requestFocusFromTouch();
 
-        Layout lay = new Layout(context, (l, w, h) -> {
-            hideSystemUI(); int[] ret={w,h};
-        
-        return ret;
-        },views);
+        final ViewGroup lay;
+        if(isWearable) {
+            lay=new Layout(context, (l, w, h) -> {
+                hideSystemUI(); int[] ret={w,h};
+                return ret;
+                },views);
+            }
+        else {
+            lay=phoneSettingsLayout;
+            }
 
      exchanges.setOnClickListener(v->{
         exchanges(context,lay);
@@ -1480,7 +2716,8 @@ private    void mksettings(MainActivity context) {
             }
 
 
-        lay.setBackgroundColor(colorwindowbackground);
+        lay.setBackgroundColor(isWearable
+                ?colorwindowbackground:Color.rgb(11,13,14));
 /*var    horlayout= new HorizontalScrollView(context);
     horlayout.addView(lay);
     horlayout.setHorizontalScrollBarEnabled(false);
@@ -1490,10 +2727,21 @@ private    void mksettings(MainActivity context) {
     ScrollView scroller=new ScrollView(context);
     scroller.addView(lay);
     scroller.setSmoothScrollingEnabled(false);
-   scroller.setVerticalScrollBarEnabled(Applic.scrollbar);
-   scroller.setScrollbarFadingEnabled(true);//Crash with NestedScrollView
-    scroller.setFillViewport(true);
-    scroller.setPadding(0,0,0,0);
+    scroller.setVerticalScrollBarEnabled(Applic.scrollbar);
+    scroller.setScrollbarFadingEnabled(true);//Crash with NestedScrollView
+    scroller.setFillViewport(isWearable);
+    scroller.setClipToPadding(isWearable?false:true);
+    scroller.setOverScrollMode(View.OVER_SCROLL_NEVER);
+    if(isWearable)
+        scroller.setPadding(0,0,0,0);
+    else {
+        // Keep every scrolled row inside the safe content area. Insets on the
+        // child itself scroll away and let controls collide with the status or
+        // navigation bars at the ends of the list.
+        scroller.setBackgroundColor(Color.rgb(11,13,14));
+        scroller.setPadding(MainActivity.systembarLeft,MainActivity.systembarTop,
+                MainActivity.systembarRight,MainActivity.systembarBottom);
+        }
 
    settinglayout=scroller;
 
@@ -1504,7 +2752,9 @@ private    void mksettings(MainActivity context) {
       lay.setPaddingRelative((int)(tk.glucodata.GlucoseCurve.metrics.density*5.5),(int)(tk.glucodata.GlucoseCurve.metrics.density*11.0),(int)(tk.glucodata.GlucoseCurve.metrics.density*14.0),pad);
         }
      else {
-       lay.setPadding(MainActivity.systembarLeft+pad,MainActivity.systembarTop*3/4,pad+MainActivity.systembarRight,pad+MainActivity.systembarBottom*3/4);
+       final int phoneHorizontal=settingsDp(18.0f);
+       final int phoneVertical=settingsDp(12.0f);
+       lay.setPadding(phoneHorizontal,phoneVertical,phoneHorizontal,phoneVertical);
       }
 
     final    int laywidth=MATCH_PARENT;
@@ -1529,9 +2779,139 @@ private    void mksettings(MainActivity context) {
 setvalues();
 }
 
+private static void clinicalExchanges(MainActivity context,View parent) {
+    CheckDirectionBox xdrip=new CheckDirectionBox(context);
+    xdrip.setText(R.string.xdripbroadcast);
+    xdrip.setChecked(Natives.getxbroadcast());
+    CheckDirectionBox juggluco=new CheckDirectionBox(context);
+    juggluco.setText(R.string.settings_juggluco_broadcast);
+    juggluco.setChecked(Natives.getJugglucobroadcast());
+    CheckDirectionBox patchedLibre=new CheckDirectionBox(context);
+    patchedLibre.setText(R.string.patchedlibrebroadcast);
+    patchedLibre.setChecked(Natives.getlibrelinkused());
+    CheckDirectionBox everSense=new CheckDirectionBox(context);
+    everSense.setText(R.string.everSensebroadcast);
+    everSense.setChecked(Natives.geteverSensebroadcast());
+    CheckDirectionBox libreView=new CheckDirectionBox(context);
+    libreView.setText(R.string.libreviewname);
+    libreView.setChecked(Natives.getuselibreview());
+    CheckDirectionBox healthConnect=Build.VERSION.SDK_INT<28?null:
+            getcheckbox(context,"Health Connect",Natives.gethealthConnect());
+
+    Button close=clinicalHeaderButton(context,R.string.closename);
+    LinearLayout webServer=ClinicalUi.actionRow(context,context.getString(R.string.webserver),
+            context.getString(R.string.settings_webserver_hint));
+    LinearLayout uploader=ClinicalUi.actionRow(context,context.getString(R.string.uploader),
+            context.getString(R.string.settings_uploader_hint));
+    LinearLayout meters=ClinicalUi.actionRow(context,context.getString(R.string.meterlist),
+            context.getString(R.string.settings_meters_hint));
+    LinearLayout exchangeHelp=ClinicalUi.actionRow(context,
+            context.getString(R.string.helpname),context.getString(R.string.settings_exchange_help_hint));
+
+    LinearLayout content=clinicalScreenContent(context);
+    content.addView(ClinicalUi.header(context,
+            context.getString(R.string.settings_exchange_title),close));
+    TextView intro=ClinicalUi.body(context,context.getString(R.string.settings_exchange_intro));
+    intro.setPaddingRelative(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
+            ClinicalUi.dp(context,6));
+    content.addView(intro);
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_broadcasts_section)));
+    content.addView(ClinicalUi.card(context,
+            clinicalDirectToggle(context,patchedLibre),
+            clinicalDirectToggle(context,everSense),
+            clinicalDirectToggle(context,xdrip),
+            clinicalDirectToggle(context,juggluco)));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_services_section)));
+    if(healthConnect!=null)
+        content.addView(ClinicalUi.card(context,webServer,uploader,
+                clinicalDirectToggle(context,libreView),
+                clinicalToggleRow(context,healthConnect,
+                        context.getString(R.string.settings_health_connect_hint))));
+    else
+        content.addView(ClinicalUi.card(context,webServer,uploader,
+                clinicalDirectToggle(context,libreView)));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_data_section)));
+    content.addView(ClinicalUi.card(context,meters));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_support_section)));
+    content.addView(ClinicalUi.card(context,exchangeHelp));
+    ScrollView screen=ClinicalUi.scrollScreen(context,content);
+    context.addMyContentView(screen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+
+    boolean[] xdripBusy={false};
+    xdrip.setOnCheckedChangeListener((button,isChecked)-> {
+        if(!xdripBusy[0]) {
+            xdripBusy[0]=true;
+            xdrip.setChecked(!isChecked);
+            Broadcasts.setxdripreceivers(context,screen,xdrip,xdripBusy);
+            }
+        });
+    boolean[] jugglucoBusy={false};
+    juggluco.setOnCheckedChangeListener((button,isChecked)-> {
+        if(!jugglucoBusy[0]) {
+            jugglucoBusy[0]=true;
+            juggluco.setChecked(!isChecked);
+            Broadcasts.setglucodatareceivers(context,screen,juggluco,jugglucoBusy);
+            }
+        });
+    boolean[] patchedBusy={false};
+    patchedLibre.setOnCheckedChangeListener((button,isChecked)-> {
+        if(!patchedBusy[0]) {
+            patchedBusy[0]=true;
+            patchedLibre.setChecked(!isChecked);
+            Broadcasts.setlibrereceivers(context,screen,patchedLibre,patchedBusy);
+            }
+        });
+    boolean[] everSenseBusy={false};
+    everSense.setOnCheckedChangeListener((button,isChecked)-> {
+        if(!everSenseBusy[0]) {
+            everSenseBusy[0]=true;
+            everSense.setChecked(!isChecked);
+            Broadcasts.seteverSensereceivers(context,screen,everSense,everSenseBusy);
+            }
+        });
+    boolean[] libreViewBusy={false};
+    libreView.setOnCheckedChangeListener((button,isChecked)-> {
+        if(!libreViewBusy[0]) {
+            libreViewBusy[0]=true;
+            libreView.setChecked(!isChecked);
+            Libreview.config(context,screen,libreView,libreViewBusy);
+            }
+        });
+    if(healthConnect!=null)
+        healthConnect.setOnCheckedChangeListener((button,isChecked)-> {
+            Natives.sethealthConnect(isChecked);
+            if(isChecked) {
+                MainActivity.tryHealth=5;
+                HealthConnection.Companion.init(context);
+                }
+            else {
+                MainActivity.tryHealth=0;
+                HealthConnection.Companion.stop();
+                }
+            });
+
+    webServer.setOnClickListener(view->tk.glucodata.Nightscout.show(context,screen));
+    uploader.setOnClickListener(view->tk.glucodata.NightPost.config(context,screen));
+    meters.setOnClickListener(view->MeterList.show(context,screen));
+    exchangeHelp.setOnClickListener(view->help(R.string.exchangehelp,context));
+    close.setOnClickListener(view->context.doonback());
+    context.setonback(()-> {
+        parent.setVisibility(VISIBLE);
+        removeContentView(screen);
+        });
+    }
+
 @SuppressLint("UseCompatLoadingForDrawables")
 static private void exchanges(MainActivity context, View parent) {
   parent.setVisibility(GONE);
+    if(useClinicalPhoneChild(isWearable)) {
+        clinicalExchanges(context,parent);
+        return;
+        }
     final CheckDirectionBox xdripbroadcast = new CheckDirectionBox(context);
     final CheckDirectionBox jugglucobroadcast = new CheckDirectionBox(context);
 

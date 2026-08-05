@@ -124,6 +124,11 @@ public MainActivity() {
 //    boolean    hideSystem=true;
     LaunchShit  permHealth=isWearable?null:new LaunchShit(this);
     public GlucoseCurve curve=null;
+    private DashboardChrome dashboardChrome=null;
+    private IntakeComposer intakeComposer=null;
+    private IntakeEventDetailsSheet intakeEventDetailsSheet=null;
+    private IntakeEventClusterSheet intakeEventClusterSheet=null;
+    private ForecastDetailsPage forecastDetailsPage=null;
 //    Button okbutton=null;
     private static final String LOG_ID = "MainActivity";
     private NfcAdapter mNfcAdapter=null;
@@ -156,10 +161,10 @@ private  void               onceshowintro() {
                  if(getlibrary.showintro) {
                    getlibrary.showintro=false;
                    MainActivity act=this;
-                   act.themeLightBars();
+                   act.lightBars(false);
                    help.help(R.string.introhelp,act,
                        l->{ setShownintro(true);
-                           act.lightBars(!Natives.getInvertColors()); 
+                           act.lightBars(false);
                            final int unit=Natives.getunit();
                            if(!(unit==1||unit==2)) {
                                   tk.glucodata.settings.Settings.set(act);
@@ -203,16 +208,25 @@ private void startdisplay() {
     if(Applic.Nativesloaded)
         app.needsnatives() ;
 
+    setsizes(this);
+    GlucoseCurve.setgeo(screenwidth,screenheight);
     curve = new GlucoseCurve(this);
    {if(doLog) {Log.i(LOG_ID,"After curve = new GlucoseCurve(this);");};};
    if(!isWearable) {
+      Natives.setmodernui(true);
       if(Build.VERSION.SDK_INT >= 30) {
              setOnApplyWindowInsetsListener(curve,(v, windowInsets) -> {
              setsizes(this);
-             if(screenwidth>= screenheight) {
-                 Insets  insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
+             GlucoseCurve.setgeo(screenwidth,screenheight);
+             {
+                 Insets  insets = windowInsets.getInsets(
+                         WindowInsetsCompat.Type.systemBars()
+                                 | WindowInsetsCompat.Type.displayCutout());
                  {if(doLog) {Log.i(LOG_ID, "systemBars: left="+insets.left+ " right="+insets.right+ " bottom="+insets.bottom+ " top="+insets.top);};};
-                 Natives.systembar(insets.left, insets.top, insets.right, insets.bottom);
+                 // The chart has its own dashboard card and never draws under
+                 // system bars. Keep the real insets for legacy Java overlays,
+                 // while giving the native renderer its exact local viewport.
+                 Natives.systembar(0, 0, 0, 0);
 
                 systembarLeft=insets.left;
                 systembarTop=insets.top;
@@ -228,8 +242,6 @@ private void startdisplay() {
                     }
                  requestRender();
                  onceshowintro();
-
-
                  }
                 return windowInsets;
           });
@@ -237,11 +249,20 @@ private void startdisplay() {
     else {
         }
 
-      lightBars(!getInvertColors( ));
+      // The redesigned phone shell is consistently dark, including the
+      // edge-to-edge regions behind both system bars.
+      lightBars(false);
       }
-    setContentView(curve);
+    if(isWearable) {
+        setContentView(curve);
+        }
+    else {
+        dashboardChrome=new DashboardChrome(this,curve);
+        setContentView(dashboardChrome.createView());
+        dashboardChrome.attach();
+        }
    try {
-      setRequestedOrientation(Natives.getScreenOrientation( ));
+      setRequestedOrientation(OrientationPolicy.requestedOrientation());
        }
    catch(       Throwable  error) {
       String mess=error!=null?error.getMessage():null;
@@ -457,6 +478,16 @@ private void setBackPress() {
              isLightTheme=getIsLightTheme();
              }
 
+        // The redesigned phone experience uses one stable, high-contrast
+        // product palette.  Applying it to the Activity (rather than only the
+        // dashboard root) also brings the existing data-entry, help and
+        // settings flows into the same visual system while their mature
+        // business logic remains untouched.
+        if(!isWearable) {
+             getTheme().applyStyle(R.style.ModernDashboardThemeOverlay, true);
+             isLightTheme=false;
+             }
+
         updateRtl(getResources().getConfiguration());
         if(!isWearable) {
             if(Build.VERSION.SDK_INT >= 30)  {
@@ -662,6 +693,10 @@ static boolean tocalendarapp=false;
         else
             {if(doLog) {Log.d(LOG_ID,"onResume no setnfc");};};
         }
+
+     if(dashboardChrome!=null)
+         dashboardChrome.onForeground();
+     refreshDashboardData();
 
      return;
     }
@@ -889,6 +924,10 @@ void activateresult(boolean res) {
     @Override
     protected void onPause() {
       if(doLog) {Log.i(LOG_ID,"onPause");};
+        if(dashboardChrome!=null)
+            dashboardChrome.onBackground();
+        if(intakeComposer!=null)
+            intakeComposer.onActivityPause();
         if(mNfcAdapter != null) {
            try {
                mNfcAdapter.disableReaderMode(this);
@@ -945,6 +984,26 @@ protected void onStop() {
             alert.dismiss();
             shownglucosealert=null;
             }
+       if(intakeComposer!=null) {
+            intakeComposer.destroy();
+            intakeComposer=null;
+            }
+       if(intakeEventDetailsSheet!=null) {
+            intakeEventDetailsSheet.destroy();
+            intakeEventDetailsSheet=null;
+            }
+       if(intakeEventClusterSheet!=null) {
+            intakeEventClusterSheet.destroy();
+            intakeEventClusterSheet=null;
+            }
+       if(forecastDetailsPage!=null) {
+            forecastDetailsPage.destroy();
+            forecastDetailsPage=null;
+            }
+       if(dashboardChrome!=null) {
+            dashboardChrome.detach();
+            dashboardChrome=null;
+            }
        thisone=null;
        super.onDestroy();
     }
@@ -954,7 +1013,10 @@ protected void onStop() {
         {if(doLog) {Log.d(LOG_ID,"onWindowFocusChanged(hasFocus="+hasFocus+")");};};
 //        if (hasFocus&&hideSystem) 
         if (hasFocus) {
-        hideSystemUI();
+        if(!isWearable&&dashboardChrome!=null)
+            showSystemUI();
+        else
+            hideSystemUI();
         requestRender();
             }
     }
@@ -984,8 +1046,13 @@ void switchSystemUI() {
 }*/
 
 public boolean showui=false;
-void selectionSystemUI() {
-    setSystemUI(showui||Natives.getsystemUI());
+public void selectionSystemUI() {
+    if(!isWearable&&dashboardChrome!=null) {
+        showSystemUI();
+        }
+    else {
+        setSystemUI(showui||Natives.getsystemUI());
+        }
     }
         // Enables regular immersive mode.
         // For "lean back" mode, remove SYSTEM_UI_FLAG_IMMERSIVE.
@@ -1031,12 +1098,12 @@ public static int getscreenwidth(Context context) {
 //static public ViewGroup settings=null;
 void removeconfig() {
     screenwidth=0;
+    screenheight=0;
     if(Applic.Nativesloaded) {
         if(app.needsnatives() ) {
             if(curve!=null) {
-                while(doonback() )
-                    ;
-                curve.removeviews();            
+                drainBackStackForConfiguration();
+                curve.removeviews();
                 }
           }
       }
@@ -1045,12 +1112,113 @@ void removeconfig() {
 public void onConfigurationChanged(Configuration newConfig) {
     super.onConfigurationChanged(newConfig);
     if(doLog) {Log.i(LOG_ID,"onConfigurationChanged height=" +newConfig.screenHeightDp+" width=" +newConfig.screenWidthDp + " sw="+newConfig.smallestScreenWidthDp);};
-    removeconfig();
+   boolean keepIntake=intakeComposer!=null&&intakeComposer.isShowing();
+   boolean keepEventDetails=intakeEventDetailsSheet!=null
+           &&intakeEventDetailsSheet.isShowing();
+   boolean keepEventCluster=intakeEventClusterSheet!=null
+           &&intakeEventClusterSheet.isShowing();
+   boolean keepForecast=forecastDetailsPage!=null
+           &&forecastDetailsPage.isShowing();
+   if(keepIntake||keepEventDetails||keepEventCluster||keepForecast) {
+       screenwidth=0;
+       screenheight=0;
+       }
+   else
+       removeconfig();
    updateRtl(newConfig);
+   setsizes(this);
+   GlucoseCurve.setgeo(screenwidth,screenheight);
+   if(dashboardChrome!=null)
+       dashboardChrome.refreshLayout();
+   if(keepIntake)
+       intakeComposer.onConfigurationChanged();
+   if(keepEventDetails)
+       intakeEventDetailsSheet.onConfigurationChanged();
+   if(keepEventCluster)
+       intakeEventClusterSheet.onConfigurationChanged();
+   if(keepForecast)
+       forecastDetailsPage.onConfigurationChanged();
+   requestRender();
    }
 public void requestRender() {
     if(curve!=null)
         curve.requestRender();
+    refreshDashboardData();
+    }
+
+void refreshDashboardData() {
+    if(dashboardChrome!=null)
+        dashboardChrome.refreshData();
+    }
+
+boolean acceptsDashboardGraphGestures() {
+    return !isWearable && dashboardChrome!=null
+            && dashboardChrome.acceptsGraphGestures();
+    }
+
+void showIntakeComposer() {
+    if(isWearable) return;
+    if(intakeComposer!=null&&intakeComposer.isShowing()) return;
+    intakeComposer=new IntakeComposer(this);
+    intakeComposer.show();
+    }
+
+void onIntakeComposerClosed(IntakeComposer composer) {
+    if(intakeComposer==composer) intakeComposer=null;
+    }
+
+void showIntakeEvent(int renderKey) {
+    if(isWearable) return;
+    IntakeEvent event=IntakeRepository.get(this).findByRenderKey(renderKey);
+    if(event==null) return;
+    if(intakeEventDetailsSheet!=null&&intakeEventDetailsSheet.isShowing())
+        return;
+    intakeEventDetailsSheet=new IntakeEventDetailsSheet(this,event);
+    intakeEventDetailsSheet.show();
+    }
+
+void showIntakeEventCluster(int[] renderKeys) {
+    if(isWearable) return;
+    List<IntakeEventClusterSheet.Entry> entries=
+            IntakeEventClusterSheet.resolve(IntakeRepository.get(this),
+                    renderKeys);
+    if(entries.size()==1) {
+        showIntakeEvent(entries.get(0).renderKey);
+        return;
+        }
+    if(entries.size()<2) return;
+    if(intakeEventDetailsSheet!=null&&intakeEventDetailsSheet.isShowing())
+        return;
+    if(intakeEventClusterSheet!=null&&intakeEventClusterSheet.isShowing())
+        return;
+    intakeEventClusterSheet=new IntakeEventClusterSheet(this,entries);
+    intakeEventClusterSheet.show();
+    }
+
+void onIntakeEventClusterClosed(IntakeEventClusterSheet sheet) {
+    if(intakeEventClusterSheet==sheet) intakeEventClusterSheet=null;
+    }
+
+void onIntakeEventDetailsClosed(IntakeEventDetailsSheet sheet) {
+    if(intakeEventDetailsSheet==sheet) {
+        intakeEventDetailsSheet=null;
+        if(intakeEventClusterSheet!=null
+                &&intakeEventClusterSheet.isShowing()
+                &&!isFinishing()
+                &&(Build.VERSION.SDK_INT<17||!isDestroyed())) {
+            intakeEventClusterSheet.onEventDetailsClosed();
+            }
+        }
+    }
+
+void showForecastDetails() {
+    if(isWearable) return;
+    if(forecastDetailsPage!=null&&forecastDetailsPage.isShowing()) return;
+    forecastDetailsPage=ForecastDetailsPage.show(this);
+    }
+
+void onForecastDetailsClosed(ForecastDetailsPage page) {
+    if(forecastDetailsPage==page) forecastDetailsPage=null;
     }
 
 private void netinitstep() {
@@ -1161,6 +1329,8 @@ private void hasLocationContinue() {
 @Override
 public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
     super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+    if(intakeComposer!=null&&intakeComposer.handlePermissionResult(
+            requestCode,permissions,grantResults)) return;
     var granted=grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
     Log.i(LOG_ID,"onRequestPermissionsResult("+requestCode+",["+String.join(",",permissions)+"],"+Arrays.toString(grantResults)+") "+(granted?"":"not ")+"granted");
     switch (requestCode) {
@@ -1290,6 +1460,8 @@ private void    savekey(FileInputStream input,String outkeystr) {
 @Override
 protected void onActivityResult(int requestCode, int resultCode, Intent data) {
     super.onActivityResult(requestCode, resultCode, data);
+    if(intakeComposer!=null&&intakeComposer.handleActivityResult(
+            requestCode,resultCode,data)) return;
     Log.format("Main.onActivityResult requestCode%x resultCode=%d\n",requestCode,resultCode);
     switch(requestCode) {
    /*
@@ -1494,6 +1666,7 @@ public NumberView getnumberview() {
     }
 
 final static private Deque<Runnable> backrun = new ArrayDeque<>();
+private static boolean configurationBackDrain;
 static public int onbacknr() {
         return backrun.size();
         }
@@ -1509,6 +1682,29 @@ static public boolean doonback() {
         return true;
         }
     return false;
+    }
+static boolean isConfigurationBackDrain() {
+    return configurationBackDrain;
+    }
+static int drainBackStackForConfiguration() {
+    final Runnable[] snapshot=backrun.toArray(new Runnable[0]);
+    backrun.clear();
+    int invoked=0;
+    configurationBackDrain=true;
+    try {
+        for(Runnable callback:snapshot) {
+            callback.run();
+            invoked++;
+            }
+        }
+    finally {
+        // A legacy handler may try to put itself back while refusing to close.
+        // Configuration teardown owns this snapshot, so no callback enqueued by
+        // the drain is allowed to survive or make the loop unbounded.
+        backrun.clear();
+        configurationBackDrain=false;
+        }
+    return invoked;
     }
 static public void poponback() {
     if(!backrun.isEmpty()) 
@@ -1856,14 +2052,27 @@ int mirrorlistcolor=-1;
 
 public static void addMyContentView(Activity context,View view, ViewGroup.LayoutParams params) {
     context.addContentView(view,params);
+    if(context instanceof MainActivity)
+        ((MainActivity)context).trackDashboardOverlay(view);
     if(Applic.DynamicTheme)
-            DynamicThemeUtils.applyTheme(view);
+            DynamicThemeUtils.applyOverlayTheme(view,params);
     }
 
 public void addMyContentView(View view, ViewGroup.LayoutParams params) {
+    addMyContentView(view,params,true);
+    }
+
+/** Adds a content overlay while preserving a purpose-built XML component style. */
+void addMyContentView(View view, ViewGroup.LayoutParams params, boolean applyDynamicTheme) {
     addContentView(view,params);
-    if(Applic.DynamicTheme)
-        DynamicThemeUtils.applyTheme(view);
+    trackDashboardOverlay(view);
+    if(applyDynamicTheme&&Applic.DynamicTheme)
+        DynamicThemeUtils.applyOverlayTheme(view,params);
+    }
+
+private void trackDashboardOverlay(View view) {
+    if(dashboardChrome!=null)
+        dashboardChrome.trackOverlay(view);
     }
 
 }

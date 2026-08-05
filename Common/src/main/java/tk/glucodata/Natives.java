@@ -68,6 +68,48 @@ public static native boolean hasBluetooth(byte[] sensorident,byte[] patchinfo);
 //    public static native void hidescanresults();
     public static native void resize(int width, int height,int initscreenwidth);
      public static native void initopengl(float small,float menu,float density,float head);
+     public static native void setmodernui(boolean enabled);
+     public static native void setgraphpreview(boolean enabled);
+     public static native void setgraphhours(int hours);
+     public static native int getgraphhours();
+     /** Replaces the transient backend-backed food/insulin graph projection. */
+     public static native void setTimelineEvents(int[] keys,long[] timesMs,
+             float[] carbsGrams,float[] insulinUnits,int[] eventFlags);
+     /** Replaces the transient backend forecast, expressed in canonical mg/dL. */
+     public static native void setForecast(long[] timesMs,float[] medianMgDl,
+             float[] lowMgDl,float[] highMgDl,float confidence);
+     /** Activity kinds: 1 meal, 2 rapid insulin, 3 long-acting insulin. */
+     public static native void setForecastActivities(int[] kinds,long[] startsMs,
+             long[] peaksMs,long[] endsMs,float[] strengths,float[] confidences);
+     /**
+      * Atomic activity projection with optional per-event sampled model levels.
+      * sampleCounts maps each activity to its slice in the flattened point arrays.
+      */
+     public static native void setForecastActivitiesSampled(int[] kinds,
+             long[] startsMs,long[] peaksMs,long[] endsMs,float[] strengths,
+             float[] confidences,int[] sampleCounts,long[] sampleTimesMs,
+             float[] sampleLevels);
+     /**
+      * Additive activity bridge carrying effective-action uncertainty and a
+      * stable identity for visually separating overlapping records. Optional
+      * timestamps are zero when the backend did not report them.
+      */
+     public static native void setForecastActivitiesRangedSampled(int[] kinds,
+             int[] identityHashes,long[] startsMs,long[] onsetsMs,
+             long[] peaksMs,long[] peakLowsMs,long[] peakHighsMs,
+             long[] endsMs,long[] endLowsMs,long[] endHighsMs,
+             float[] strengths,float[] confidences,
+             float[] attributionConfidences,int[] overlapCounts,
+             int[] sampleCounts,long[] sampleTimesMs,float[] sampleLevels);
+     /**
+      * Returns chronological actual CGM polls as flat triples:
+      * [timestampMs, mgDl, Float.floatToIntBits(rateMgDlPerMinute)].
+      */
+     public static native long[] forecastReadings(long afterMs,int limit);
+     /** Returns a non-zero render key when the coordinates hit an intake marker. */
+     public static native int timelineEventAt(float x,float y);
+     /** Returns every stable render key represented by the tapped marker. */
+     public static native int[] timelineEventsAt(float x,float y);
      public static native int setfilesdir(String dir,String country,String nativedir);
 //     public static native void calccurvegegs();
   public static native void startthreads();
@@ -86,12 +128,14 @@ public static native void startsensors( );
      public static native void nextday(int day);
 //       public static native void savestate();
     public static native int translate(float dx,float dy,float yold,float y);
+    public static native void lockGraphYRangeForPan();
     public static native int mouseScale(float dx,float xold, float x);
     public static native void flingX(float vol);
     public static native void xscale(float scalex, float midx);
     public static native boolean isbutton(float x, float y);
     public static native long tap(float x, float y);
     public static native long longpress(float x, float y);
+    public static native long graphscrub(float x, float y);
     public static native long getstarttime();
 
     public static native long oldestdatatime();

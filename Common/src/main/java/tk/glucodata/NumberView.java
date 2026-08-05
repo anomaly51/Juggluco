@@ -28,10 +28,13 @@ import androidx.appcompat.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.graphics.Color;
+import android.graphics.Rect;
+import android.graphics.Typeface;
 import android.os.Build;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.Selection;
+import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -65,7 +68,6 @@ import tk.glucodata.nums.numio;
 import static android.widget.LinearLayout.VERTICAL;
 import static android.view.View.GONE;
 import static android.view.View.INVISIBLE;
-import static android.view.View.TEXT_ALIGNMENT_CENTER;
 import static android.view.View.VISIBLE;
 import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
@@ -126,6 +128,21 @@ void deleteviews() {
         removeContentView(keyboard);
         keyboard=null;
         }
+   phoneAddBody=null;
+   phoneAddForm=null;
+   phoneAddStage=null;
+   phoneAddKeyColumn=null;
+   phoneAddBottomBar=null;
+   phoneAddScreen=null;
+   phoneAddScroll=null;
+   phoneAddKeyPortraitIndex=-1;
+   phoneEditorTitle=null;
+   phoneEditorSubtitle=null;
+   phoneDeleteSummary=null;
+   phoneDeleteConfirm=null;
+   phoneDeleteConfirmButton=null;
+   phoneDeleteKeepButton=null;
+   keyboardEmbedded=false;
    cal = Calendar.getInstance();
     }
 /*
@@ -153,6 +170,7 @@ public void  addnumberview(MainActivity activity, long hitptr) {
     if(currentnum!=0L&&currentnum!=numio.newhit)  {
             Natives.freehitptr(currentnum);
             }
+    currentnum=0L;
     long time= Natives.hittime(hitptr)*1000L;
     lasttime=time;
     int bron= Natives.gethitindex(hitptr);
@@ -177,6 +195,7 @@ public void  addnumberview(MainActivity activity, long hitptr) {
         setmealbutton(type,bron, 0,shouldexclude) ;
         currentnum=0L;
         }
+    updateEditorMode(oldnum);
            if(dateview!=null) {
                thedate = time;
               }
@@ -195,6 +214,12 @@ final private int[] newmealptr={0};
 final private Layout[] mealview={null};
 private long lasttime=0L;
 private TextView messagetext;
+private TextView phoneEditorTitle;
+private TextView phoneEditorSubtitle;
+private TextView phoneDeleteSummary;
+private LinearLayout phoneDeleteConfirm;
+private Button phoneDeleteConfirmButton;
+private Button phoneDeleteKeepButton;
 boolean shouldexclude=false;
 void  setExcludeTime(long time){
       shouldexclude = Natives.shouldExclude(time);
@@ -215,8 +240,10 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
     if(newnumview==null) {
        // var mat = new MaterialButton(context); mat.setCornerRadius(GlucoseCurve.dpToPx(30)); datebutton=mat; 
       datebutton = new Button(context);
-        datebutton.setOnClickListener(
-                v -> getdateview(context));
+        datebutton.setOnClickListener(v -> {
+            hidekeyboard();
+            getdateview(context);
+        });
     source=new TextView(context);
         dateview=datebutton;
         timebutton = new Button(context);
@@ -255,7 +282,7 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
     else {
        if(!useclose) cancelbutton.setVisibility(GONE);
         }
-      Layout layout;
+      ViewGroup layout;
 
     if(isWearable) {
         int height=GlucoseCurve.getheight();
@@ -293,58 +320,273 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
            newnumview=frame;
              }
       }
-  else { 
-   layout=new Layout(context, (lay, w, h) -> {
-        int wid=GlucoseCurve.getwidth()- systembarRight;
-        if(!smallScreen) {
-            {if(doLog) {Log.i(LOG_ID,"no smallScreen");};};
-            int hei=GlucoseCurve.getheight();
-               if(wid>hei) {
-                  int minleft=systembarLeft*3/4;
-                if(hei>h)
-                    lay.setY((int)((hei - h) *.65f));
-                   else
-                    lay.setY(MainActivity.systembarTop*3/4);
-                 if(wid>w) {
-                    int half= wid / 2;
-                    int af=(half-w)/4;
-                    int posx=half - w-af;
-                    if(posx<minleft) {
-                    posx=minleft;
-                    noroom=true;
-                    }
-                    else
-                    noroom=false;
-                    lay.setX(posx);
-                  }
-                    else
-                        lay.setX(minleft);
-                }
-            else {
-                if(wid>w)
-                    lay.setX((wid - w)/2);
-                  else {
-                    lay.setX(0);
-                      }
-                 if(hei>h) {
-                    int half=hei/2;
-                    int af=(half-h)/4;
-                    lay.setY(half - h-af);
-                    }
-                   else
+  else {
+    final float density=GlucoseCurve.metrics.density;
+    final int pagePadding=(int)(density*18.0f);
+    final int sectionGap=(int)(density*20.0f);
+    final int rowGap=(int)(density*12.0f);
+    final int controlHeight=(int)(density*56.0f);
+    final int amountHeight=(int)(density*68.0f);
 
-                    lay.setY(MainActivity.systembarTop*3/4);
+    LinearLayout formColumn=new LinearLayout(context);
+    formColumn.setOrientation(VERTICAL);
+    formColumn.setPadding(0,(int)(density*8.0f),0,(int)(density*24.0f));
 
-                }
-            }
-        else {
-            {if(doLog) {Log.i(LOG_ID,"smallScreen");};};
-            if(wid>w)
-                lay.setX((wid - w)/2);
-              lay.setY(MainActivity.systembarTop*3/4);
-            }
+    LinearLayout headerRow=new LinearLayout(context);
+    headerRow.setOrientation(LinearLayout.HORIZONTAL);
+    headerRow.setGravity(Gravity.CENTER_VERTICAL);
+    styleTopActionButton(cancelbutton,density);
+    headerRow.addView(cancelbutton,new LinearLayout.LayoutParams(
+            WRAP_CONTENT,controlHeight));
+    phoneEditorTitle=new TextView(context);
+    phoneEditorTitle.setText(R.string.record_editor_new_title);
+    phoneEditorTitle.setTextColor(Color.rgb(242,244,243));
+    phoneEditorTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP,20.0f);
+    phoneEditorTitle.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    phoneEditorTitle.setGravity(Gravity.CENTER);
+    phoneEditorTitle.setSingleLine(true);
+    LinearLayout.LayoutParams titleParams=new LinearLayout.LayoutParams(
+            0,controlHeight,1.0f);
+    titleParams.setMarginStart(rowGap);
+    titleParams.setMarginEnd(rowGap);
+    headerRow.addView(phoneEditorTitle,titleParams);
+    styleTopActionButton(helpbutton,density);
+    helpbutton.setContentDescription(context.getString(R.string.helpname));
+    LinearLayout.LayoutParams helpParams=new LinearLayout.LayoutParams(
+            WRAP_CONTENT,controlHeight);
+    headerRow.addView(helpbutton,helpParams);
 
-            return new int[] {w,h}; },new View[]{helpbutton,getspinner(context), valueedit},new View[]{datebutton, excludebox,mealbutton,source,timebutton},new View[]{cancelbutton,messagetext,deletebutton, savebutton});
+    phoneEditorSubtitle=new TextView(context);
+    phoneEditorSubtitle.setText(R.string.record_editor_new_subtitle);
+    phoneEditorSubtitle.setTextColor(Color.rgb(155,161,159));
+    phoneEditorSubtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP,15.0f);
+    phoneEditorSubtitle.setLineSpacing(0,1.08f);
+    formColumn.addView(phoneEditorSubtitle,new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT));
+
+    Spinner typeSpinner=getspinner(context);
+    typeSpinner.setId(View.generateViewId());
+    typeSpinner.setContentDescription(context.getString(R.string.add_record_category));
+    styleField(typeSpinner,density);
+    valueedit.setId(View.generateViewId());
+    valueedit.setHint(R.string.add_record_amount);
+    valueedit.setContentDescription(context.getString(R.string.add_record_amount));
+    styleAmountField(valueedit,density);
+    TextView whatTitle=sectionTitle(context,R.string.record_editor_what);
+    LinearLayout.LayoutParams whatTitleParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    whatTitleParams.topMargin=sectionGap;
+    formColumn.addView(whatTitle,whatTitleParams);
+    LinearLayout whatCard=sectionCard(context,density);
+    whatCard.addView(labelledField(context,R.string.add_record_category,
+            typeSpinner,controlHeight),new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT));
+    LinearLayout.LayoutParams valueGroupParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    valueGroupParams.topMargin=rowGap;
+    whatCard.addView(labelledField(context,R.string.add_record_amount,
+            valueedit,amountHeight),valueGroupParams);
+    LinearLayout.LayoutParams whatCardParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    whatCardParams.topMargin=(int)(density*8.0f);
+    formColumn.addView(whatCard,whatCardParams);
+
+    datebutton.setId(View.generateViewId());
+    datebutton.setContentDescription(context.getString(R.string.date));
+    styleFieldButton(datebutton,density);
+    timebutton.setId(View.generateViewId());
+    timebutton.setContentDescription(context.getString(R.string.time));
+    styleFieldButton(timebutton,density);
+    LinearLayout whenRow=new LinearLayout(context);
+    whenRow.setOrientation(LinearLayout.HORIZONTAL);
+    whenRow.addView(labelledField(context,R.string.date,datebutton,controlHeight),
+            new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+    LinearLayout.LayoutParams timeGroupParams=new LinearLayout.LayoutParams(
+            0,WRAP_CONTENT,1.0f);
+    timeGroupParams.setMarginStart(rowGap);
+    whenRow.addView(labelledField(context,R.string.time,timebutton,controlHeight),
+            timeGroupParams);
+    TextView whenTitle=sectionTitle(context,R.string.record_editor_when);
+    LinearLayout.LayoutParams whenTitleParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    whenTitleParams.topMargin=sectionGap;
+    formColumn.addView(whenTitle,whenTitleParams);
+    LinearLayout whenCard=sectionCard(context,density);
+    whenCard.addView(whenRow,new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT));
+    LinearLayout.LayoutParams whenCardParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    whenCardParams.topMargin=(int)(density*8.0f);
+    formColumn.addView(whenCard,whenCardParams);
+
+    LinearLayout detailRow=new LinearLayout(context);
+    detailRow.setOrientation(VERTICAL);
+    detailRow.setGravity(Gravity.CENTER_VERTICAL);
+    mealbutton.setAllCaps(false);
+    mealbutton.setTextColor(Color.rgb(226,229,227));
+    mealbutton.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
+    mealbutton.setBackgroundResource(R.drawable.add_record_field);
+    mealbutton.setPaddingRelative((int)(density*14.0f),0,
+            (int)(density*14.0f),0);
+    detailRow.addView(excludebox,new LinearLayout.LayoutParams(
+            MATCH_PARENT,controlHeight));
+    detailRow.addView(mealbutton,new LinearLayout.LayoutParams(
+            MATCH_PARENT,controlHeight));
+    source.setTextColor(Color.rgb(155,161,159));
+    source.setTextSize(TypedValue.COMPLEX_UNIT_SP,14.0f);
+    source.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
+    source.setBackgroundResource(R.drawable.add_record_field);
+    source.setPaddingRelative((int)(density*14.0f),0,
+            (int)(density*14.0f),0);
+    detailRow.addView(source,new LinearLayout.LayoutParams(
+            MATCH_PARENT,controlHeight));
+    TextView detailTitle=sectionTitle(context,R.string.add_record_details);
+    LinearLayout.LayoutParams detailTitleParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    detailTitleParams.topMargin=sectionGap;
+    formColumn.addView(detailTitle,detailTitleParams);
+    LinearLayout detailCard=sectionCard(context,density);
+    detailCard.addView(detailRow,new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT));
+    LinearLayout.LayoutParams detailCardParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    detailCardParams.topMargin=(int)(density*8.0f);
+    formColumn.addView(detailCard,detailCardParams);
+
+    styleDangerButton(deletebutton,density);
+    stylePrimaryButton(savebutton,density);
+    messagetext.setTextColor(Color.rgb(155,161,159));
+    messagetext.setTextSize(TypedValue.COMPLEX_UNIT_SP,14.0f);
+    messagetext.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
+    messagetext.setBackgroundResource(R.drawable.add_record_notice);
+    messagetext.setPadding((int)(density*16.0f),(int)(density*14.0f),
+            (int)(density*16.0f),(int)(density*14.0f));
+    LinearLayout.LayoutParams messageParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    messageParams.topMargin=sectionGap;
+    formColumn.addView(messagetext,messageParams);
+    deletebutton.setText(R.string.record_editor_delete);
+    LinearLayout.LayoutParams deleteParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,controlHeight);
+    deleteParams.topMargin=sectionGap;
+    formColumn.addView(deletebutton,deleteParams);
+
+    phoneDeleteConfirm=new LinearLayout(context);
+    phoneDeleteConfirm.setOrientation(VERTICAL);
+    phoneDeleteConfirm.setPadding((int)(density*16.0f),(int)(density*16.0f),
+            (int)(density*16.0f),(int)(density*16.0f));
+    phoneDeleteConfirm.setBackgroundResource(R.drawable.add_record_delete_panel);
+    phoneDeleteConfirm.setVisibility(GONE);
+    TextView deleteTitle=new TextView(context);
+    deleteTitle.setText(R.string.record_editor_delete_title);
+    deleteTitle.setTextColor(Color.rgb(241,181,177));
+    deleteTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
+    deleteTitle.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    phoneDeleteConfirm.addView(deleteTitle,new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT));
+    phoneDeleteSummary=new TextView(context);
+    phoneDeleteSummary.setTextColor(Color.rgb(185,137,134));
+    phoneDeleteSummary.setTextSize(TypedValue.COMPLEX_UNIT_SP,13.0f);
+    LinearLayout.LayoutParams summaryParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    summaryParams.topMargin=(int)(density*6.0f);
+    phoneDeleteConfirm.addView(phoneDeleteSummary,summaryParams);
+    LinearLayout deleteActions=new LinearLayout(context);
+    deleteActions.setOrientation(LinearLayout.HORIZONTAL);
+    phoneDeleteKeepButton=new Button(context);
+    phoneDeleteKeepButton.setText(R.string.record_editor_keep_editing);
+    styleSecondaryButton(phoneDeleteKeepButton,density);
+    phoneDeleteConfirmButton=new Button(context);
+    phoneDeleteConfirmButton.setText(R.string.record_editor_delete_confirm);
+    styleDangerButton(phoneDeleteConfirmButton,density);
+    deleteActions.addView(phoneDeleteKeepButton,new LinearLayout.LayoutParams(
+            0,controlHeight,1.0f));
+    LinearLayout.LayoutParams confirmParams=new LinearLayout.LayoutParams(
+            0,controlHeight,1.0f);
+    confirmParams.setMarginStart(rowGap);
+    deleteActions.addView(phoneDeleteConfirmButton,confirmParams);
+    LinearLayout.LayoutParams deleteActionsParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    deleteActionsParams.topMargin=(int)(density*12.0f);
+    phoneDeleteConfirm.addView(deleteActions,deleteActionsParams);
+    LinearLayout.LayoutParams confirmPanelParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    confirmPanelParams.topMargin=sectionGap;
+    formColumn.addView(phoneDeleteConfirm,confirmPanelParams);
+
+    keyboard=getkeyboard(context);
+    keyboard.setVisibility(GONE);
+    keyboardEmbedded=true;
+    LinearLayout keyColumn=new LinearLayout(context);
+    keyColumn.setOrientation(VERTICAL);
+    keyColumn.setPadding((int)(density*16.0f),(int)(density*16.0f),
+            (int)(density*16.0f),(int)(density*16.0f));
+    keyColumn.setBackgroundResource(R.drawable.add_record_section);
+    TextView keypadTitle=sectionTitle(context,R.string.record_editor_keypad);
+    keyColumn.addView(keypadTitle,new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT));
+    LinearLayout.LayoutParams keyboardParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    keyboardParams.topMargin=(int)(density*10.0f);
+    keyColumn.addView(keyboard,keyboardParams);
+    keyColumn.setVisibility(GONE);
+
+    LinearLayout.LayoutParams keypadParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    keypadParams.topMargin=sectionGap;
+    final int keypadPortraitIndex=formColumn.indexOfChild(whatCard)+1;
+    formColumn.addView(keyColumn,keypadPortraitIndex,keypadParams);
+
+    LinearLayout body=new LinearLayout(context);
+    body.setOrientation(VERTICAL);
+    body.addView(formColumn,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+
+    LinearLayout stage=new LinearLayout(context);
+    stage.setOrientation(VERTICAL);
+    stage.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
+    stage.addView(body,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    ScrollView scroll=new ScrollView(context);
+    scroll.setFillViewport(true);
+    scroll.setClipToPadding(false);
+    scroll.setVerticalScrollBarEnabled(false);
+    scroll.addView(stage,new ScrollView.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    LinearLayout bottomBar=new LinearLayout(context);
+    bottomBar.setOrientation(VERTICAL);
+    bottomBar.setPadding(0,(int)(density*10.0f),0,0);
+    bottomBar.setBackgroundResource(R.drawable.add_record_action_bar);
+    bottomBar.addView(savebutton,new LinearLayout.LayoutParams(
+            MATCH_PARENT,controlHeight));
+
+    LinearLayout screen=new LinearLayout(context);
+    screen.setOrientation(VERTICAL);
+    screen.setBackgroundColor(Color.rgb(11,13,14));
+    screen.setPadding(systembarLeft+pagePadding,
+            MainActivity.systembarTop+(int)(density*6.0f),
+            systembarRight+pagePadding,
+            MainActivity.systembarBottom+(int)(density*10.0f));
+    screen.addView(headerRow,new LinearLayout.LayoutParams(
+            MATCH_PARENT,controlHeight));
+    LinearLayout.LayoutParams scrollParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,0,1.0f);
+    scrollParams.topMargin=(int)(density*8.0f);
+    screen.addView(scroll,scrollParams);
+    screen.addView(bottomBar,new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT));
+
+    phoneAddBody=body;
+    phoneAddForm=formColumn;
+    phoneAddStage=stage;
+    phoneAddKeyColumn=keyColumn;
+    phoneAddBottomBar=bottomBar;
+    phoneAddScreen=screen;
+    phoneAddScroll=scroll;
+    phoneAddKeyPortraitIndex=keypadPortraitIndex;
+    phoneAddDensity=density;
+    screen.addOnLayoutChangeListener((v,left,top,right,bottom,
+            oldLeft,oldTop,oldRight,oldBottom) ->
+            updatePhoneAddLayout(right-left,bottom-top));
+    layout=screen;
+    updatePhoneAddLayout(GlucoseCurve.getwidth(),GlucoseCurve.getheight());
          }
 
         timebutton.setOnClickListener(
@@ -352,8 +594,7 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
                   layout.setVisibility(GONE);
                   gettimeview(context,()-> {
                      layout.setVisibility(VISIBLE);
-                     if(keyboard!=null)
-                        keyboard.setVisibility(VISIBLE);
+                     showkeyboard(context);
                   });
                 });
 
@@ -367,16 +608,25 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
                 mealview[0]=null;
                 ((MainActivity)v.getContext()).poponback();
                 }
-            deletedialog(v,newmealptr);
+            if(isWearable)
+                deletedialog(v,newmealptr);
+            else
+                showPhoneDeleteConfirmation(v);
 
             });
+    if(phoneDeleteKeepButton!=null)
+        phoneDeleteKeepButton.setOnClickListener(v ->
+                hidePhoneDeleteConfirmation(true));
+    if(phoneDeleteConfirmButton!=null)
+        phoneDeleteConfirmButton.setOnClickListener(v ->
+                deleteCurrentRecord(v,newmealptr));
     if(isWearable) {
 
         }
     else  {
         newnumview=layout;
         } 
-    newnumview.setBackgroundColor( Applic.backgroundcolor);
+    newnumview.setBackgroundColor(isWearable?Applic.backgroundcolor:Color.rgb(11,13,14));
   savebutton.setOnClickListener(v -> {
         MainActivity act=(MainActivity)v.getContext();
         GlucoseCurve.reopener();
@@ -408,10 +658,15 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
             //            act.clearonback();
         });
 
-    context.addMyContentView(newnumview,isWearable? new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT):new ViewGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
+    ViewGroup.LayoutParams overlayParams=new ViewGroup.LayoutParams(
+            MATCH_PARENT,MATCH_PARENT);
+    if(isWearable)
+        context.addMyContentView(newnumview,overlayParams);
+    else
+        context.addMyContentView(newnumview,overlayParams,false);
         }
     else  {
-        numspinadapt.setarray(Natives.getLabels());
+        numspinadapt.setarray(editorLabels(context));
         newnumview.setVisibility(VISIBLE);
        }
     valueedit.requestFocus();
@@ -439,8 +694,7 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
                 valueedit.requestFocus();
 
                 if(!smallScreen) {
-                    if(SmallShowKeyboard)
-                            showkeyboard(context);
+                    showkeyboard(context);
                     editfocus.setedittext(valueedit);
                     }
                else {
@@ -469,17 +723,21 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
         valueedit.setText("");
     spinner.setSelection(type);
     editfocus.setedittext(valueedit);
-    source.setText( bron==1?"      ":"           \u231A         ");
-    source.setTextAlignment( TEXT_ALIGNMENT_CENTER);
-    int pads=(int)(GlucoseCurve.metrics.density*10);
-        source.setPaddingRelative(0,pads,0,pads);
+    source.setText(bron==1?R.string.record_editor_source_local:
+            R.string.record_editor_source_synced);
+    source.setContentDescription(source.getText());
+    source.setTextAlignment(View.TEXT_ALIGNMENT_VIEW_START);
     if(!Natives.staticnum()) {
         messagetext.setVisibility(GONE);
         savebutton.setVisibility(VISIBLE);
+        if(phoneAddBottomBar!=null)
+            phoneAddBottomBar.setVisibility(VISIBLE);
         }
     else  {
         savebutton.setVisibility(GONE);
         messagetext.setVisibility(VISIBLE);
+        if(phoneAddBottomBar!=null)
+            phoneAddBottomBar.setVisibility(GONE);
         }
      final Runnable closerRun= () -> {
                 if(newmealptr[0]!=0) {
@@ -533,62 +791,91 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
         menucall.onClick(mealbutton);
         }
     else {
-        timebutton.setTextColor(savebutton.getCurrentTextColor());
-        datebutton.setTextColor(savebutton.getCurrentTextColor());
+        final int fieldTextColor=isWearable?savebutton.getCurrentTextColor()
+                :Color.rgb(226,229,227);
+        timebutton.setTextColor(fieldTextColor);
+        datebutton.setTextColor(fieldTextColor);
     }
 
     setExcludeTime(time);
     return newnumview;
     }
+private String currentRecordSummary(View v) {
+    if(currentnum==0L)
+        return "";
+    MainActivity context=(MainActivity)v.getContext();
+    long time=Natives.hittime(currentnum)*1000L;
+    float value=Natives.hitvalue(currentnum);
+    int type=Natives.hittype(currentnum);
+    ArrayList<String> labels=editorLabels(context);
+    return DateFormat.getDateTimeInstance(DateFormat.DEFAULT,DateFormat.SHORT)
+            .format(time)+"  \u00b7  "+labels.get(type)+"  \u00b7  "+value;
+    }
+
+private void showPhoneDeleteConfirmation(View v) {
+    if(currentnum==0L) {
+        newnumview.setVisibility(GONE);
+        hidekeyboard();
+        return;
+        }
+    if(phoneDeleteSummary!=null)
+        phoneDeleteSummary.setText(currentRecordSummary(v));
+    deletebutton.setVisibility(GONE);
+    if(phoneDeleteConfirm!=null) {
+        phoneDeleteConfirm.setVisibility(VISIBLE);
+        phoneDeleteConfirm.requestFocus();
+        phoneDeleteConfirm.announceForAccessibility(
+                v.getContext().getString(R.string.record_editor_delete_title));
+        }
+    }
+
+private void deleteCurrentRecord(View v,int[] mealptr) {
+    if(currentnum==0L) {
+        newnumview.setVisibility(GONE);
+        hidekeyboard();
+        return;
+        }
+    MainActivity context=(MainActivity)v.getContext();
+    if(mealptr[0]!=0)
+        Natives.deletemeal(mealptr[0]);
+    mealptr[0]=0;
+    if(currentnum!=0) {
+        if(currentnum!=numio.newhit) {
+            int index=Natives.gethitindex(currentnum);
+            int waslast=numio.getlastnum(index);
+            int pos=Natives.hitremove(currentnum);
+            int last=numio.getlastnum(index);
+            if(!isWearable) {
+                AllData alldata=((Applic)((Activity)v.getContext())
+                        .getApplication()).numdata;
+                alldata.deletelast(index,last,waslast);
+                if(pos<last)
+                    alldata.changedback(index);
+                }
+            Natives.freehitptr(currentnum);
+            ((Applic)((Activity)v.getContext()).getApplication()).redraw();
+            }
+        currentnum=0L;
+        }
+    hidePhoneDeleteConfirmation(false);
+    newnumview.setVisibility(GONE);
+    hidekeyboard();
+    GlucoseCurve.reopener();
+    context.poponback();
+    }
+
 void deletedialog(View v,int[] mealptr) {
     if(currentnum==0L) {
         newnumview.setVisibility(GONE);
         hidekeyboard();
         return;
         }
-    MainActivity  context=  ((MainActivity) v.getContext());
-
-    long time= Natives.hittime(currentnum)*1000L;
-    float value=Natives.hitvalue(currentnum);
-    int type=Natives.hittype(currentnum);
-    ArrayList<String> labels= ((Applic)context.getApplication()).getlabels();
-    String mess= DateFormat.getDateTimeInstance(DateFormat.DEFAULT,DateFormat.DEFAULT).format(time)+" "+ labels.get(type)+" "+value;
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
-        builder.setTitle(R.string.deletequestion).setMessage(mess).
+    MainActivity context=(MainActivity)v.getContext();
+    AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        builder.setTitle(R.string.deletequestion).setMessage(currentRecordSummary(v)).
            setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface dialog, int id) {
-            if(mealptr[0]!=0)
-                 Natives.deletemeal(mealptr[0]);
-                 mealptr[0]=0;
-            if(currentnum!=0) {
-                if(currentnum!=numio.newhit) {
-                    int index=Natives.gethitindex(currentnum);
-                    int waslast= numio.getlastnum(index);
-                    int pos=Natives.hitremove(currentnum);
-                    int last=numio.getlastnum(index);
-                    if(!isWearable) {
-                        AllData alldata=((Applic) ((Activity) v.getContext()).getApplication()).numdata;
-                        alldata.deletelast(index,last,waslast);
-                        if(pos<last)
-                             alldata.changedback(index);
-                        }
-                        Natives.freehitptr(currentnum);
-                      ((Applic) ((Activity) v.getContext()).getApplication()). redraw();
-                      }
-                currentnum=0L;
-                }
-                /*
-            else  {
-             if(Menus.on) {
-                Menus.show(context);
-                }
-                } */
-         newnumview.setVisibility(GONE);
-
-           hidekeyboard();
-        GlucoseCurve.reopener();
-        context.poponback();
-
+                        deleteCurrentRecord(v,mealptr);
                     }
                 }) .setNegativeButton(R.string.cancel, new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface dialog, int id) {
@@ -608,7 +895,138 @@ static void setMarginEnd(ViewGroup.MarginLayoutParams params,int end) {
         else
             params.rightMargin=end;
     }
+
+private static TextView fieldLabel(Context context,int textResource,View control) {
+    TextView label=new TextView(context);
+    label.setText(textResource);
+    label.setTextColor(Color.rgb(132,139,136));
+    label.setTextSize(TypedValue.COMPLEX_UNIT_SP,11.0f);
+    label.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    label.setLetterSpacing(.045f);
+    if(control.getId()==View.NO_ID)
+        control.setId(View.generateViewId());
+    label.setLabelFor(control.getId());
+    return label;
+    }
+
+private static LinearLayout labelledField(Context context,int textResource,
+        View control,int controlHeight) {
+    LinearLayout group=new LinearLayout(context);
+    group.setOrientation(VERTICAL);
+    TextView label=fieldLabel(context,textResource,control);
+    group.addView(label,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    LinearLayout.LayoutParams controlParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,controlHeight);
+    controlParams.topMargin=(int)(GlucoseCurve.metrics.density*4.0f);
+    group.addView(control,controlParams);
+    return group;
+    }
+
+private static TextView sectionTitle(Context context,int textResource) {
+    TextView title=new TextView(context);
+    title.setText(textResource);
+    title.setTextColor(Color.rgb(196,202,199));
+    title.setTextSize(TypedValue.COMPLEX_UNIT_SP,14.0f);
+    title.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    return title;
+    }
+
+private static LinearLayout sectionCard(Context context,float density) {
+    LinearLayout card=new LinearLayout(context);
+    card.setOrientation(VERTICAL);
+    final int padding=(int)(density*16.0f);
+    card.setPadding(padding,padding,padding,padding);
+    card.setBackgroundResource(R.drawable.add_record_section);
+    return card;
+    }
+
+private static void styleTopActionButton(Button button,float density) {
+    button.setAllCaps(false);
+    button.setTextColor(Color.rgb(155,161,159));
+    button.setTextSize(TypedValue.COMPLEX_UNIT_SP,13.0f);
+    button.setMinWidth(0);
+    button.setMinimumWidth((int)(density*64.0f));
+    button.setPaddingRelative((int)(density*12.0f),0,
+            (int)(density*12.0f),0);
+    if(Build.VERSION.SDK_INT>=21)
+        button.setBackgroundTintList(null);
+    button.setBackgroundResource(R.drawable.add_record_top_action);
+    }
+
+private static void styleField(View view,float density) {
+    view.setBackgroundResource(R.drawable.add_record_field);
+    view.setPaddingRelative((int)(density*15.0f),0,(int)(density*15.0f),0);
+    view.setMinimumHeight((int)(density*56.0f));
+    }
+
+private static void styleAmountField(EditText edit,float density) {
+    styleField(edit,density);
+    edit.setTextColor(Color.rgb(242,244,243));
+    edit.setHintTextColor(Color.rgb(113,121,117));
+    edit.setTextSize(TypedValue.COMPLEX_UNIT_SP,26.0f);
+    edit.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    edit.setGravity(Gravity.CENTER_VERTICAL);
+    edit.setSingleLine(true);
+    edit.setBackgroundResource(R.drawable.add_record_field);
+    }
+
+private static void styleFieldButton(Button button,float density) {
+    styleField(button,density);
+    button.setAllCaps(false);
+    button.setTextColor(Color.rgb(226,229,227));
+    button.setTextSize(TypedValue.COMPLEX_UNIT_SP,15.0f);
+    button.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
+    }
+
+private static void styleSecondaryButton(Button button,float density) {
+    button.setAllCaps(false);
+    button.setTextColor(Color.rgb(196,202,199));
+    button.setTextSize(TypedValue.COMPLEX_UNIT_SP,13.0f);
+    if(Build.VERSION.SDK_INT>=21)
+        button.setBackgroundTintList(null);
+    button.setBackgroundResource(R.drawable.add_record_secondary);
+    button.setPaddingRelative((int)(density*14.0f),0,(int)(density*14.0f),0);
+    }
+
+private static void stylePrimaryButton(Button button,float density) {
+    button.setAllCaps(false);
+    button.setTextColor(Color.rgb(10,34,20));
+    button.setTextSize(TypedValue.COMPLEX_UNIT_SP,14.0f);
+    button.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    if(Build.VERSION.SDK_INT>=21)
+        button.setBackgroundTintList(null);
+    button.setBackgroundResource(R.drawable.add_record_primary);
+    }
+
+private static void styleDangerButton(Button button,float density) {
+    button.setAllCaps(false);
+    button.setTextColor(Color.rgb(235,142,137));
+    button.setTextSize(TypedValue.COMPLEX_UNIT_SP,13.0f);
+    if(Build.VERSION.SDK_INT>=21)
+        button.setBackgroundTintList(null);
+    button.setBackgroundResource(R.drawable.add_record_danger);
+    button.setPaddingRelative((int)(density*10.0f),0,(int)(density*10.0f),0);
+    }
+
+private void updateEditorMode(boolean editing) {
+    if(phoneEditorTitle!=null)
+        phoneEditorTitle.setText(editing?R.string.record_editor_edit_title:
+                R.string.record_editor_new_title);
+    if(phoneEditorSubtitle!=null)
+        phoneEditorSubtitle.setText(editing?R.string.record_editor_edit_subtitle:
+                R.string.record_editor_new_subtitle);
+    hidePhoneDeleteConfirmation(false);
+    }
+
+private void hidePhoneDeleteConfirmation(boolean showDeleteAction) {
+    if(phoneDeleteConfirm!=null)
+        phoneDeleteConfirm.setVisibility(GONE);
+    if(showDeleteAction&&deletebutton!=null)
+        deletebutton.setVisibility(VISIBLE);
+    }
+
 private void nodelete() {
+    hidePhoneDeleteConfirmation(false);
     deletebutton.setVisibility(GONE);
     if(isWearable) {
 //        Log.i(LOG_ID,"nodelete");
@@ -619,6 +1037,7 @@ private void nodelete() {
     }
 
 private void seedelete() {
+    hidePhoneDeleteConfirmation(false);
     deletebutton.setVisibility(VISIBLE);
     if(isWearable) {
  //       Log.i(LOG_ID,"seedelete");
@@ -640,6 +1059,7 @@ public void addnumberwithmenu(MainActivity context,int mealptr) {
         }
     var type=Natives.getmealvar();
      addnumberview(context,1,currentTimeMillis(),Float.MAX_VALUE,type,mealptr);
+    updateEditorMode(false);
     setmealbutton(type,1, 0,shouldexclude) ;
     nodelete();
     thetime=-1;
@@ -652,13 +1072,14 @@ public View addnumberview(MainActivity context) {
         currentnum=0L;
         }
     View lay=  addnumberview(context,1,currentTimeMillis(),Float.MAX_VALUE,0,-1);
+    updateEditorMode(false);
     setmealbutton(0,1, 0,shouldexclude) ;
     
     if(SmallShowKeyboard&&smallScreen) {
         valueedit.requestFocus();
         tk.glucodata.help.showkeyboard(context,valueedit);
       }
-    else
+    else if(isWearable)
         spinner.performClick();
     nodelete();
     thetime=-1;
@@ -756,14 +1177,15 @@ public Layout getdateviewal(MainActivity activity, long date, Dater erdate) {
     {if(doLog) {Log.i(LOG_ID, " new");};};
     datepick =new DatePicker(activity);
     datepick.setCalendarViewShown(false);
-        Button cancel=new Button(activity);
-
-        cancel.setText(R.string.cancel);
+        Button cancel=isWearable?new Button(activity):ClinicalUi.button(activity,
+                activity.getString(R.string.cancel),ClinicalUi.ButtonRole.SECONDARY);
+        if(isWearable) cancel.setText(R.string.cancel);
         cancel.setOnClickListener(vi -> { 
         activity.doonback();
         });
-        Button ok=new Button(activity);
-        ok.setText(R.string.ok);
+        Button ok=isWearable?new Button(activity):ClinicalUi.button(activity,
+                activity.getString(R.string.ok),ClinicalUi.ButtonRole.PRIMARY);
+        if(isWearable) ok.setText(R.string.ok);
  //      ok.setBackgroundResource(R.drawable.button_selector2);
         ok.setOnClickListener(vi -> {
         activity.doonback();
@@ -777,6 +1199,13 @@ public Layout getdateviewal(MainActivity activity, long date, Dater erdate) {
         dater.date(year,month,day);
 
         });
+    if(!isWearable) {
+        final float density=GlucoseCurve.metrics.density;
+        styleSecondaryButton(cancel,density);
+        stylePrimaryButton(ok,density);
+        cancel.setMinHeight((int)(density*56.0f));
+        ok.setMinHeight((int)(density*56.0f));
+        }
    ViewGroup.LayoutParams datparams;
     if(isWearable) {
          if(!useclose)
@@ -790,26 +1219,39 @@ public Layout getdateviewal(MainActivity activity, long date, Dater erdate) {
        datparams=new ViewGroup.LayoutParams(laypar,laypar);
         }
     else {
-        datepicker=new Layout(activity,
-                (lay, w, h)->{
-/*
-            int height=GlucoseCurve.getheight();
-            int width=GlucoseCurve.getwidth();
-        if(w>width||h>height) {
-            lay.setX(0);
-            lay.setY(0);
+        TextView title=ClinicalUi.title(activity,
+                activity.getString(R.string.clinical_choose_date));
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP,26);
+        title.setMinHeight(ClinicalUi.dp(activity,54));
+        title.setLayoutParams(new ViewGroup.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+        boolean landscape=GlucoseCurve.getwidth()>GlucoseCurve.getheight();
+        if(landscape) {
+            LinearLayout actions=new LinearLayout(activity);
+            actions.setOrientation(VERTICAL);
+            actions.setPaddingRelative(ClinicalUi.dp(activity,12),0,0,0);
+            actions.addView(ok,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+            actions.addView(cancel,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+            datepicker=new Layout(activity,(lay,w,h)->new int[]{w,h},
+                    new View[]{title},new View[]{datepick,actions});
             }
         else {
-                    lay.setX((width-w)/2);
-                    lay.setY((height-h)/2);
+            datepicker=new Layout(activity,(lay,w,h)->new int[]{w,h},
+                    new View[]{title},new View[]{datepick},new View[]{cancel,ok});
             }
-*/
-            return new int[] {w,h};
-                },new View[] {datepick},new View[] {cancel,ok});
-        datparams =    new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER|Gravity.CENTER_HORIZONTAL);
+        datepicker.setDistributeExtraSpace(false);
+        datparams = new FrameLayout.LayoutParams(MATCH_PARENT,MATCH_PARENT);
         }
 
-    datepicker.setBackgroundColor( Applic.app.backgroundcolor);
+    if(isWearable)
+        datepicker.setBackgroundColor(Applic.app.backgroundcolor);
+    else {
+        final int padding=ClinicalUi.dp(activity,20);
+        datepicker.setPaddingRelative(MainActivity.systembarLeft+padding,
+                MainActivity.systembarTop+ClinicalUi.dp(activity,8),
+                MainActivity.systembarRight+padding,
+                MainActivity.systembarBottom+ClinicalUi.dp(activity,18));
+        datepicker.setBackgroundColor(ClinicalUi.window(activity));
+        }
     activity.addMyContentView(datepicker, datparams);
     }
     else {
@@ -826,8 +1268,11 @@ activity.setonback(()->{
         EnableControls(keyboard,true);
     datepicker.setVisibility(GONE);
 
-    if(newnumview!=null)
+    if(newnumview!=null) {
         EnableControls(newnumview,true);
+        if(!isWearable)
+            showkeyboard(activity);
+        }
     else {
         if(Menus.on)
                     Menus.show(activity);
@@ -873,27 +1318,31 @@ void gettimeview(MainActivity activity,Runnable parent) {
         }
     if(keyboard!=null) {
         keyboard.setVisibility(GONE);
+        if(phoneAddKeyColumn!=null)
+            phoneAddKeyColumn.setVisibility(GONE);
         }
     gettimepicker(activity,h,m,numsettime,parent);
     }
     @SuppressWarnings("deprecation")
 //Layout buttonlay;
 public void gettimepicker(MainActivity activity,int hourin, int minin, ObjIntConsumer<Integer> timeset,Runnable onclose) {
-final  boolean buttonsunder=false;
+final boolean buttonsunder=!isWearable&&GlucoseCurve.getheight()>=GlucoseCurve.getwidth();
    settime=timeset;
     if(timepicker==null) {
 
     //    Log.i(LOG_ID,"new gettimepicker");
         pick =new TimePicker(activity);
 //        pick.setIs24HourView( android.text.format.DateFormat.is24HourFormat(activity));
-        Button cancel=new Button(activity);
-        cancel.setText(R.string.cancel);
+        Button cancel=isWearable?new Button(activity):ClinicalUi.button(activity,
+                activity.getString(R.string.cancel),ClinicalUi.ButtonRole.SECONDARY);
+        if(isWearable) cancel.setText(R.string.cancel);
         cancel.setOnClickListener(vi -> { 
         activity.doonback();
 
         });
-        Button ok=new Button(activity);
-        ok.setText(R.string.ok);
+        Button ok=isWearable?new Button(activity):ClinicalUi.button(activity,
+                activity.getString(R.string.ok),ClinicalUi.ButtonRole.PRIMARY);
+        if(isWearable) ok.setText(R.string.ok);
         ok.setOnClickListener(vi -> {
         activity.doonback();
             int hour,min;
@@ -907,6 +1356,13 @@ final  boolean buttonsunder=false;
         settime.accept(hour,min);
 
         });
+    if(!isWearable) {
+        final float density=GlucoseCurve.metrics.density;
+        styleSecondaryButton(cancel,density);
+        stylePrimaryButton(ok,density);
+        cancel.setMinHeight((int)(density*56.0f));
+        ok.setMinHeight((int)(density*56.0f));
+        }
     View[][] views;
      int layparwidth,layparheight;
 if(isWearable) {
@@ -916,27 +1372,29 @@ if(isWearable) {
 
          }
 else {
-   layparheight=ViewGroup.LayoutParams.WRAP_CONTENT;
+       layparheight=MATCH_PARENT;
+       layparwidth=MATCH_PARENT;
+       TextView title=ClinicalUi.title(activity,
+               activity.getString(R.string.clinical_choose_time));
+       title.setTextSize(TypedValue.COMPLEX_UNIT_SP,26);
+       title.setMinHeight(ClinicalUi.dp(activity,54));
+       title.setLayoutParams(new ViewGroup.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
        if(buttonsunder) {
-           views=new View[][]{new View[]{pick},new View[]{cancel,ok}};
-         layparwidth=WRAP_CONTENT;
+           views=new View[][]{new View[]{title},new View[]{pick},new View[]{cancel,ok}};
            }
        else {
-         //layparwidth=MATCH_PARENT;
-         layparwidth=WRAP_CONTENT;
-        //  buttonlay=new Layout(activity,new View[] {cancel},new View[]{ok});
-        //buttonlay.usebaseline=false;
-         // buttonlay.setLayoutParams(new ViewGroup.LayoutParams(  WRAP_CONTENT , ViewGroup.LayoutParams.MATCH_PARENT));
          var buttons=new LinearLayout(activity);
          buttons.setOrientation(VERTICAL);
-         buttons.addView(cancel);
-         buttons.addView(ok);
-         views=new View[][] {new View[] {pick,buttons}};
+         buttons.setPaddingRelative(ClinicalUi.dp(activity,12),0,0,0);
+         buttons.addView(ok,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+         buttons.addView(cancel,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+         views=new View[][] {new View[]{title},new View[] {pick,buttons}};
         };
        };
 //        buttonlay.setBackgroundColor( RED);
 //     var laypar=smallScreen?WRAP_CONTENT:MATCH_PARENT;
-    pick.setLayoutParams(new ViewGroup.LayoutParams(layparwidth ,ViewGroup.LayoutParams.WRAP_CONTENT ));
+    pick.setLayoutParams(new ViewGroup.LayoutParams(
+            isWearable?layparwidth:(buttonsunder?MATCH_PARENT:WRAP_CONTENT),WRAP_CONTENT));
 //    pick.setLayoutParams(new ViewGroup.LayoutParams(WRAP_CONTENT , ViewGroup.LayoutParams.WRAP_CONTENT));
         Layout layout=new Layout(activity,
                 (lay, w, h)-> {
@@ -963,9 +1421,20 @@ else {
                 }, views);
 
 
-        layout.setBackgroundColor( Applic.backgroundcolor);
+        if(isWearable)
+            layout.setBackgroundColor(Applic.backgroundcolor);
+        else {
+            final int padding=ClinicalUi.dp(activity,20);
+            layout.setPaddingRelative(MainActivity.systembarLeft+padding,
+                    MainActivity.systembarTop+ClinicalUi.dp(activity,8),
+                    MainActivity.systembarRight+padding,
+                    MainActivity.systembarBottom+ClinicalUi.dp(activity,18));
+            layout.setBackgroundColor(ClinicalUi.window(activity));
+            layout.setDistributeExtraSpace(false);
+            }
     //    activity.addMyContentView(layout,  new ViewGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
-    var  params =    new FrameLayout.LayoutParams(layparwidth,layparwidth, Gravity.CENTER_HORIZONTAL);
+    var params=new FrameLayout.LayoutParams(layparwidth,layparheight,
+            isWearable?Gravity.CENTER_HORIZONTAL:Gravity.NO_GRAVITY);
 
     //l act.addMyContentView(layout, params);
         activity.addMyContentView(layout,  params);
@@ -981,15 +1450,6 @@ else {
     }
 
   //    timepicker.setPaddingRelative(systembarLeft,MainActivity.systembarTop, systembarRight,MainActivity.systembarBottom);
-if(!isWearable) {
-    if(buttonsunder) 
-        timepicker.setPaddingRelative(systembarLeft,MainActivity.systembarTop, systembarRight,MainActivity.systembarBottom);
-   else  {
-         pick.setPaddingRelative(systembarLeft,MainActivity.systembarTop,0,MainActivity.systembarBottom);
-        //buttonlay.setPaddingRelative(0,MainActivity.systembarTop/2, systembarRight,MainActivity.systembarBottom);
-        }
-     }
-
      pick.setIs24HourView(Applic.hour24);
 activity.setonback(
         () -> {
@@ -1039,14 +1499,35 @@ void setmealbutton(int labelsel,long hitptr) {
     boolean here=(hitptr==0L||hitptr==numio.newhit);
     setmealbutton(labelsel, here?1:Natives.gethitindex(hitptr),here?1:Natives.hitmeal(hitptr),here?shouldexclude:Natives.hitexclude(hitptr));
     }
+
+private static ArrayList<String> editorLabels(Context context) {
+    ArrayList<String> labels=new ArrayList<>(Natives.getLabels());
+    for(int index=0;index<labels.size();index++) {
+        String label=labels.get(index);
+        if("Carbohydra".equals(label))
+            labels.set(index,context.getString(R.string.carbo));
+        else if("Fast Insuli".equals(label))
+            labels.set(index,context.getString(R.string.rapidinsulin));
+        else if("Long Insuli".equals(label))
+            labels.set(index,context.getString(R.string.longinsulin));
+        }
+    return labels;
+    }
+
 Spinner getspinner(Activity context) {
 if(spinner==null) {
     spinner=getGenSpin(context);
-    numspinadapt=new LabelAdapter<String>(context,Natives.getLabels(),1);
+    numspinadapt=new LabelAdapter<String>(context,editorLabels(context),1);
     spinner.setAdapter(numspinadapt);
     spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
         @Override
         public  void onItemSelected (AdapterView<?> parent, View view, int position, long id) {
+            if(view instanceof TextView) {
+                TextView selected=(TextView)view;
+                selected.setSingleLine(true);
+                selected.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                selected.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
+                }
             labelsel=position;
             setmealbutton(position,currentnum);
             }
@@ -1099,7 +1580,72 @@ static View.OnTouchListener ontouchedit= new View.OnTouchListener() {
         }
     };
 */
-    Layout keyboard;
+    LinearLayout keyboard;
+    private LinearLayout phoneAddBody;
+    private LinearLayout phoneAddForm;
+    private LinearLayout phoneAddStage;
+    private LinearLayout phoneAddKeyColumn;
+    private LinearLayout phoneAddBottomBar;
+    private LinearLayout phoneAddScreen;
+    private ScrollView phoneAddScroll;
+    private int phoneAddKeyPortraitIndex=-1;
+    private float phoneAddDensity;
+    private boolean keyboardEmbedded=false;
+
+private void updatePhoneAddLayout(int width,int height) {
+    if(isWearable||phoneAddBody==null||phoneAddForm==null||keyboard==null)
+        return;
+    final float density=phoneAddDensity>0.0f?phoneAddDensity:GlucoseCurve.metrics.density;
+    final int horizontalInsets=systembarLeft+systembarRight+(int)(density*36.0f);
+    final int usableWidth=Math.max((int)(density*280.0f),width-horizontalInsets);
+    final boolean twoPane=useTwoPaneEditor(width,height,density);
+    final int gap=(int)(density*(twoPane?20.0f:16.0f));
+    if(phoneAddScreen!=null) {
+        final int sidePadding=(int)(density*(twoPane?24.0f:18.0f));
+        phoneAddScreen.setPadding(systembarLeft+sidePadding,
+                MainActivity.systembarTop+(int)(density*6.0f),
+                systembarRight+sidePadding,
+                MainActivity.systembarBottom+(int)(density*10.0f));
+        }
+    LinearLayout.LayoutParams bodyParams=(LinearLayout.LayoutParams)
+            phoneAddBody.getLayoutParams();
+    bodyParams.width=Math.min(usableWidth,(int)(density*(twoPane?900.0f:620.0f)));
+    bodyParams.height=WRAP_CONTENT;
+    phoneAddBody.setLayoutParams(bodyParams);
+    phoneAddBody.setOrientation(twoPane?LinearLayout.HORIZONTAL:VERTICAL);
+    phoneAddForm.setLayoutParams(new LinearLayout.LayoutParams(
+            twoPane?0:MATCH_PARENT,WRAP_CONTENT,twoPane?1.0f:0.0f));
+    final ViewGroup desiredKeypadParent=twoPane?phoneAddBody:phoneAddForm;
+    if(phoneAddKeyColumn.getParent()!=desiredKeypadParent) {
+        final ViewGroup oldParent=(ViewGroup)phoneAddKeyColumn.getParent();
+        if(oldParent!=null)
+            oldParent.removeView(phoneAddKeyColumn);
+        if(twoPane)
+            phoneAddBody.addView(phoneAddKeyColumn);
+        else
+            phoneAddForm.addView(phoneAddKeyColumn,
+                    Math.min(phoneAddKeyPortraitIndex,phoneAddForm.getChildCount()));
+        }
+    LinearLayout.LayoutParams keypadParams=new LinearLayout.LayoutParams(
+            twoPane?(int)(density*300.0f):MATCH_PARENT,WRAP_CONTENT);
+    if(twoPane)
+        keypadParams.setMarginStart(gap);
+    else
+        keypadParams.topMargin=gap;
+    phoneAddKeyColumn.setLayoutParams(keypadParams);
+    keyboard.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    if(phoneAddStage!=null)
+        phoneAddStage.requestLayout();
+    phoneAddBody.requestLayout();
+    }
+
+static boolean useTwoPaneEditor(int width,int height,float density) {
+    if(density<=0.0f)
+        return false;
+    final float widthDp=width/density;
+    final float heightDp=height/density;
+    return widthDp>=720.0f&&widthDp>heightDp*1.08f;
+    }
 
 static class numlisten implements View.OnClickListener {
 
@@ -1122,7 +1668,92 @@ static class numlisten implements View.OnClickListener {
     }
 }
 boolean noroom=false;
-Layout getkeyboard(Context context) {
+LinearLayout getkeyboard(Context context) {
+    final float density=GlucoseCurve.metrics.density;
+    final int rowHeight=(int)(density*48.0f);
+    final int gap=(int)(density*6.0f);
+    numlisten click=new numlisten();
+    LinearLayout layout=new LinearLayout(context);
+    layout.setOrientation(VERTICAL);
+    layout.setContentDescription(context.getString(R.string.add_record_keypad));
+    final String[][] keys={{"7","8","9"},{"4","5","6"},{"1","2","3"}};
+    for(String[] keyRow:keys) {
+        LinearLayout row=new LinearLayout(context);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for(int i=0;i<keyRow.length;i++) {
+            Button button=makeKey(context,keyRow[i]);
+            button.setContentDescription(keyRow[i]);
+            button.setOnClickListener(click);
+            LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(
+                    0,rowHeight,1.0f);
+            if(i>0)
+                params.setMarginStart(gap);
+            row.addView(button,params);
+            }
+        LinearLayout.LayoutParams rowParams=new LinearLayout.LayoutParams(
+                MATCH_PARENT,rowHeight);
+        if(layout.getChildCount()>0)
+            rowParams.topMargin=gap;
+        layout.addView(row,rowParams);
+        }
+    LinearLayout bottomRow=new LinearLayout(context);
+    bottomRow.setOrientation(LinearLayout.HORIZONTAL);
+    Button zero=makeKey(context,"0");
+    zero.setContentDescription("0");
+    zero.setOnClickListener(click);
+    bottomRow.addView(zero,new LinearLayout.LayoutParams(0,rowHeight,1.0f));
+    Button backspace=makeKey(context,Build.VERSION.SDK_INT>=22?"\u232B":"\u2190");
+    backspace.setContentDescription(context.getString(R.string.add_record_backspace));
+    backspace.setOnClickListener(v->{
+        final Editable edit=editfocus.getedit();
+        if(edit==null)
+            return;
+        int start=Selection.getSelectionStart(edit);
+        int end=Selection.getSelectionEnd(edit);
+        if(start<0||end<0)
+            return;
+        if(end>start)
+            edit.replace(start,end,"");
+        else if(start>0)
+            edit.replace(--start,end,"");
+        Selection.setSelection(edit,start);
+        });
+    LinearLayout.LayoutParams backspaceParams=new LinearLayout.LayoutParams(
+            0,rowHeight,1.0f);
+    backspaceParams.setMarginStart(gap);
+    bottomRow.addView(backspace,backspaceParams);
+    Button decimal=makeKey(context,".");
+    decimal.setContentDescription(context.getString(R.string.add_record_decimal));
+    decimal.setOnClickListener(click);
+    LinearLayout.LayoutParams decimalParams=new LinearLayout.LayoutParams(
+            0,rowHeight,1.0f);
+    decimalParams.setMarginStart(gap);
+    bottomRow.addView(decimal,decimalParams);
+    LinearLayout.LayoutParams bottomParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,rowHeight);
+    bottomParams.topMargin=gap;
+    layout.addView(bottomRow,bottomParams);
+    return layout;
+    }
+
+private static Button makeKey(Context context,String text) {
+    Button button=new Button(context);
+    button.setText(text);
+    button.setAllCaps(false);
+    button.setTextColor(Color.rgb(226,229,227));
+    button.setTextSize(TypedValue.COMPLEX_UNIT_SP,18.0f);
+    button.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    button.setGravity(Gravity.CENTER);
+    button.setMinWidth(0);
+    button.setMinimumWidth(0);
+    button.setPadding(0,0,0,0);
+    if(Build.VERSION.SDK_INT>=21)
+        button.setBackgroundTintList(null);
+    button.setBackgroundResource(R.drawable.add_record_key);
+    return button;
+    }
+
+Layout getkeyboardLegacy(Context context) {
 
    numlisten click=new numlisten();
 //    Layout layout=new Layout(context,row0,row1,row2,row3);
@@ -1204,18 +1835,40 @@ public    void showkeyboard(MainActivity context) {
 if(!isWearable) {
     if(keyboard==null) {
     keyboard=getkeyboard(context);
+    keyboardEmbedded=false;
     context.addMyContentView(keyboard, new ViewGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
     }
     else {
         keyboard.setVisibility(VISIBLE);
-    keyboard.bringToFront();
+        if(phoneAddKeyColumn!=null)
+            phoneAddKeyColumn.setVisibility(VISIBLE);
+        if(!keyboardEmbedded)
+            keyboard.bringToFront();
+    }
+    updatePhoneAddLayout(GlucoseCurve.getwidth(),GlucoseCurve.getheight());
+    revealPhoneKeypad();
     }
     }
+
+private void revealPhoneKeypad() {
+    if(phoneAddScroll==null||phoneAddKeyColumn==null
+            ||phoneAddKeyColumn.getVisibility()!=VISIBLE)
+        return;
+    phoneAddKeyColumn.post(() -> {
+        if(phoneAddKeyColumn==null||phoneAddKeyColumn.getVisibility()!=VISIBLE)
+            return;
+        Rect keypadBounds=new Rect(0,0,phoneAddKeyColumn.getWidth(),
+                phoneAddKeyColumn.getHeight());
+        phoneAddKeyColumn.requestRectangleOnScreen(keypadBounds,true);
+        });
     }
 public    void hidekeyboard() {
 if(!isWearable) {
-    if(keyboard!=null)
+    if(keyboard!=null) {
         keyboard.setVisibility(GONE);
+        if(phoneAddKeyColumn!=null)
+            phoneAddKeyColumn.setVisibility(GONE);
+        }
         }
     }
     /*

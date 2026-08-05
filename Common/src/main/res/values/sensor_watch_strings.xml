@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="clinical_sensor_details_title">Sensor details</string>
+    <string name="clinical_sensor_details_intro">Review this sensor, adjust its warm-up period and manage its calibration history.</string>
+    <string name="clinical_sensor_status_section">Sensor status</string>
+    <string name="clinical_sensor_warmup_section">Warm-up</string>
+    <string name="clinical_sensor_actions_section">Sensor actions</string>
+    <string name="clinical_sensor_help_hint">Sensor status, warm-up and troubleshooting guidance</string>
+
+    <string name="clinical_calibration_history_title">Calibration history</string>
+    <string name="clinical_calibration_history_intro">Review stream or history calibrations. Tap an entry to open the graph at that moment.</string>
+    <string name="clinical_calibration_source_section">Calibration source</string>
+    <string name="clinical_calibration_entries_section">Saved calibrations</string>
+    <string name="clinical_calibration_help_hint">How calibration history affects displayed glucose</string>
+    <string name="clinical_calibration_settings_hint">Configure calibration behavior and limits</string>
+
+    <string name="clinical_wear_title">Wear OS</string>
+    <string name="clinical_wear_intro">Choose which device reads the sensor and where glucose records are entered.</string>
+    <string name="clinical_wear_help_hint">Watch connection, sensor direction and sync guidance</string>
+    <string name="clinical_wear_device_section">Connected watch</string>
+    <string name="clinical_wear_device">Watch</string>
+    <string name="clinical_wear_numbers_section">Enter records on</string>
+    <string name="clinical_wear_sensor_section">Read sensor on</string>
+    <string name="clinical_wear_unsynced_title">Watch is not synchronised</string>
+    <string name="clinical_wear_unsynced_message">Applying defaults now may replace data that has not reached the phone.</string>
+
+    <string name="clinical_garmin_status_title">Garmin</string>
+    <string name="clinical_garmin_status_intro">Monitor the selected Garmin watch and control glucose transfer.</string>
+    <string name="clinical_garmin_device_section">Selected device</string>
+    <string name="clinical_garmin_device">Garmin watch</string>
+    <string name="clinical_garmin_connection_section">Connection status</string>
+    <string name="clinical_garmin_transfer_section">Glucose transfer</string>
+    <string name="clinical_garmin_tools_section">Tools</string>
+    <string name="clinical_garmin_refresh_hint">Refresh devices and connection status</string>
+    <string name="clinical_garmin_help_hint">Garmin Connect IQ setup and troubleshooting</string>
+    <string name="clinical_garmin_reinit_hint">Reconnect and initialise the selected watch</string>
+    <string name="clinical_garmin_config_hint">App ID, shortcuts and watch appearance</string>
+    <string name="clinical_garmin_nothing_selected">No Garmin watch is selected.</string>
+    <string name="clinical_state_yes">Yes</string>
+    <string name="clinical_state_no">No</string>
+    <string name="clinical_garmin_sdk_ready">Connect IQ SDK ready: %1$s</string>
+    <string name="clinical_garmin_registered">Watch registered: %1$s</string>
+    <string name="clinical_garmin_sent_at">Last sent: %1$s</string>
+    <string name="clinical_garmin_no_status">No status response yet</string>
+    <string name="clinical_garmin_status_value">Status: %1$s</string>
+    <string name="clinical_garmin_not_sent">Nothing sent yet</string>
+    <string name="clinical_garmin_not_received">Nothing received yet</string>
+    <string name="clinical_garmin_received_at">Last received: %1$s</string>
+
+    <string name="clinical_garmin_config_title">Garmin configuration</string>
+    <string name="clinical_garmin_config_intro">Connect the watch app and customise the data-entry experience.</string>
+    <string name="clinical_garmin_app_section">Watch app</string>
+    <string name="clinical_garmin_appearance_section">Appearance</string>
+    <string name="clinical_garmin_store_hint">Open the Juggluco watch app in the Garmin store</string>
+    <string name="clinical_garmin_id_hint">Use the default app or enter a custom Connect IQ app ID</string>
+    <string name="clinical_garmin_shortcuts_hint">Manage quick glucose record buttons on the watch</string>
+    <string name="clinical_garmin_config_help_hint">Garmin app installation, IDs and shortcut guidance</string>
+    <string name="clinical_garmin_app_id">Watch app ID</string>
+    <string name="clinical_garmin_id_title">Garmin app ID</string>
+    <string name="clinical_garmin_id_intro">Use Juggluco’s default Connect IQ app ID or provide a 32-character hexadecimal ID.</string>
+    <string name="clinical_garmin_id_error">Enter exactly 32 hexadecimal characters.</string>
+    <string name="clinical_garmin_id_save_error">The app ID could not be saved.</string>
+
+    <string name="clinical_shortcuts_title">Watch shortcuts</string>
+    <string name="clinical_shortcuts_intro">Create concise buttons for records you enter often on the Garmin watch.</string>
+    <string name="clinical_shortcuts_entries_section">Saved shortcuts</string>
+    <string name="clinical_shortcuts_empty">No shortcuts yet. Add the first one below.</string>
+    <string name="clinical_shortcuts_add_hint">Create a label and numeric value</string>
+    <string name="clinical_shortcuts_help_hint">How shortcut labels and values appear on the watch</string>
+    <string name="clinical_shortcuts_index_error">Shortcut %1$d could not be saved.</string>
+    <string name="clinical_shortcuts_value_error">A shortcut label or value is too long.</string>
+    <string name="clinical_shortcut_new_title">New shortcut</string>
+    <string name="clinical_shortcut_edit_title">Edit shortcut</string>
+    <string name="clinical_shortcut_editor_intro">Choose the label shown on the watch and the numeric value it records.</string>
+    <string name="clinical_shortcut_details_section">Shortcut details</string>
+    <string name="clinical_shortcut_required_error">Enter both a label and a value.</string>
+    <string name="clinical_shortcut_delete_title">Delete this shortcut?</string>
+    <string name="clinical_shortcut_delete_message">The shortcut will be removed from the list when you save.</string>
+</resources>

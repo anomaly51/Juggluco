@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dashboard_today">Today</string>
+    <string name="dashboard_graph_title">Glucose trend</string>
+    <string name="dashboard_state_in_target">In target</string>
+    <string name="dashboard_state_low">Below target</string>
+    <string name="dashboard_state_high">Above target</string>
+    <string name="dashboard_state_unknown">Range unavailable</string>
+    <string name="dashboard_state_waiting">Waiting for sensor</string>
+    <string name="dashboard_target_range">Target %1$s–%2$s %3$s</string>
+    <string name="dashboard_target_unavailable">Target range</string>
+    <string name="dashboard_preview_short">Preview only — no sensor data</string>
+    <string name="dashboard_backend_checking">Backend · checking</string>
+    <string name="dashboard_backend_connected">Backend · connected</string>
+    <string name="dashboard_backend_offline">Backend · offline</string>
+    <string name="dashboard_backend_settings">Backend status. Open connection settings.</string>
+    <string name="dashboard_backend_open_settings">%1$s. Open backend settings.</string>
+</resources>

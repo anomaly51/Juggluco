@@ -50,6 +50,10 @@ import android.view.ViewGroup;
 
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
@@ -74,7 +78,207 @@ static private void openfile(Activity act,int requestid) {
     }
 
 static final private int MAXKEY=80;
+
+static boolean validHttpServerPort(int port) {
+	return port>=1024&&port<=65535&&port!=17580;
+	}
+
+private static void setFormError(TextView error,CharSequence message) {
+	error.setText(message);
+	error.setVisibility(message==null||message.length()==0?View.GONE:View.VISIBLE);
+	}
+
 public static void show(MainActivity context,View parent) {
+	EnableControls(parent,false);
+	String initialSecret=Natives.getApiSecret();
+	String[] savedSecret={initialSecret};
+	EditText secret=new EditText(context);
+	secret.setImeOptions(editoptions);
+	secret.setInputType(InputType.TYPE_TEXT_VARIATION_PASSWORD);
+	secret.setTransformationMethod(new PasswordTransformationMethod());
+	secret.setText(initialSecret);
+	ConnectionUi.styleInput(secret);
+	EditText sslPort=getnumedit(context,String.valueOf(Natives.getsslport()));
+	EditText interval=getnumedit(context,String.valueOf(Natives.getinterval()));
+	ConnectionUi.styleInput(sslPort);
+	ConnectionUi.styleInput(interval);
+
+	CheckDirectionBox showSecret=getcheckbox(context,R.string.connection_show_secret,false);
+	showSecret.setOnCheckedChangeListener((button,checked)-> {
+		int selection=secret.getSelectionStart();
+		secret.setInputType(checked?InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD:
+				InputType.TYPE_TEXT_VARIATION_PASSWORD);
+		secret.setTransformationMethod(checked?null:new PasswordTransformationMethod());
+		secret.setSelection(Math.max(0,Math.min(selection,secret.length())));
+		});
+	CheckDirectionBox active=getcheckbox(context,R.string.active,Natives.getusexdripwebserver());
+	active.setOnCheckedChangeListener((button,checked)->Natives.setusexdripwebserver(checked));
+	CheckDirectionBox ssl=getcheckbox(context,R.string.usessl,Natives.getuseSSL());
+	boolean[] sslChange={true};
+	ssl.setOnCheckedChangeListener((button,checked)-> {
+		if(!sslChange[0])
+			return;
+		String result=Natives.setuseSSL(checked);
+		if(result!=null) {
+			sslChange[0]=false;
+			ssl.setChecked(!checked);
+			sslChange[0]=true;
+			Applic.argToaster(context,result,Toast.LENGTH_LONG);
+			}
+		else if(checked)
+			active.setChecked(true);
+		});
+	CheckDirectionBox local=getcheckbox(context,R.string.localonly,Natives.getXdripServerLocal());
+	local.setOnCheckedChangeListener((button,checked)->Natives.setXdripServerLocal(checked));
+	CheckDirectionBox treatments=getcheckbox(context,R.string.treatments,Natives.getsaytreatments());
+
+	Button cancel=ConnectionUi.headerButton(context,R.string.cancel);
+	LinearLayout certificate=ClinicalUi.actionRow(context,
+			context.getString(R.string.fullchain),context.getString(R.string.connection_certificate_hint));
+	LinearLayout privateKey=ClinicalUi.actionRow(context,
+			context.getString(R.string.privatekey),context.getString(R.string.connection_private_key_hint));
+	LinearLayout serverHelp=ClinicalUi.actionRow(context,
+			context.getString(R.string.helpname),context.getString(R.string.connection_web_help_hint));
+	Button save=ClinicalUi.button(context,context.getString(R.string.save),
+			ClinicalUi.ButtonRole.PRIMARY);
+
+	LinearLayout content=ConnectionUi.content(context);
+	content.addView(ClinicalUi.header(context,
+			context.getString(R.string.connection_web_server_title),cancel));
+	content.addView(ConnectionUi.intro(context,R.string.connection_web_server_intro));
+	content.addView(ClinicalUi.sectionLabel(context,
+			context.getString(R.string.connection_server_section)));
+	content.addView(ClinicalUi.card(context,
+			ConnectionUi.directToggle(context,active),
+			ConnectionUi.directToggle(context,local),
+			ConnectionUi.directToggle(context,treatments)));
+	content.addView(ClinicalUi.sectionLabel(context,
+			context.getString(R.string.connection_network_section)));
+	content.addView(ClinicalUi.card(context,
+			ClinicalUi.fieldRow(context,context.getString(R.string.connection_ssl_port),sslPort),
+			ClinicalUi.fieldRow(context,context.getString(R.string.connection_update_interval),interval)));
+	TextView httpNote=ConnectionUi.status(context,
+			context.getString(R.string.connection_http_port_note),false);
+	LinearLayout.LayoutParams noteParams=new LinearLayout.LayoutParams(
+			ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+	noteParams.topMargin=ClinicalUi.dp(context,10);
+	httpNote.setLayoutParams(noteParams);
+	content.addView(httpNote);
+	content.addView(ClinicalUi.sectionLabel(context,
+			context.getString(R.string.connection_security_section)));
+	content.addView(ClinicalUi.card(context,
+			ClinicalUi.fieldRow(context,context.getString(R.string.secret),secret),
+			ConnectionUi.directToggle(context,showSecret),
+			ConnectionUi.directToggle(context,ssl),certificate,privateKey));
+	String nativeError=Natives.nightError();
+	TextView formError=ConnectionUi.status(context,nativeError,true);
+	LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(
+			ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+	errorParams.topMargin=ClinicalUi.dp(context,14);
+	formError.setLayoutParams(errorParams);
+	content.addView(formError);
+	content.addView(ClinicalUi.sectionLabel(context,
+			context.getString(R.string.connection_support_section)));
+	content.addView(ClinicalUi.card(context,serverHelp));
+	LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(
+			ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+	saveParams.topMargin=ClinicalUi.dp(context,20);
+	save.setLayoutParams(saveParams);
+	content.addView(save);
+	ScrollView screen=ConnectionUi.screen(context,content);
+	ConnectionUi.fullScreen(context,screen);
+
+	certificate.setOnClickListener(view->openfile(context,CHAIN_REQUEST));
+	privateKey.setOnClickListener(view->openfile(context,PRIVATE_REQUEST));
+	serverHelp.setOnClickListener(view->help.help(R.string.Nightscouthelp,context));
+	int[] noTreatmentChange={0};
+	treatments.setOnCheckedChangeListener((button,checked)-> {
+		switch(noTreatmentChange[0]) {
+			case 0:
+				noTreatmentChange[0]++;
+				treatments.setChecked(!checked);
+				LibreNumbers.mklayout(context,1,treatments,noTreatmentChange,screen);
+				break;
+			case 2:
+				Natives.setsaytreatments(checked);
+				break;
+			default:
+				break;
+			}
+		});
+
+	Runnable closeNow=()-> {
+		poponback();
+		EnableControls(parent,true);
+		hidekeyboard(context);
+		removeContentView(screen);
+		};
+	Runnable[] closeRequest={null};
+	closeRequest[0]=()-> {
+		setonback(closeRequest[0]);
+		boolean unchanged=secret.getText().toString().equals(savedSecret[0])
+				&&sslPort.getText().toString().equals(String.valueOf(Natives.getsslport()))
+				&&interval.getText().toString().equals(String.valueOf(Natives.getinterval()));
+		if(unchanged)
+			closeNow.run();
+		else
+			ConnectionUi.confirmSheet(context,screen,
+					context.getString(R.string.connection_discard_title),
+					context.getString(R.string.connection_discard_message),
+					context.getString(R.string.connection_discard_action),
+					ClinicalUi.ButtonRole.DANGER,closeNow);
+		};
+	setonback(closeRequest[0]);
+	cancel.setOnClickListener(view->doonback());
+	save.setOnClickListener(view-> {
+		String newSecret=secret.getText().toString();
+		if(newSecret.length()>=MAXKEY) {
+			setFormError(formError,context.getString(R.string.connection_secret_too_long,MAXKEY-1));
+			return;
+			}
+		int port;
+		int seconds;
+		try {
+			port=Integer.parseInt(sslPort.getText().toString().trim());
+			}
+		catch(Throwable error) {
+			setFormError(formError,context.getString(R.string.connection_invalid_port));
+			return;
+			}
+		if(sslPort.getText().toString().trim().equals(getreceiveport())) {
+			setFormError(formError,context.getString(R.string.nomirrorport));
+			return;
+			}
+		if(!validHttpServerPort(port)) {
+			setFormError(formError,port==17580?context.getString(R.string.nohttpport):
+					context.getString(R.string.portrange));
+			return;
+			}
+		try {
+			seconds=Integer.parseInt(interval.getText().toString().trim());
+			}
+		catch(Throwable error) {
+			setFormError(formError,context.getString(R.string.connection_invalid_interval));
+			return;
+			}
+		if(!newSecret.equals(savedSecret[0])) {
+			savedSecret[0]=newSecret;
+			Natives.setApiSecret(newSecret);
+			}
+		if(port!=Natives.getsslport()) {
+			Natives.setsslport(port);
+			if(Natives.getuseSSL())
+				Natives.setuseSSL(true);
+			}
+		Natives.setinterval(seconds);
+		setFormError(formError,Natives.nightError());
+		hidekeyboard(context);
+		Applic.argToaster(context,R.string.saved,Toast.LENGTH_SHORT);
+		});
+	}
+
+@SuppressWarnings("unused")
+private static void legacyShow(MainActivity context,View parent) {
    	EnableControls(parent,false);
 
 	var save=getbutton(context,R.string.save);

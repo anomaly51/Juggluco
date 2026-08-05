@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="meal_modern_title">Meal</string>
+    <string name="meal_modern_intro">Build the meal from ingredients. The carbohydrate total updates as you edit.</string>
+    <string name="meal_modern_total_section">Meal total</string>
+    <string name="meal_modern_total_value">%1$.1f g carbohydrate</string>
+    <string name="meal_modern_items_section">Ingredients</string>
+    <string name="meal_modern_empty">No ingredients yet. Add the first ingredient below.</string>
+    <string name="meal_modern_add_item">Add ingredient</string>
+    <string name="meal_modern_repeat">Repeat this meal</string>
+    <string name="meal_modern_rounding_value">Rounding: %1$.1f</string>
+    <string name="meal_modern_rounding_title">Meal rounding</string>
+    <string name="meal_modern_rounding_intro">Choose the increment used when the meal carbohydrate total is copied to the record.</string>
+    <string name="meal_modern_rounding_section">Rounding increment</string>
+    <string name="meal_modern_rounding_hint">Enter 0 to disable rounding</string>
+    <string name="meal_modern_error_rounding">Enter a valid number of 0 or greater.</string>
+
+    <string name="meal_modern_new_item_title">Add ingredient</string>
+    <string name="meal_modern_edit_item_title">Edit ingredient</string>
+    <string name="meal_modern_item_intro">Choose an ingredient and enter its quantity. You can also adjust the calculated totals.</string>
+    <string name="meal_modern_ingredient_section">Ingredient</string>
+    <string name="meal_modern_choose_ingredient">Choose ingredient</string>
+    <string name="meal_modern_no_ingredient">No ingredient selected</string>
+    <string name="meal_modern_carb_value">%1$.1f carbohydrate per %2$s</string>
+    <string name="meal_modern_quantity_section">Quantity</string>
+    <string name="meal_modern_computed_section">Calculated carbohydrate</string>
+    <string name="meal_modern_item_total">This ingredient</string>
+    <string name="meal_modern_meal_total">Whole meal</string>
+    <string name="meal_modern_error_ingredient">Choose an ingredient before saving.</string>
+    <string name="meal_modern_error_quantity">Enter a quantity greater than zero.</string>
+
+    <string name="meal_modern_ingredients_title">Ingredients</string>
+    <string name="meal_modern_ingredients_intro">Tap an ingredient to use it, or enable edit mode to change its definition.</string>
+    <string name="meal_modern_search_section">Search</string>
+    <string name="meal_modern_search_hint">Ingredient name or pattern</string>
+    <string name="meal_modern_available_section">Available ingredients</string>
+    <string name="meal_modern_define_ingredient">Define new ingredient</string>
+    <string name="meal_modern_edit_mode">Edit ingredients</string>
+    <string name="meal_modern_done_editing">Finish editing</string>
+    <string name="meal_modern_search_title">Search ingredients</string>
+    <string name="meal_modern_search_intro">Filter the ingredient list by name. An empty search restores the full list.</string>
+    <string name="meal_modern_search_error">The search pattern is not valid. Check it and try again.</string>
+
+    <string name="meal_modern_new_ingredient_title">New ingredient</string>
+    <string name="meal_modern_edit_ingredient_title">Edit ingredient</string>
+    <string name="meal_modern_ingredient_intro">Name the ingredient, choose its unit and enter carbohydrate per unit.</string>
+    <string name="meal_modern_details_section">Ingredient details</string>
+    <string name="meal_modern_name_hint">Ingredient name</string>
+    <string name="meal_modern_unit_hint">Serving unit</string>
+    <string name="meal_modern_carb_hint">Carbohydrate per unit</string>
+    <string name="meal_modern_reference_section">Reference data</string>
+    <string name="meal_modern_database_hint">Look up nutrition values per 100 g</string>
+    <string name="meal_modern_error_name">Enter an ingredient name.</string>
+    <string name="meal_modern_error_unit">Enter or choose a serving unit.</string>
+    <string name="meal_modern_error_carb">Enter a valid carbohydrate value of 0 or greater.</string>
+
+    <string name="meal_modern_food_database_title">Food database</string>
+    <string name="meal_modern_food_database_intro">Search the nutrition database, inspect a food and use its carbohydrate value.</string>
+    <string name="meal_modern_food_search_hint">Search foods</string>
+    <string name="meal_modern_food_results_section">Results</string>
+    <string name="meal_modern_nutrients_title">Nutrition details</string>
+    <string name="meal_modern_nutrients_intro">Values in the database are shown per 100 grams.</string>
+    <string name="meal_modern_per_100g">Per 100 g</string>
+    <string name="meal_modern_options_section">Display options</string>
+    <string name="meal_modern_show_zero_hint">Include nutrients with a zero value</string>
+    <string name="meal_modern_use_food">Use this food</string>
+</resources>

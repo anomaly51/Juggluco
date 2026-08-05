@@ -36,10 +36,11 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.Button;
+import android.widget.CompoundButton;
 
 import android.widget.FrameLayout;
-import android.widget.GridLayout;
 import android.widget.HorizontalScrollView;
+import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 
@@ -152,6 +153,8 @@ static void showsensormessage(String text,MainActivity act) {
     layout.setBackgroundColor(Applic.backgroundcolor);
     MainActivity.setonback(() -> {
        removeContentView(layout);
+	   if(Menus.on)
+		   Menus.show(act);
        });
     close.setOnClickListener(v-> {
         MainActivity.doonback();
@@ -297,9 +300,9 @@ TextView[] glucosetimes; TextView glucoseinfo;
 TextView bluestate;
 private BluetoothAdapter mBluetoothAdapter=null;
 //boolean setwakelock=false;
-CheckDirectionBox usebluetooth;
+CompoundButton usebluetooth;
 boolean wasuse;
-CheckDirectionBox priority,streamhistory, alarmclock,disconnectsensor;
+CompoundButton priority,streamhistory, alarmclock,disconnectsensor;
 Button resetbutton;
 Button divorcebutton;
 Button clear;
@@ -350,9 +353,38 @@ static void nosensors(MainActivity act) {
             return;
         }
     }
- var bluestate= getlabel(act, mBluetoothAdapter==null?act.getString(R.string.nobluetooth):(mBluetoothAdapter.isEnabled()?act.getString(R.string.bluetoothenabled): act.getString(R.string.bluetoothdisabled)));
- final boolean wasused= Natives.getusebluetooth();
- var usebluetooth=getcheckbox(act, R.string.use_bluetooth,wasused);
+    ViewGroup layout=(ViewGroup)LayoutInflater.from(act)
+            .inflate(R.layout.modern_sensor_empty,null,false);
+	View emptyCard=layout.findViewById(R.id.modern_sensor_empty_card);
+	var emptyMetrics=act.getResources().getDisplayMetrics();
+	int emptyMaxWidth=Math.round(400.0f*emptyMetrics.density);
+	Runnable sizeEmptyCard=() -> {
+		int rootWidth=layout.getWidth();
+		int availableWidth=rootWidth>0
+				?rootWidth-layout.getPaddingLeft()-layout.getPaddingRight()
+				:emptyMetrics.widthPixels-MainActivity.systembarLeft-MainActivity.systembarRight;
+		int cardWidth=Math.min(emptyMaxWidth,Math.max(1,availableWidth));
+		ViewGroup.LayoutParams params=emptyCard.getLayoutParams();
+		if(params.width!=cardWidth) {
+			params.width=cardWidth;
+			emptyCard.setLayoutParams(params);
+			}
+		};
+	sizeEmptyCard.run();
+	layout.addOnLayoutChangeListener((changed,left,top,right,bottom,oldLeft,oldTop,oldRight,oldBottom) -> {
+		if(right-left!=oldRight-oldLeft)
+			sizeEmptyCard.run();
+		});
+    TextView bluestate=layout.findViewById(R.id.modern_sensor_bluetooth_state);
+    bluestate.setText(mBluetoothAdapter==null
+            ? R.string.nobluetooth
+            : (mBluetoothAdapter.isEnabled()
+                    ? R.string.bluetoothenabled
+                    : R.string.bluetoothdisabled));
+    final boolean wasused=Natives.getusebluetooth();
+    CompoundButton usebluetooth=layout.findViewById(
+            R.id.modern_sensor_use_bluetooth);
+    usebluetooth.setChecked(wasused);
     usebluetooth.setOnCheckedChangeListener(
          (buttonView,  isChecked) -> {
              {if(doLog) {Log.i(LOG_ID,"usebluetooth "+isChecked);};};
@@ -363,44 +395,34 @@ static void nosensors(MainActivity act) {
                  bluediag.start(act);
              }
          });
-    var close=getbutton(act,R.string.closename);
-   var height=GlucoseCurve.getheight();
-   var width=GlucoseCurve.getwidth();
-   if(!useclose)
-      close.setVisibility(GONE);
+    Button close=layout.findViewById(R.id.modern_sensor_close);
+    if(!useclose)
+        close.setVisibility(GONE);
 
-    var help=getbutton(act,R.string.helpname);
-
-    var streamhistory=getcheckbox(act,R.string.streamhistory,Natives.getStreamHistory());
+    Button help=layout.findViewById(R.id.modern_sensor_help);
+    CompoundButton streamhistory=layout.findViewById(
+            R.id.modern_sensor_stream_history);
+    View streamhistoryDivider=layout.findViewById(
+            R.id.modern_sensor_stream_divider);
+    streamhistory.setChecked(Natives.getStreamHistory());
     streamhistory.setOnCheckedChangeListener( (buttonView,  isChecked) -> Natives.setStreamHistory(isChecked) );
-    if(!Natives.optionStreamHistory(0L)||!wasused)
+    if(!Natives.optionStreamHistory(0L)||!wasused) {
         streamhistory.setVisibility(GONE);
-help.setOnClickListener(v-> helplight(R.string.sensorhelp,act));
-  Layout layout = new Layout(act, (l, w, h) -> {
-  /*
-      l.setX((width-w)/2);
-      l.setY((height-h)/2);
-      */
-        int[] ret={w,h};
-        return ret;
-        },new View[]{bluestate},new View[]{usebluetooth},new View[]{streamhistory},new View[]{help,close});
+        streamhistoryDivider.setVisibility(GONE);
+        }
+    help.setOnClickListener(v-> helplight(R.string.sensorhelp,act));
     act.setonback(() -> {
             removeContentView(layout);
+            if(Menus.on) {
+                Menus.show(act);
+                }
             });
 
         close.setOnClickListener(v -> {
          act.doonback();
          });
-   layout.setBackgroundResource(R.drawable.dialogbackground);
-   int pads=(int)(GlucoseCurve.metrics.density*(isWearable?2:10));
-   {if(doLog) {Log.i(LOG_ID,"density="+GlucoseCurve.metrics.density);};};
-
-    if(!isWearable) bluestate.setPaddingRelative(pads,0,0,0);
-   layout.setPadding(pads,pads,pads,pads);
-
-    var  params = new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER|Gravity.CENTER_HORIZONTAL);
-//    params.topMargin=MainActivity.systembarTop;
-    act.addMyContentView(layout, params);
+    act.addMyContentView(layout,
+            new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT),false);
 
    }
    /*
@@ -471,22 +493,45 @@ bluediag(MainActivity act,final ArrayList<SuperGattCallback> gatts) {
 
     LayoutInflater flater= LayoutInflater.from(act);
     View view = flater.inflate(R.layout.bluesensor, null, false);
+	if(!isWearable) {
+		View sensorContent=view.findViewById(R.id.grid);
+		var sensorMetrics=act.getResources().getDisplayMetrics();
+		int contentGutter=Math.round(24.0f*sensorMetrics.density);
+		int maxContentWidth=Math.round(680.0f*sensorMetrics.density);
+		Runnable limitContentWidth=() -> {
+			int rootWidth=view.getWidth();
+			int availableWidth=rootWidth>0
+					?rootWidth
+					:sensorMetrics.widthPixels-MainActivity.systembarLeft-MainActivity.systembarRight;
+			int contentWidth=Math.min(maxContentWidth,Math.max(1,availableWidth-contentGutter));
+			ViewGroup.LayoutParams contentParams=sensorContent.getLayoutParams();
+			if(contentParams.width!=contentWidth) {
+				contentParams.width=contentWidth;
+				sensorContent.setLayoutParams(contentParams);
+				}
+			};
+		limitContentWidth.run();
+		view.addOnLayoutChangeListener((changed,left,top,right,bottom,oldLeft,oldTop,oldRight,oldBottom) -> {
+			if(right-left!=oldRight-oldLeft)
+				limitContentWidth.run();
+			});
+		}
 
     forget=view.findViewById(R.id.forget);
     scanview=view.findViewById(R.id.scan);
     starttimeV=view.findViewById(R.id.stage);
     rssiview=view.findViewById(R.id.rssi);
-    rssiview.setPadding(0,0,0,0);
-      CheckDirectionBox android13=view.findViewById(R.id.android13);
+    if(isWearable)
+        rssiview.setPadding(0,0,0,0);
+      CompoundButton android13=view.findViewById(R.id.android13);
       if(android13!=null) {
          android13.setChecked( SuperGattCallback.autoconnect);
          android13.setOnCheckedChangeListener( (buttonView,  isChecked) -> { SensorBluetooth.setAutoconnect(isChecked); });
          }
     info=view.findViewById(R.id.info);
-    {if(doLog) {Log.i(LOG_ID,"info.setVisibility(INVISIBLE);");};};
-    info.setVisibility(INVISIBLE);
-    int width2=GlucoseCurve.getwidth();
-    HorizontalScrollView addscroll2=null;
+    {if(doLog) {Log.i(LOG_ID,"info.setVisibility(GONE);");};};
+    info.setVisibility(GONE);
+    View addscroll2=null;
     if(isWearable) {
         HorizontalScrollView scroll= view.findViewById(R.id.hori);
         scroll.setSmoothScrollingEnabled(false);
@@ -498,19 +543,10 @@ bluediag(MainActivity act,final ArrayList<SuperGattCallback> gatts) {
         {if(doLog) {Log.i(LOG_ID,"height="+height);};};
         }
     else {
-        HorizontalScrollView addscroll= view.findViewById(R.id.hori);
-        /*
-       GridLayout grid=view.findViewById(R.id.grid);
-        final var addscroll= new HorizontalScrollView(act);
-//        var  horparams = new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER|Gravity.CENTER_HORIZONTAL);
- //       addscroll.addView(grid,horparams);
-        addscroll.addView(grid);
-*/
+        ScrollView addscroll= view.findViewById(R.id.hori);
         addscroll.setSmoothScrollingEnabled(false);
-       addscroll.setVerticalScrollBarEnabled(false);
-        addscroll.setHorizontalScrollBarEnabled(Applic.horiScrollbar);
- //       int heightU=GlucoseCurve.getheight();
-//        addscroll.setMinimumHeight(heightU);
+        addscroll.setVerticalScrollBarEnabled(true);
+        addscroll.setHorizontalScrollBarEnabled(false);
         addscroll2=addscroll;
 
          }
@@ -560,7 +596,8 @@ else {
     streaming=view.findViewById(R.id.streaming);
     address=view.findViewById(R.id.deviceaddress);
     final int addressrand=(int)tk.glucodata.GlucoseCurve.metrics.density*5;
-    address.setPaddingRelative(0,0,addressrand,0);
+    if(isWearable)
+        address.setPaddingRelative(0,0,addressrand,0);
     keytimes=new TextView[]{view.findViewById(R.id.keysuccess) , view.findViewById(R.id.keyfailure)}; keyinfo=view.findViewById(R.id.keyinfo);
     keyinfo.setTextIsSelectable(true);
     glucosetimes=new TextView[]{view.findViewById(R.id.glucosesuccess) , view.findViewById(R.id.glucosefailure)}; glucoseinfo=view.findViewById(R.id.glucoseinfo);
@@ -697,6 +734,8 @@ else {
         public  void onItemSelected (AdapterView<?> parent, View view, int position, long id) {
             {if(doLog) {Log.i(LOG_ID,"onItemSelected");};};
             try {
+                if(!isWearable && view instanceof TextView)
+                    ((TextView)view).setTextColor(0xFFDCEAEC);
                 if (first[0]) {
                     first[0] = false;
                     spin.setSelection(gattselected);
@@ -743,13 +782,15 @@ else {
    if(!useclose)
       close.setVisibility(GONE);
 
-      view.setBackgroundColor( Applic.backgroundcolor);
+      if(isWearable)
+          view.setBackgroundColor(Applic.backgroundcolor);
     show(act,showview);
    // act.addMyContentView(showview, new ViewGroup.LayoutParams( WRAP_CONTENT, WRAP_CONTENT));
 
 
 //    var  params = new FrameLayout.LayoutParams( MATCH_PARENT, MATCH_PARENT, Gravity.CENTER|Gravity.CENTER_HORIZONTAL);
-    var  params = new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER|Gravity.CENTER_HORIZONTAL);
+    var  params = new FrameLayout.LayoutParams(isWearable?WRAP_CONTENT:MATCH_PARENT,
+            isWearable?WRAP_CONTENT:MATCH_PARENT, Gravity.CENTER|Gravity.CENTER_HORIZONTAL);
    params.topMargin=(int)(MainActivity.systembarTop*.3f);
    params.bottomMargin=(int)(MainActivity.systembarBottom*.3f);
    params.leftMargin=(int)(MainActivity.systembarLeft*.3f);
@@ -860,7 +901,13 @@ private void showall() {
             }
         });
         }
-    bluestate.setText( mBluetoothAdapter==null?activity.getString(R.string.nobluetooth):(mBluetoothAdapter.isEnabled()?activity.getString(R.string.bluetoothenabled): activity.getString(R.string.bluetoothdisabled)));
+    final boolean bluetoothEnabled=mBluetoothAdapter!=null&&mBluetoothAdapter.isEnabled();
+    bluestate.setText(mBluetoothAdapter==null?activity.getString(R.string.nobluetooth):(bluetoothEnabled?activity.getString(R.string.bluetoothenabled): activity.getString(R.string.bluetoothdisabled)));
+    if(!isWearable) {
+        if(bluestate.getBackground()!=null)
+            bluestate.getBackground().mutate().setTint(bluetoothEnabled?0xFF12312F:0xFF342816);
+        bluestate.setTextColor(bluetoothEnabled?0xFFB9FFF4:0xFFFFE6A7);
+        }
         usebluetooth.setChecked(wasuse = Natives.getusebluetooth());
         priority.setChecked(Natives.getpriority());
     streamhistory.setChecked(Natives.getStreamHistory( ));

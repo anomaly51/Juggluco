@@ -3,7 +3,7 @@
     android:id="@+id/unpairOverlay"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#80000000"
+    android:background="#C70B0D0E"
     android:clickable="true"
     android:focusable="true"
     android:visibility="gone">
@@ -14,7 +14,8 @@
         android:layout_gravity="center"
         android:orientation="vertical"
         android:gravity="center_horizontal"
-        android:padding="24dp"
+        android:padding="28dp"
+        android:elevation="16dp"
         android:background="@drawable/bg_unpair_progress_panel">
 
         <ProgressBar
@@ -22,7 +23,8 @@
             style="?android:attr/progressBarStyleLarge"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:indeterminate="true" />
+            android:indeterminate="true"
+            android:indeterminateTint="#5ACB85" />
 
         <TextView
             android:id="@+id/unpairTitle"
@@ -30,8 +32,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:text="@string/releasingsensor" 
-            android:textColor="@android:color/black"
-            android:textSize="18sp"
+            android:textColor="#F2F4F3"
+            android:textSize="20sp"
             android:textStyle="bold" />
 
         <TextView
@@ -41,14 +43,18 @@
             android:layout_marginTop="12dp"
             android:gravity="center"
             android:text="@string/connecttosensor" 
-            android:textColor="#444444"
-            android:textSize="15sp" />
+            android:textColor="#AAB2AE"
+            android:textSize="15sp"
+            android:lineSpacingMultiplier="1.15" />
 
         <Button
             android:id="@+id/unpairCloseButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
+            android:minHeight="48dp"
+            android:textAllCaps="false"
+            android:textColor="#F2F4F3"
             android:text="@string/closename" 
             android:visibility="gone" />
     </LinearLayout>

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="add_record_category">Категория</string>
+    <string name="add_record_amount">Количество</string>
+    <string name="add_record_details">Детали</string>
+    <string name="add_record_keypad">Клавиатура количества</string>
+    <string name="add_record_backspace">Удалить последнюю цифру</string>
+    <string name="add_record_decimal">Десятичная точка</string>
+    <string name="record_editor_new_title">Новая запись</string>
+    <string name="record_editor_edit_title">Изменить запись</string>
+    <string name="record_editor_new_subtitle">Запишите событие. Детали можно изменить позже.</string>
+    <string name="record_editor_edit_subtitle">Проверьте детали и сохраните изменения.</string>
+    <string name="record_editor_what">Что произошло</string>
+    <string name="record_editor_when">Когда</string>
+    <string name="record_editor_keypad">Клавиатура количества</string>
+    <string name="record_editor_source_local">Сохранено на этом устройстве</string>
+    <string name="record_editor_source_synced">Получено с другого устройства</string>
+    <string name="record_editor_delete">Удалить запись</string>
+    <string name="record_editor_delete_title">Удалить эту запись?</string>
+    <string name="record_editor_keep_editing">Продолжить</string>
+    <string name="record_editor_delete_confirm">Удалить навсегда</string>
+    <string name="records_subtitle">Еда, инсулин, активность и заметки</string>
+    <string name="records_add">Новая</string>
+    <string name="records_add_description">Добавить новую запись</string>
+    <string name="records_search_description">Искать записи</string>
+    <string name="records_first">Начало</string>
+    <string name="records_first_description">Перейти к самым ранним записям</string>
+    <string name="records_previous">Назад</string>
+    <string name="records_previous_description">Показать предыдущую страницу</string>
+    <string name="records_next">Далее</string>
+    <string name="records_next_description">Показать следующую страницу</string>
+    <string name="records_latest">Новые</string>
+    <string name="records_latest_description">Перейти к последним записям</string>
+</resources>

@@ -36,17 +36,15 @@ import static tk.glucodata.settings.Settings.removeContentView;
 import static tk.glucodata.util.getbutton;
 import static tk.glucodata.util.getcheckbox;
 
-import android.content.DialogInterface;
 import android.os.Build;
 import android.text.method.ScrollingMovementMethod;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
-
-import androidx.appcompat.app.AlertDialog;
 
 import java.util.ArrayList;
 
@@ -59,23 +57,17 @@ public static native String sensortextfromSensorptr(long sensorptr);
 public static native void finishfromSensorptr(long sensorptr);
 */
 
-private static void confirmFinish(MainActivity act,long ptr) {
+private static void confirmFinish(MainActivity act,View parent,long ptr) {
    var serial=Natives.namefromSensorptr(ptr);
-    AlertDialog.Builder builder = new AlertDialog.Builder(act);
-    builder.setTitle(serial).setMessage(R.string.finishsensormessage).
-      setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
-         public void onClick(DialogInterface dialog, int id) {
-               Log.i(LOG_ID,"confirmFinish");
-                Natives.finishfromSensorptr(ptr);
-                act.requestRender();
-                MainActivity.doonback();
-                bluediag.start(act);
-                }
-                }).
-        setNegativeButton(R.string.cancel, new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int id) {
-            }
-        }).show().setCanceledOnTouchOutside(false);
+   ConnectionUi.confirmSheet(act,parent,serial,
+         act.getString(R.string.connection_sensor_finish_message),
+         act.getString(R.string.finish),ClinicalUi.ButtonRole.DANGER,()-> {
+            Log.i(LOG_ID,"confirmFinish");
+            Natives.finishfromSensorptr(ptr);
+            act.requestRender();
+            MainActivity.doonback();
+            bluediag.start(act);
+            });
     }
 private static boolean isVisible=false;
 static void show(MainActivity act) {
@@ -88,15 +80,21 @@ static void show(MainActivity act) {
         }
     isVisible=true;
     var sensors=new Sensors(act,false,false);
-    var help=getbutton(act,R.string.helpname);
-    help.setOnClickListener(v-> helplight(R.string.sensormirror,act));
-    var finish=getbutton(act,R.string.finish);
+    Button close=ConnectionUi.headerButton(act,R.string.closename);
+    LinearLayout sensorHelp=ClinicalUi.actionRow(act,act.getString(R.string.helpname),
+          act.getString(R.string.connection_sensor_mirror_help_hint));
+    sensorHelp.setOnClickListener(v-> helplight(R.string.sensormirror,act));
+    Button finish=ClinicalUi.button(act,act.getString(R.string.finish),
+          ClinicalUi.ButtonRole.DANGER);
     var list=new ArrayList<Long>(ptrs.length);
     for(var p : ptrs) {
         list.add(p);
         }
     var spin=new Spinner(act);
     avoidSpinnerDropdownFocus(spin);    
+    spin.setMinimumHeight(ClinicalUi.dp(act,52));
+    spin.setPaddingRelative(ClinicalUi.dp(act,12),0,ClinicalUi.dp(act,12),0);
+    spin.setBackground(ClinicalUi.surface(act,false,true));
     var adap = new RangeAdapter<>(list, act, ptr -> {
         if(ptr != 0L) {
             var name=Natives.namefromSensorptr(ptr);
@@ -108,13 +106,6 @@ static void show(MainActivity act) {
     spin.setAdapter(adap);
     int[] waspos={0};
     sensors.setSensorptrText(ptrs[0]);
-    finish.setOnClickListener(v -> {
-        var pos=waspos[0];
-        if(pos>=0&&pos<ptrs.length) {
-            var ptr=ptrs[pos];
-            confirmFinish(act,ptr);
-            }
-        });
      final boolean wasused= Natives.getusebluetooth();
      var usebluetooth=getcheckbox(act, R.string.use_bluetooth,wasused);
     usebluetooth.setOnCheckedChangeListener(
@@ -145,35 +136,37 @@ static void show(MainActivity act) {
         public  void onNothingSelected (AdapterView<?> parent) {
 
         } });
-    int pads=(int)(GlucoseCurve.metrics.density*20);
-     getMargins(usebluetooth).topMargin=(int)(GlucoseCurve.metrics.density*15);
-     var spinmar= getMargins(spin);
-     spinmar.topMargin=pads;
-     spinmar.bottomMargin=pads;
-
-    var buttons=new Layout(act, (x,w,h)->{ 
-         return new int[] {w,h};
-           } 
-                   , new View[]{finish},new View[]{help},new View[]{usebluetooth},new View[]{spin}
-          );
-     buttons.usebaseline=false;
-    var width=GlucoseCurve.getwidth(); 
-    var height=GlucoseCurve.getheight(); 
-    getMargins(finish).topMargin=(int)(MainActivity.systembarTop);
-    var layout=new Layout(act, (x,w,h)->{ 
-        x.setX((width-w+MainActivity.systembarLeft-MainActivity.systembarRight)*.5f);
-         return new int[] {w,h};
-           },
-          new View[]{sensors.viewgroup,buttons});
-     layout.usebaseline=false;
-    layout.setBackgroundResource(R.drawable.dialogbackground);
-    //layout.setPadding((int)(GlucoseCurve.metrics.density*10),0,(int)(GlucoseCurve.metrics.density*5),0);
-    layout.setPadding(0,0,(int)(GlucoseCurve.metrics.density*5),0);
-    act.addMyContentView(layout, new ViewGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
+    LinearLayout layout=ConnectionUi.content(act);
+    layout.setLayoutParams(new ViewGroup.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT));
+    layout.addView(ClinicalUi.header(act,
+          act.getString(R.string.connection_sensor_mirror_title),close));
+    layout.addView(ConnectionUi.intro(act,R.string.connection_sensor_mirror_intro));
+    layout.addView(ClinicalUi.sectionLabel(act,
+          act.getString(R.string.connection_sensor_section)));
+    layout.addView(ClinicalUi.card(act,
+          ClinicalUi.fieldRow(act,act.getString(R.string.connection_active_sensor),spin),
+          ConnectionUi.directToggle(act,usebluetooth)));
+    layout.addView(sensors.viewgroup,new LinearLayout.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,0,1.0f));
+    layout.addView(ClinicalUi.card(act,sensorHelp));
+    LinearLayout.LayoutParams finishParams=new LinearLayout.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+    finishParams.topMargin=ClinicalUi.dp(act,14);
+    finish.setLayoutParams(finishParams);
+    layout.addView(finish);
+    finish.setOnClickListener(view-> {
+        int position=waspos[0];
+        if(position>=0&&position<ptrs.length)
+            confirmFinish(act,layout,ptrs[position]);
+        });
+    act.addMyContentView(layout,new ViewGroup.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT));
     MainActivity.setonback(() -> {
             isVisible=false;
             removeContentView(layout);
             });
+    close.setOnClickListener(view->MainActivity.doonback());
 
     }
 

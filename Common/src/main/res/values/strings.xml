@@ -506,4 +506,63 @@
     <string name="notification">Notification</string>
     <string name="alarmis">Alarm is</string>
     <string name="deletemeter">Remove meter information. Measurements will remain.</string>
+
+    <!-- Phone dashboard presentation shell. -->
+    <string name="dashboard_subtitle">Today</string>
+    <string name="dashboard_overview">Overview</string>
+    <string name="dashboard_records">Records</string>
+    <string name="dashboard_add">Add</string>
+    <string name="dashboard_insights">Insights</string>
+    <string name="dashboard_more">More</string>
+    <string name="dashboard_current_glucose">Current glucose</string>
+    <string name="dashboard_status_live">Live</string>
+    <string name="dashboard_status_outdated">Outdated</string>
+    <string name="dashboard_status_loading">Syncing</string>
+    <string name="dashboard_status_waiting">No data</string>
+    <string name="dashboard_status_demo">Demo</string>
+    <string name="dashboard_loading_description">Loading current glucose</string>
+    <string name="dashboard_no_current_reading">No current reading</string>
+    <string name="dashboard_preview_reading">Example data — not a real glucose reading</string>
+    <string name="dashboard_preview_description">Demo glucose preview: %1$s %2$s. This is not a real reading.</string>
+    <string name="dashboard_empty_value">—</string>
+    <string name="dashboard_sensor_status">Sensor</string>
+    <string name="dashboard_glucose_history">History</string>
+    <string name="dashboard_graph_hint">Drag or pinch</string>
+    <string name="dashboard_3_hours">3h</string>
+    <string name="dashboard_6_hours">6h</string>
+    <string name="dashboard_8_hours">8h</string>
+    <string name="dashboard_12_hours">12h</string>
+    <string name="dashboard_24_hours">24h</string>
+    <string name="dashboard_show_3_hours">Show 3 hours</string>
+    <string name="dashboard_show_6_hours">Show 6 hours</string>
+    <string name="dashboard_show_8_hours">Show 8 hours</string>
+    <string name="dashboard_show_12_hours">Show 12 hours</string>
+    <string name="dashboard_show_24_hours">Show 24 hours</string>
+    <string name="dashboard_show_hours">Show %1$d hours</string>
+    <string name="dashboard_hours_selected">Showing %1$d hours</string>
+    <string name="dashboard_updated_just_now">Updated just now</string>
+    <plurals name="dashboard_updated_minutes">
+        <item quantity="one">Updated %1$d minute ago</item>
+        <item quantity="other">Updated %1$d minutes ago</item>
+    </plurals>
+    <plurals name="dashboard_outdated_minutes">
+        <item quantity="one">Last reading %1$d minute ago</item>
+        <item quantity="other">Last reading %1$d minutes ago</item>
+    </plurals>
+    <string name="dashboard_reading_description">Current glucose %1$s %2$s, %3$s. %4$s</string>
+    <string name="dashboard_trend_double_up">rising very quickly</string>
+    <string name="dashboard_trend_up">rising</string>
+    <string name="dashboard_trend_up_slightly">rising slightly</string>
+    <string name="dashboard_trend_steady">steady</string>
+    <string name="dashboard_trend_down_slightly">falling slightly</string>
+    <string name="dashboard_trend_down">falling</string>
+    <string name="dashboard_trend_double_down">falling very quickly</string>
+    <string name="dashboard_trend_unavailable">trend unavailable</string>
+    <string name="dashboard_no_insights_yet">Not enough glucose data for insights yet</string>
+    <string name="dashboard_sensor_connection">Sensor connection</string>
+    <string name="dashboard_sensor_empty_hint">No active sensor is connected yet. Bluetooth can stay ready while you start or scan a sensor.</string>
+    <string name="settings_section_glucose">Glucose and display</string>
+    <string name="settings_section_alerts">Alerts and data</string>
+    <string name="settings_section_preferences">Preferences</string>
+    <string name="settings_section_support">Help and information</string>
 </resources>

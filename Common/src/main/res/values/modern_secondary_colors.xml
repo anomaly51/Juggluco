@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Neutral clinical-dark tokens shared by More, Settings and Sensor. -->
+    <color name="modern_secondary_background">#0B0D0E</color>
+    <color name="modern_secondary_surface">#15191B</color>
+    <color name="modern_secondary_surface_raised">#1B2022</color>
+    <color name="modern_secondary_surface_pressed">#22282A</color>
+    <color name="modern_secondary_surface_low">#101314</color>
+    <color name="modern_secondary_border">#303638</color>
+    <color name="modern_secondary_border_subtle">#242A2C</color>
+
+    <color name="modern_secondary_text_primary">#F1F3F2</color>
+    <color name="modern_secondary_text_secondary">#AAB0AE</color>
+    <color name="modern_secondary_text_muted">#7F8785</color>
+
+    <color name="modern_secondary_accent">#5ACB85</color>
+    <color name="modern_secondary_accent_pressed">#6FD494</color>
+    <color name="modern_secondary_accent_soft">#1D3225</color>
+    <color name="modern_secondary_accent_border">#3A7950</color>
+    <color name="modern_secondary_on_accent">#08150D</color>
+
+    <color name="modern_secondary_danger">#D99196</color>
+    <color name="modern_secondary_danger_surface">#24191A</color>
+    <color name="modern_secondary_danger_border">#553638</color>
+    <color name="modern_secondary_warning">#D2B06C</color>
+    <color name="modern_secondary_warning_surface">#2A2418</color>
+    <color name="modern_secondary_warning_border">#61512D</color>
+</resources>

@@ -43,15 +43,20 @@ import android.view.ViewGroup;
 import android.view.animation.LinearInterpolator;
 
 import android.widget.FrameLayout;
+import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Scroller;
 import android.widget.Space;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
 
 import tk.glucodata.Applic;
 import tk.glucodata.CheckDirectionBox;
+import tk.glucodata.ClinicalUi;
+import tk.glucodata.ConnectionUi;
 import tk.glucodata.Consumer;
 import tk.glucodata.EverSense;
 import tk.glucodata.GlucoseCurve;
@@ -89,6 +94,67 @@ static private boolean isElement(String name,String[] strs) {
 	return false;
 	}
 
+static int selectedReceiverCount(boolean... selected) {
+	int count=0;
+	for(boolean value:selected)
+		if(value)
+			count++;
+	return count;
+	}
+
+static private void clinicalGetSelected(MainActivity context,View parent,String title,
+		String[] selected,ArrayList<String> names,Consumer<String[]> saveproc) {
+	EnableControls(parent,false);
+	ArrayList<CheckDirectionBox> choices=new ArrayList<>();
+	boolean originallyChecked=false;
+	for(String packageName:names) {
+		boolean checked=isElement(packageName,selected);
+		originallyChecked=originallyChecked||checked;
+		CheckDirectionBox choice=getcheckbox(context,packageName,checked);
+		choices.add(ConnectionUi.directToggle(context,choice));
+		}
+	final boolean hadOriginalSelection=originallyChecked;
+	Button cancel=ConnectionUi.headerButton(context,R.string.cancel);
+	Button save=ClinicalUi.button(context,context.getString(R.string.save),
+			ClinicalUi.ButtonRole.PRIMARY);
+	LinearLayout content=ConnectionUi.content(context);
+	content.addView(ClinicalUi.header(context,title,cancel));
+	TextView intro=ClinicalUi.body(context,context.getString(
+			R.string.connection_receivers_intro,names.size()));
+	intro.setPaddingRelative(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
+			ClinicalUi.dp(context,6));
+	content.addView(intro);
+	content.addView(ClinicalUi.sectionLabel(context,
+			context.getString(R.string.connection_receivers_section)));
+	content.addView(ClinicalUi.card(context,choices.toArray(new View[0])));
+	LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+	saveParams.topMargin=ClinicalUi.dp(context,20);
+	save.setLayoutParams(saveParams);
+	content.addView(save);
+	ScrollView screen=ConnectionUi.screen(context,content);
+	ConnectionUi.fullScreen(context,screen);
+	Runnable close=()-> {
+		EnableControls(parent,true);
+		removeContentView(screen);
+		if(selected!=null&&selected.length!=0&&!hadOriginalSelection)
+			saveproc.accept(new String[0]);
+		else
+			saveproc.accept(null);
+		};
+	context.setonback(close);
+	cancel.setOnClickListener(view->context.doonback());
+	save.setOnClickListener(view->{
+		ArrayList<String> checked=new ArrayList<>();
+		for(CheckDirectionBox choice:choices)
+			if(choice.isChecked())
+				checked.add(choice.getText().toString());
+		EnableControls(parent,true);
+		removeContentView(screen);
+		context.poponback();
+		saveproc.accept(checked.toArray(new String[0]));
+		});
+	}
+
 
 static private void  getselected(MainActivity context, View parent,String title,String[] selected, ArrayList<String> names, Consumer<String[]> saveproc) {
 
@@ -97,6 +163,10 @@ static private void  getselected(MainActivity context, View parent,String title,
 		Applic.argToaster(context, context.getString(R.string.noapplisteningto)+title, Toast.LENGTH_SHORT);
 		String[] niets=new String[0];
 		saveproc.accept(niets);
+		return;
+		}
+	if(!isWearable) {
+		clinicalGetSelected(context,parent,title,selected,names,saveproc);
 		return;
 		}
 	var views=new View[len+2][];

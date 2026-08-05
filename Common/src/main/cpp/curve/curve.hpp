@@ -188,6 +188,36 @@ constcol NVGcolor backgroundlightred=    blackbean;
 #define unsavecolor (startincolors?backgroundlightred:foregroundlightred)
 
 constcol NVGcolor dooryellow=nvgRGBAf2(0.9,0.9,0.1,0.3); 
+
+// Phone presentation palette. Wear OS retains the compact legacy rendering;
+// every phone-native canvas (graph, statistics and records) shares this
+// stable surface and contrast system.
+constcol NVGcolor modernGraphSurface=hexcolor(0x0C0F10);
+constcol NVGcolor modernGraphText=hexcolor(0xD4D9D6);
+constcol NVGcolor modernGraphMuted=nvgRGBAf2(0x8D/255.0f,0x96/255.0f,0x91/255.0f,0.78f);
+constcol NVGcolor modernGraphGrid=nvgRGBAf2(0x76/255.0f,0x80/255.0f,0x7B/255.0f,0.14f);
+constcol NVGcolor modernGraphGridStrong=nvgRGBAf2(0xA0/255.0f,0xA9/255.0f,0xA4/255.0f,0.25f);
+// Clinical state palette: green is in range, amber is high and coral is low.
+constcol NVGcolor modernGraphGlucose=hexcolor(0x4ECB83);
+constcol NVGcolor modernGraphHigh=hexcolor(0xF2A93B);
+constcol NVGcolor modernGraphLow=hexcolor(0xF06B65);
+constcol NVGcolor modernGraphGlucoseGlow=nvgRGBAf2(0x4E/255.0f,0xCB/255.0f,0x83/255.0f,0.14f);
+constcol NVGcolor modernGraphHighGlow=nvgRGBAf2(0xF2/255.0f,0xA9/255.0f,0x3B/255.0f,0.13f);
+constcol NVGcolor modernGraphLowGlow=nvgRGBAf2(0xF0/255.0f,0x6B/255.0f,0x65/255.0f,0.14f);
+constcol NVGcolor modernGraphGlucoseAreaTop=nvgRGBAf2(0x4E/255.0f,0xCB/255.0f,0x83/255.0f,0.075f);
+constcol NVGcolor modernGraphGlucoseAreaBottom=nvgRGBAf2(0x4E/255.0f,0xCB/255.0f,0x83/255.0f,0.006f);
+constcol NVGcolor modernGraphScan=hexcolor(0x70A8D8);
+constcol NVGcolor modernGraphHistory=nvgRGBAf2(0x77/255.0f,0xA8/255.0f,0x92/255.0f,0.70f);
+constcol NVGcolor modernGraphTargetFill=nvgRGBAf2(0x4E/255.0f,0xCB/255.0f,0x83/255.0f,0.082f);
+constcol NVGcolor modernGraphTargetFillBottom=nvgRGBAf2(0x4E/255.0f,0xCB/255.0f,0x83/255.0f,0.036f);
+constcol NVGcolor modernGraphTargetBorder=nvgRGBAf2(0x4E/255.0f,0xCB/255.0f,0x83/255.0f,0.32f);
+constcol NVGcolor modernGraphNow=hexcolor(0xD7DBE0);
+constcol NVGcolor modernGraphNowGlow=nvgRGBAf2(0xD7/255.0f,0xDB/255.0f,0xE0/255.0f,0.12f);
+constcol NVGcolor modernGraphNowFade=nvgRGBAf2(0xD7/255.0f,0xDB/255.0f,0xE0/255.0f,0.01f);
+constcol NVGcolor modernGraphAxisBackdrop=nvgRGBAf2(0x0C/255.0f,0x0F/255.0f,0x10/255.0f,0.92f);
+constcol NVGcolor modernGraphCrosshair=nvgRGBAf2(0xB8/255.0f,0xC0/255.0f,0xC8/255.0f,0.48f);
+constcol NVGcolor modernGraphTooltip=hexcolor(0x171C1A);
+constcol NVGcolor modernGraphTooltipBorder=nvgRGBAf2(0xA8/255.0f,0xB0/255.0f,0xB8/255.0f,0.30f);
 //extern int whitefont,blackfont;
 
 

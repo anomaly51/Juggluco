@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="carb_absorption_label">РАСЧЁТНАЯ СКОРОСТЬ УСВОЕНИЯ</string>
+    <string name="carb_absorption_not_estimated">Не оценено</string>
+    <string name="carb_absorption_slow">Медленно</string>
+    <string name="carb_absorption_medium">Средне</string>
+    <string name="carb_absorption_fast">Быстро</string>
+    <string name="carb_absorption_value">%1$s · %2$d/100</string>
+    <string name="carb_absorption_summary">Расчётная скорость усвоения углеводов: %1$s</string>
+    <string name="carb_absorption_peak">пик примерно через %1$d мин</string>
+    <string name="carb_absorption_duration">длительность около %1$d мин</string>
+    <string name="carb_absorption_confidence">уверенность %1$d%%</string>
+    <string name="carb_absorption_note">Приблизительная оценка скорости усвоения углеводов, а не измерение гликемического индекса.</string>
+    <string name="carb_absorption_forecast_explanation">Расчётная скорость усвоения углеводов: %1$s. Кривая показывает, как меняется их смоделированный вклад в глюкозу.</string>
+</resources>

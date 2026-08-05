@@ -24,15 +24,20 @@ package tk.glucodata;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Typeface;
 import android.graphics.text.LineBreakConfig;
 import android.graphics.text.LineBreaker;
 import android.net.Uri;
 import android.os.Build;
 import android.text.InputType;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import static android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE;
@@ -70,6 +75,45 @@ private ViewGroup exportscreen=null;
 Dialogs(float density) {
     this.density=density;
     }
+
+static final int EXPORT_DAYS_VALID=0;
+static final int EXPORT_DAYS_EMPTY=1;
+static final int EXPORT_DAYS_NOT_NUMBER=2;
+static final int EXPORT_DAYS_NOT_POSITIVE=3;
+
+static int validateExportDays(String raw) {
+    if(raw==null||raw.trim().isEmpty())
+        return EXPORT_DAYS_EMPTY;
+    try {
+        float value=parseExportDays(raw);
+        if(!Float.isFinite(value))
+            return EXPORT_DAYS_NOT_NUMBER;
+        if(value<=0f)
+            return EXPORT_DAYS_NOT_POSITIVE;
+        }
+    catch(NumberFormatException ex) {
+        return EXPORT_DAYS_NOT_NUMBER;
+        }
+    return EXPORT_DAYS_VALID;
+    }
+
+static float parseExportDays(String raw) {
+    return Float.parseFloat(raw.trim().replace(',','.'));
+    }
+
+static int exportTypeWithCalibration(int baseType,boolean calibrated) {
+    if(baseType==4)
+        return baseType;
+    return baseType|(calibrated?8:0);
+    }
+
+static String extensionForExportType(int baseType) {
+    if(baseType==4)
+        return ".html";
+    if(baseType==5)
+        return ".csv";
+    return ".tsv";
+    }
 private Button exportbutton(MainActivity activity,String label, int type) {
     Button but=new Button(activity);
     but.setText(label);
@@ -98,8 +142,212 @@ private Button exportbutton(MainActivity activity,String label, int type) {
 
 EditText days;
 
+private void showPhoneExport(MainActivity activity,View parent) {
+    activity.lightBars(false);
+    if(parent!=null) {
+        parent.setVisibility(GONE);
+        }
+    if(exportscreen==null) {
+        LinearLayout content=ClinicalUi.verticalContent(activity);
+        content.setPadding(ClinicalUi.dp(activity,20),
+                MainActivity.systembarTop+ClinicalUi.dp(activity,8),
+                ClinicalUi.dp(activity,20),ClinicalUi.dp(activity,30));
+        Button close=ClinicalUi.button(activity,activity.getString(R.string.closename),
+                ClinicalUi.ButtonRole.SECONDARY);
+        content.addView(ClinicalUi.header(activity,
+                activity.getString(R.string.export_modern_title),close));
+        TextView intro=ClinicalUi.body(activity,
+                activity.getString(R.string.export_modern_intro));
+        intro.setPadding(ClinicalUi.dp(activity,4),0,ClinicalUi.dp(activity,4),
+                ClinicalUi.dp(activity,4));
+        content.addView(intro);
+
+        content.addView(ClinicalUi.sectionLabel(activity,
+                activity.getString(R.string.export_modern_period_section)));
+        days=new EditText(activity);
+        days.setSingleLine(true);
+        days.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        days.setTextColor(ClinicalUi.primaryText(activity));
+        days.setHintTextColor(ClinicalUi.secondaryText(activity));
+        days.setTextSize(TypedValue.COMPLEX_UNIT_SP,17);
+        days.setGravity(Gravity.CENTER);
+        days.setMinWidth(ClinicalUi.dp(activity,104));
+        days.setMinimumHeight(ClinicalUi.dp(activity,50));
+        days.setPadding(ClinicalUi.dp(activity,12),0,ClinicalUi.dp(activity,12),0);
+        days.setBackground(ClinicalUi.surface(activity,false,true));
+        TextView unit=new TextView(activity);
+        unit.setText(R.string.export_modern_days_unit);
+        unit.setTextColor(ClinicalUi.secondaryText(activity));
+        unit.setTextSize(TypedValue.COMPLEX_UNIT_SP,15);
+        unit.setPaddingRelative(ClinicalUi.dp(activity,10),0,ClinicalUi.dp(activity,6),0);
+        LinearLayout periodCard=ClinicalUi.card(activity,
+                ClinicalUi.fieldRow(activity,
+                        activity.getString(R.string.export_modern_period_label),days,unit));
+        content.addView(periodCard);
+        TextView periodHelp=ClinicalUi.body(activity,
+                activity.getString(R.string.export_modern_period_helper));
+        periodHelp.setTextSize(TypedValue.COMPLEX_UNIT_SP,13);
+        periodHelp.setPadding(ClinicalUi.dp(activity,4),ClinicalUi.dp(activity,9),
+                ClinicalUi.dp(activity,4),0);
+        content.addView(periodHelp);
+
+        CheckDirectionBox calibratedSource=new CheckDirectionBox(activity);
+        calibratedSource.setText(R.string.calibrated);
+        calibratedSource.setChecked(isCalibrated);
+        LinearLayout calibratedRow=ClinicalUi.toggleRow(activity,calibratedSource,
+                activity.getString(R.string.export_modern_calibrated_helper));
+        LinearLayout.LayoutParams calibratedParams=new LinearLayout.LayoutParams(
+                MATCH_PARENT,WRAP_CONTENT);
+        calibratedParams.topMargin=ClinicalUi.dp(activity,12);
+        content.addView(ClinicalUi.card(activity,calibratedRow),calibratedParams);
+        calibratedSource.setOnCheckedChangeListener((button,checked)->isCalibrated=checked);
+
+        exportlabel=ClinicalUi.body(activity,"");
+        exportlabel.setTextColor(ClinicalUi.danger(activity));
+        exportlabel.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        exportlabel.setPadding(ClinicalUi.dp(activity,16),ClinicalUi.dp(activity,12),
+                ClinicalUi.dp(activity,16),ClinicalUi.dp(activity,12));
+        exportlabel.setBackground(ClinicalUi.surface(activity,false,false));
+        exportlabel.setVisibility(GONE);
+        LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+        errorParams.topMargin=ClinicalUi.dp(activity,12);
+        content.addView(exportlabel,errorParams);
+
+        content.addView(ClinicalUi.sectionLabel(activity,
+                activity.getString(R.string.export_modern_type_section)));
+        addPhoneExportCard(content,activity,activity.getString(R.string.amountsname),0,
+                R.string.export_modern_amounts_helper);
+        addPhoneExportCard(content,activity,activity.getString(R.string.scansname),1,
+                R.string.export_modern_scans_helper);
+        addPhoneExportCard(content,activity,activity.getString(R.string.streamname),2,
+                R.string.export_modern_stream_helper);
+        addPhoneExportCard(content,activity,activity.getString(R.string.historyname),3,
+                R.string.export_modern_history_helper);
+        addPhoneExportCard(content,activity,activity.getString(R.string.mealsname),4,
+                R.string.export_modern_meals_helper);
+        addPhoneExportCard(content,activity,activity.getString(R.string.libreviewname),5,
+                R.string.export_modern_libreview_helper);
+
+        Button helpButton=ClinicalUi.button(activity,activity.getString(R.string.helpname),
+                ClinicalUi.ButtonRole.SECONDARY);
+        LinearLayout.LayoutParams helpParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+        helpParams.topMargin=ClinicalUi.dp(activity,18);
+        content.addView(helpButton,helpParams);
+        helpButton.setOnClickListener(v->tk.glucodata.help.helplight(
+                R.string.helpexport,activity));
+        close.setOnClickListener(v->activity.doonback());
+
+        ScrollView screen=ClinicalUi.scrollScreen(activity,content);
+        screen.setVerticalScrollBarEnabled(false);
+        exportscreen=screen;
+        long hour24=1000L*60L*60L*24L;
+        long endtime=Natives.getendtime();
+        long dayCount=(endtime-Natives.oldestdatatime()+hour24-1)/hour24;
+        days.setText(Long.toString(Math.max(1L,dayCount)));
+        }
+    if(exportscreen.getParent()==null)
+        activity.addMyContentView(exportscreen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    exportscreen.setVisibility(VISIBLE);
+    exportscreen.bringToFront();
+    showPhoneExportError(activity,EXPORT_DAYS_VALID);
+    days.clearFocus();
+    activity.setonback(()->{
+        help.hidekeyboard(activity);
+        if(activity.curve!=null&&activity.curve.numberview!=null)
+            activity.curve.numberview.hidekeyboard();
+        exportscreen.setVisibility(GONE);
+        activity.themeLightBars();
+        if(parent!=null) {
+            parent.setVisibility(VISIBLE);
+            }
+        else if(Menus.on)
+            Menus.show(activity);
+        });
+    }
+
+private void addPhoneExportCard(
+        LinearLayout content,MainActivity activity,String title,int type,int helperRes) {
+    LinearLayout card=new LinearLayout(activity);
+    card.setOrientation(LinearLayout.HORIZONTAL);
+    card.setGravity(Gravity.CENTER_VERTICAL);
+    card.setMinimumHeight(ClinicalUi.dp(activity,76));
+    card.setPaddingRelative(ClinicalUi.dp(activity,18),ClinicalUi.dp(activity,11),
+            ClinicalUi.dp(activity,14),ClinicalUi.dp(activity,11));
+    card.setBackground(ClinicalUi.surface(activity,true,true));
+    card.setClickable(true);
+    card.setFocusable(true);
+    LinearLayout copy=new LinearLayout(activity);
+    copy.setOrientation(LinearLayout.VERTICAL);
+    TextView label=new TextView(activity);
+    label.setText(title);
+    label.setTextColor(ClinicalUi.primaryText(activity));
+    label.setTextSize(TypedValue.COMPLEX_UNIT_SP,17);
+    label.setTypeface(Typeface.create("sans-serif-medium",Typeface.BOLD));
+    copy.addView(label);
+    TextView helper=ClinicalUi.body(activity,activity.getString(helperRes));
+    helper.setTextSize(TypedValue.COMPLEX_UNIT_SP,13);
+    helper.setPadding(0,ClinicalUi.dp(activity,3),ClinicalUi.dp(activity,10),0);
+    copy.addView(helper);
+    card.addView(copy,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1f));
+    TextView format=new TextView(activity);
+    format.setText(extensionForExportType(type).substring(1).toUpperCase(Locale.US));
+    format.setTextColor(ClinicalUi.accent(activity));
+    format.setTextSize(TypedValue.COMPLEX_UNIT_SP,13);
+    format.setTypeface(Typeface.create("sans-serif-medium",Typeface.BOLD));
+    format.setGravity(Gravity.CENTER);
+    format.setPadding(ClinicalUi.dp(activity,10),ClinicalUi.dp(activity,7),
+            ClinicalUi.dp(activity,10),ClinicalUi.dp(activity,7));
+    format.setBackground(ClinicalUi.surface(activity,false,false));
+    card.addView(format);
+    card.setContentDescription(activity.getString(
+            R.string.export_modern_card_description,title,format.getText()));
+    card.setOnClickListener(v->startPhoneExport(activity,title,type));
+    LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    params.bottomMargin=ClinicalUi.dp(activity,10);
+    content.addView(card,params);
+    }
+
+private void startPhoneExport(MainActivity activity,String label,int baseType) {
+    int validation=validateExportDays(days.getText().toString());
+    if(validation!=EXPORT_DAYS_VALID) {
+        showPhoneExportError(activity,validation);
+        return;
+        }
+    showPhoneExportError(activity,EXPORT_DAYS_VALID);
+    help.hidekeyboard(activity);
+    float dayCount=parseExportDays(days.getText().toString());
+    int requestType=exportTypeWithCalibration(baseType,isCalibrated);
+    String extension=extensionForExportType(baseType);
+    if(baseType==4||baseType==5)
+        algexporter(activity,requestType,label,extension,dayCount);
+    else
+        exporter(activity,requestType,label,dayCount);
+    }
+
+private void showPhoneExportError(MainActivity activity,int validation) {
+    if(exportlabel==null)
+        return;
+    if(validation==EXPORT_DAYS_VALID) {
+        exportlabel.setText("");
+        exportlabel.setVisibility(GONE);
+        return;
+        }
+    int message=validation==EXPORT_DAYS_EMPTY
+            ?R.string.export_modern_error_empty
+            :validation==EXPORT_DAYS_NOT_POSITIVE
+                    ?R.string.export_modern_error_positive
+                    :R.string.export_modern_error_number;
+    exportlabel.setText(message);
+    exportlabel.setVisibility(VISIBLE);
+    exportlabel.announceForAccessibility(exportlabel.getText());
+    }
+
 
 public void showexport(MainActivity activity,int width,int height,View parent) {
+   if(!smallScreen) {
+       showPhoneExport(activity,parent);
+       return;
+       }
    if(parent!=null) {
        activity.lightBars(!Natives.getInvertColors());
        parent.setVisibility(GONE);

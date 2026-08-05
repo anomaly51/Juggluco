@@ -53,8 +53,10 @@ import android.widget.Button;
 
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Space;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.Keep;
@@ -115,9 +117,18 @@ private static  String getstart(HttpURLConnection con,int max)  throws IOExcepti
         }
     }
 
-final  static String nothing=Applic.getContext().getString(R.string.triednothing).intern();
-final static String success=Applic.getContext().getString(R.string.success).intern();
+/** Identity sentinels: localization is resolved lazily when a status is rendered. */
+final static String nothing=new String("nightpost:nothing");
+final static String success=new String("nightpost:success");
 static private String uploadstatus=nothing;
+
+static String visibleStatus(Context context,String status) {
+    if(status==nothing)
+        return context.getString(R.string.triednothing);
+    if(status==success)
+        return context.getString(R.string.success);
+    return status==null?"":status;
+    }
 @Keep
 static public boolean deleteUrl(String urlstring,String secret) {
     patch();
@@ -269,20 +280,151 @@ static public int upload(String httpurl,byte[] postdata,String secret,boolean pu
         return -1;
         }
      }
-private static    void askclearupload(Context context) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
-        builder.setTitle(" ").setMessage(R.string.resendquestion).
-           setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int id) {
-            Natives.resetuploader();
-                    }
-                }) .setNegativeButton(R.string.cancel, new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int id) {
+private static void askclearupload(MainActivity context,View parent) {
+    ConnectionUi.confirmSheet(context,parent,
+            context.getString(R.string.connection_nightscout_resend_title),
+            context.getString(R.string.connection_nightscout_resend_message),
+            context.getString(R.string.resenddata),ClinicalUi.ButtonRole.DANGER,
+            Natives::resetuploader);
+    }
+
+static boolean validNightscoutUrl(String value) {
+    try {
+        URL parsed=new URL(value);
+        String scheme=parsed.getProtocol();
+        return ("https".equalsIgnoreCase(scheme)||"http".equalsIgnoreCase(scheme))
+                &&parsed.getHost()!=null&&!parsed.getHost().isEmpty();
+        }
+    catch(Throwable ignored) {
+        return false;
+        }
+    }
+
+private static void clinicalConfig(MainActivity context,View settingsView) {
+    EnableControls(settingsView,false);
+    EditText url=getedit(context,Natives.getnightuploadurl());
+    EditText secret=new EditText(context);
+    secret.setImeOptions(editoptions);
+    secret.setInputType(InputType.TYPE_TEXT_VARIATION_PASSWORD);
+    secret.setTransformationMethod(new PasswordTransformationMethod());
+    String previousSecret=Natives.getnightuploadsecret();
+    if(previousSecret!=null)
+        secret.setText(previousSecret);
+    ConnectionUi.styleInput(url);
+    ConnectionUi.styleInput(secret);
+
+    CheckDirectionBox showSecret=getcheckbox(context,R.string.connection_show_secret,false);
+    showSecret.setOnCheckedChangeListener((button,checked)-> {
+        int selection=secret.getSelectionStart();
+        secret.setInputType(checked?InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD:
+                InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        secret.setTransformationMethod(checked?null:new PasswordTransformationMethod());
+        secret.setSelection(Math.max(0,Math.min(selection,secret.length())));
+        });
+    CheckDirectionBox active=getcheckbox(context,R.string.active,Natives.getuseuploader());
+    CheckDirectionBox apiV3=getcheckbox(context,R.string.connection_nightscout_v3,
+            Natives.getnightscoutV3());
+    CheckDirectionBox treatments=getcheckbox(context,R.string.sendamounts,
+            Natives.getpostTreatments());
+
+    Button cancel=ConnectionUi.headerButton(context,R.string.cancel);
+    Button save=ClinicalUi.button(context,context.getString(R.string.save),
+            ClinicalUi.ButtonRole.PRIMARY);
+    Button resend=ClinicalUi.button(context,context.getString(R.string.resenddata),
+            ClinicalUi.ButtonRole.DANGER);
+    LinearLayout sendNow=ClinicalUi.actionRow(context,context.getString(R.string.sendnow),
+            context.getString(R.string.connection_send_now_hint));
+    LinearLayout uploaderHelp=ClinicalUi.actionRow(context,
+            context.getString(R.string.helpname),context.getString(R.string.connection_uploader_help_hint));
+    boolean statusError=uploadstatus!=success&&uploadstatus!=nothing;
+    TextView status=ConnectionUi.status(context,
+            datestr(uploadtime)+": "+visibleStatus(context,uploadstatus),statusError);
+    TextView formError=ConnectionUi.status(context,"",true);
+
+    LinearLayout content=ConnectionUi.content(context);
+    content.addView(ClinicalUi.header(context,
+            context.getString(R.string.connection_uploader_title),cancel));
+    content.addView(ConnectionUi.intro(context,R.string.connection_uploader_intro));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.connection_account_section)));
+    content.addView(ClinicalUi.card(context,
+            ClinicalUi.fieldRow(context,"Nightscout URL",url),
+            ClinicalUi.fieldRow(context,context.getString(R.string.secret),secret),
+            ConnectionUi.directToggle(context,showSecret)));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.connection_upload_section)));
+    content.addView(ClinicalUi.card(context,
+            ConnectionUi.directToggle(context,active),
+            ConnectionUi.directToggle(context,apiV3),
+            ConnectionUi.directToggle(context,treatments),sendNow));
+    LinearLayout.LayoutParams statusParams=new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+    statusParams.topMargin=ClinicalUi.dp(context,12);
+    status.setLayoutParams(statusParams);
+    content.addView(status);
+    formError.setLayoutParams(statusParams);
+    content.addView(formError);
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.connection_maintenance_section)));
+    content.addView(resend,new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.connection_support_section)));
+    content.addView(ClinicalUi.card(context,uploaderHelp));
+    LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+    saveParams.topMargin=ClinicalUi.dp(context,20);
+    save.setLayoutParams(saveParams);
+    content.addView(save);
+    ScrollView screen=ConnectionUi.screen(context,content);
+    ConnectionUi.fullScreen(context,screen);
+
+    int[] noTreatmentChange={0};
+    treatments.setOnCheckedChangeListener((button,checked)-> {
+        switch(noTreatmentChange[0]) {
+            case 0:
+                noTreatmentChange[0]++;
+                treatments.setChecked(!checked);
+                LibreNumbers.mklayout(context,1,treatments,noTreatmentChange,screen);
+                break;
+            case 2:
+                Natives.setpostTreatments(checked);
+                break;
+            default:
+                break;
             }
-        }).show().setCanceledOnTouchOutside(false);
+        });
+    resend.setOnClickListener(view->askclearupload(context,screen));
+    sendNow.setOnClickListener(view->Natives.wakeuploader());
+    uploaderHelp.setOnClickListener(view->help(R.string.NightPost,context));
+    Runnable close=()-> {
+        removeContentView(screen);
+        EnableControls(settingsView,true);
+        tk.glucodata.help.hidekeyboard(context);
+        };
+    context.setonback(close);
+    cancel.setOnClickListener(view-> {
+        context.poponback();
+        close.run();
+        });
+    save.setOnClickListener(view-> {
+        String endpoint=url.getText().toString().trim();
+        if(active.isChecked()&&!validNightscoutUrl(endpoint)) {
+            formError.setText(R.string.connection_invalid_url);
+            formError.setVisibility(View.VISIBLE);
+            return;
+            }
+        context.poponback();
+        close.run();
+        setNightUploader(endpoint,secret.getText().toString(),active.isChecked(),apiV3.isChecked());
+        });
     }
 
 public static void  config(MainActivity act, View settingsview) {
+    if(!isWearable) {
+        clinicalConfig(act,settingsview);
+        return;
+        }
     EnableControls(settingsview,false);
     var urllabel=getlabel(act,"Nightscout URL");
     var url=getedit(act, Natives.getnightuploadurl());
@@ -303,7 +445,7 @@ public static void  config(MainActivity act, View settingsview) {
     var save=getbutton(act,R.string.save);
     var cancel=getbutton(act,R.string.cancel);
     var clear=getbutton(act,R.string.resenddata);
-    clear.setOnClickListener(v->  askclearupload(act));
+    clear.setOnClickListener(v->askclearupload(act,null));
     var wake=getbutton(act,act.getString(R.string.sendnow));
     wake.setOnClickListener(v-> Natives.wakeuploader());
     Button help;
@@ -334,7 +476,7 @@ public static void  config(MainActivity act, View settingsview) {
                         editsecret.setSelection(sel);
                         });
 
-      var statusview=getlabel(act,datestr(uploadtime)+": "+uploadstatus);
+      var statusview=getlabel(act,datestr(uploadtime)+": "+visibleStatus(act,uploadstatus));
       int statuspad=  (int)tk.glucodata.GlucoseCurve.metrics.density*7;
     statusview.setPadding(statuspad,statuspad,statuspad,statuspad);
     if(!useclose)

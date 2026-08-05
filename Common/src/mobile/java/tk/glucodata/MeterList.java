@@ -34,6 +34,7 @@ import android.content.Context;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.LinearLayout;
 
 import android.widget.TextView;
 
@@ -103,15 +104,21 @@ static final class MeterView extends Layout{
                     }
                 }
                 } );
-        active.setText(R.string.active);
-        float density=GlucoseCurve.metrics.density;
-        var marg=getMargins(active);
-        marg.setMarginStart(0);
-        marg.setMarginEnd((int)(density*10));
-        int pad=(int)(5.0*density);
-        setPadding(pad,pad,pad,(int)(density*8.0));
-
-        setLayoutParams(new ViewGroup.LayoutParams(WRAP_CONTENT , ViewGroup.LayoutParams.WRAP_CONTENT));
+         active.setText(R.string.active);
+         ConnectionUi.directToggle(act,active);
+         text.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,15.0f);
+         text.setTextColor(ClinicalUi.primaryText(act));
+         text.setLineSpacing(0.0f,1.12f);
+         text.setPaddingRelative(ClinicalUi.dp(act,14),ClinicalUi.dp(act,10),
+               ClinicalUi.dp(act,14),ClinicalUi.dp(act,4));
+         text.setMinimumHeight(ClinicalUi.dp(act,64));
+         setPadding(ClinicalUi.dp(act,4),ClinicalUi.dp(act,4),
+               ClinicalUi.dp(act,4),ClinicalUi.dp(act,4));
+         setBackground(ClinicalUi.surface(act,false,false));
+         RecyclerView.LayoutParams params=new RecyclerView.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+         params.topMargin=ClinicalUi.dp(act,6);
+         params.bottomMargin=ClinicalUi.dp(act,6);
+         setLayoutParams(params);
 
         }
 
@@ -162,46 +169,44 @@ static public void show(MainActivity act, View parent) {
                   });
             return;
             }
-     if(parent!=null) parent.setVisibility(GONE);
+      if(parent!=null) parent.setVisibility(GONE);
       RecyclerView recycle = new RecyclerView(act);
-      recycle.setHasFixedSize(true);
-      recycle.setLayoutParams(new ViewGroup.LayoutParams(   ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-      var lin=new GridLayoutManager(act,2);
+      recycle.setHasFixedSize(false);
+      recycle.setClipToPadding(false);
+      var lin=new androidx.recyclerview.widget.LinearLayoutManager(act);
       recycle.setLayoutManager(lin);
-      var close=getbutton(act,R.string.closename);
-      close.setOnClickListener( v -> { 
-            MainActivity.doonback();
-            });
-      var devices=getbutton(act,R.string.finddevices);
-      var help=getbutton(act,R.string.helpname);
-      View[] firstrow=new View[]{help,devices,close};
-      Layout layout=new Layout(act,(x,w,h)->{
-             return new int[] {w,h};
-             },new View[]{recycle},firstrow); 
+      Button close=ConnectionUi.headerButton(act,R.string.closename);
+      Button devices=ClinicalUi.button(act,act.getString(R.string.finddevices),
+            ClinicalUi.ButtonRole.PRIMARY);
+      LinearLayout meterHelp=ClinicalUi.actionRow(act,act.getString(R.string.helpname),
+            act.getString(R.string.connection_meter_help_hint));
+      LinearLayout layout=ConnectionUi.content(act);
+      layout.setLayoutParams(new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+      layout.addView(ClinicalUi.header(act,
+            act.getString(R.string.connection_meters_title),close));
+      layout.addView(ConnectionUi.intro(act,R.string.connection_meters_intro));
+      layout.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.connection_meters_section)));
+      layout.addView(recycle,new LinearLayout.LayoutParams(MATCH_PARENT,0,1.0f));
+      layout.addView(ClinicalUi.card(act,meterHelp));
+      LinearLayout.LayoutParams deviceParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+      deviceParams.topMargin=ClinicalUi.dp(act,14);
+      devices.setLayoutParams(deviceParams);
+      layout.addView(devices);
       var meteradapt = new MeterListViewAdapter(layout);
       recycle.setAdapter(meteradapt);
       devices.setOnClickListener( v -> { 
             DeviceList.show(act,meteradapt);
             });
-        help.setOnClickListener(v-> tk.glucodata.help.help(R.string.GlucoseMeterList,act));
-       layout.setBackgroundColor(backgroundcolor);
-        float density=GlucoseCurve.metrics.density;
-        float addleft,addright;
-        if(MainActivity.rtl&&Applic.supportsRtl) {
-                addleft=8.0f;
-                addright=5.0f;
-                }
-         else {
-                addleft=5.0f;
-                addright=8.0f;
-                }
-    layout.setPadding((int)(density*addleft)+MainActivity.systembarLeft,MainActivity.systembarTop,MainActivity.systembarRight+(int)(density*addright),MainActivity.systembarBottom);
+        meterHelp.setOnClickListener(v-> tk.glucodata.help.help(R.string.GlucoseMeterList,act));
+        close.setOnClickListener(view->MainActivity.doonback());
 
-     act.addMyContentView(layout, new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+      act.addMyContentView(layout, new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT));
      MainActivity.setonback(()-> {
            BluetoothGlucoseMeter.zeroViews();
            removeContentView(layout);
-           parent.setVisibility(VISIBLE);
+           if(parent!=null)
+              parent.setVisibility(VISIBLE);
         });
       }
 

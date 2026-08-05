@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="menu_screen_subtitle">Tools and app settings</string>
+    <string name="menu_screen_quick">Quick actions</string>
+    <string name="menu_screen_app">App</string>
+    <string name="menu_screen_close_app">Leave app</string>
+</resources>

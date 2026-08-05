@@ -55,6 +55,53 @@ extern bool fixatex,fixatey;
 extern std::vector<shownglucose_t> shownglucose;
 extern void setusedsensors(uint32_t nu) ;
 
+void JCurve::lockGraphYRangeForPan() {
+    if(modernui)
+        graphPanYRangeLocked=true;
+    }
+
+void JCurve::unlockGraphYRange() {
+    graphPanYRangeLocked=false;
+    settime=0;
+    setend=0;
+    }
+
+void resetGraphPanYRangeLock() {
+    appcurve.unlockGraphYRange();
+    }
+
+void JCurve::setmodernui(bool enabled) {
+    unlockGraphYRange();
+    modernui=enabled;
+    modernnormal=false;
+    if(enabled)
+        nrmenu=0;
+    }
+
+void JCurve::setgraphhours(int hours) {
+    unlockGraphYRange();
+    constexpr int minhours=3;
+    constexpr int maxhours=24;
+    const int clamped=hours<minhours?minhours:(hours>maxhours?maxhours:hours);
+    duration=clamped*60*60;
+    settings->data()->duration=duration;
+    settime=0;
+    setend=0;
+    const auto now=time(nullptr);
+    setLiveWindow(static_cast<uint32_t>(now));
+    }
+
+int JCurve::getgraphhours() const {
+    constexpr int secondsperhour=60*60;
+    return duration%secondsperhour==0?duration/secondsperhour:-1;
+    }
+
+void JCurve::setLiveWindow(const uint32_t now) {
+    setstarttime(forecastgraph::live_start(now,static_cast<uint32_t>(duration),
+                                          forecastGraphEndTime()));
+    setdiffcurrent();
+    }
+
 extern void mkheights() ;
 void    updateusedsensors(uint32_t nu) {
     static int wait=0;
@@ -603,9 +650,60 @@ extern bool showsummarygraph;
     else
 #endif
     {
+        if(modernui)
+            graphselectionactive=false;
         tapx=x;tapy=y;
         }
     return -1LL;
+    }
+
+int64_t JCurve::graphscrub(float x,float y) {
+#ifdef WEAROS
+    return 0LL;
+#else
+    if(!modernui||numlist||showpers||histlen<=0||
+            x<dleft||x>dleft+dwidth||y<dtop||y>dtop+dheight)
+        return 0LL;
+
+    const uint32_t endtime=starttime+duration;
+    const auto [transx,transy]=gettrans(starttime,endtime);
+    const ScanData *nearest=nullptr;
+    float nearestdistance=dwidth+density*64.0f;
+
+    const auto consider=[&](const std::pair<const ScanData*,const ScanData*> &range) {
+        for(const ScanData *item=range.first;item&&item<range.second;++item) {
+            if(!item->valid())
+                continue;
+            const float pointx=transx(item->t);
+            if(pointx<dleft||pointx>dleft+dwidth)
+                continue;
+            const float distance=fabsf(pointx-x);
+            if(distance<nearestdistance) {
+                nearestdistance=distance;
+                nearest=item;
+                }
+            }
+        };
+
+    for(int index=histlen-1;index>=0;--index) {
+        if(showstream&&pollranges)
+            consider(pollranges[index]);
+        if(showscans&&scanranges)
+            consider(scanranges[index]);
+        }
+
+    // A large gap is data absence, not an invitation to snap to an unrelated
+    // reading. Normal one- and five-minute streams remain effortless to scrub.
+    if(!nearest||nearestdistance>density*52.0f)
+        return 0LL;
+
+    graphselectionactive=true;
+    graphselectiontime=nearest->t;
+    graphselectionvalue=nearest->g*10;
+    tapx=-8000.0f;
+    tapy=-8000.0f;
+    return static_cast<int64_t>(graphselectiontime);
+#endif
     }
  void  JCurve::scanwait(NVGcontext* avg) {
     startstep(avg,*getwhite());
@@ -1000,10 +1098,17 @@ bool numpagepast() {
 
 extern int nrcolumns;
 int nrcolumns=1;
+extern float numlistcontenttop(const JCurve &curve);
+extern float numlistrowheight(const JCurve &curve);
 int JCurve::numfrompos(const float x,const float y) {
-    int rows=((dheight-statusbarheight)/(double)textheight);
-
-    int ind= ((nrcolumns!=1&&x>(dleft+dwidth/2))?rows:0)+ std::min(rows-1,(int)((y-statusbarheight-dtop)/textheight));
+    const float contenttop=numlistcontenttop(*this);
+    const float rowheight=numlistrowheight(*this);
+    if(y<dtop+contenttop)
+        return -1;
+    const int rows=std::max(1,(int)((dheight-contenttop)/rowheight));
+    const int row=std::max(0,std::min(rows-1,
+            (int)((y-contenttop-dtop)/rowheight)));
+    int ind=((nrcolumns!=1&&x>(dleft+dwidth/2))?rows:0)+row;
     LOGGER("rows=%d, ind=%d\n",rows,ind);
     int i=0,index;
     for(int i=0;i<basecount;i++) {
@@ -1086,7 +1191,9 @@ void JCurve::numpagenum(const uint32_t tim) {
             }
         numiters[i].iter=ptr;
         }
-    const int percol=(dheight-statusbarheight)/textheight;
+    const float contenttop=numlistcontenttop(*this);
+    const int percol=std::max(1,
+            (int)((dheight-contenttop)/numlistrowheight(*this)));
     const int onpage=nrcolumns*percol;
     #ifndef NOLOG
     time_t tims=tim;
@@ -1111,7 +1218,43 @@ void JCurve::numpagenum(const uint32_t tim) {
     }
 
  void    JCurve::shownumlist(NVGcontext* avg) {
-    startstep(avg,*getwhite());
+    startstep(avg,modernui?modernGraphSurface:*getwhite());
+    if(modernui&&numsize()==0) {
+        constexpr char title[]="No records yet";
+        constexpr char subtitle[]="Meals, insulin, exercise and notes will appear here";
+        const float contenttop=numlistcontenttop(*this);
+        const float centerx=dleft+dwidth/2.0f;
+        const float centery=dtop+contenttop+(dheight-contenttop)*.37f;
+        const float iconradius=density*27.0f;
+        nvgBeginPath(avg);
+        nvgCircle(avg,centerx,centery,iconradius);
+        nvgFillColor(avg,nvgRGBA(15,39,52,255));
+        nvgFill(avg);
+        nvgStrokeWidth(avg,density*1.5f);
+        nvgStrokeColor(avg,nvgRGBA(45,212,191,190));
+        nvgStroke(avg);
+        nvgBeginPath(avg);
+        constexpr float lineoffsets[]={-.26f, 0.0f, .26f};
+        for(float offset:lineoffsets) {
+            const float y=centery+iconradius*offset;
+            nvgMoveTo(avg,centerx-iconradius*.31f,y);
+            nvgLineTo(avg,centerx+iconradius*.31f,y);
+            }
+        nvgStrokeWidth(avg,density*2.0f);
+        nvgStrokeColor(avg,nvgRGBA(45,212,191,255));
+        nvgStroke(avg);
+        nvgFontFaceId(avg,font);
+        nvgTextAlign(avg,NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
+        nvgFillColor(avg,nvgRGBA(241,245,249,255));
+        nvgFontSize(avg,menusize*1.02f);
+        nvgText(avg,centerx,centery+iconradius+density*27.0f,
+                title,title+sizeof(title)-1);
+        nvgFillColor(avg,nvgRGBA(125,145,166,255));
+        nvgFontSize(avg,smallsize*.92f);
+        nvgText(avg,centerx,centery+iconradius+density*51.0f,subtitle,
+                subtitle+sizeof(subtitle)-1);
+        return;
+        }
     if(getpageoldest(0)!=nullptr) {
         showfromstart(avg);
          }
@@ -1260,6 +1403,7 @@ bool                numpageforward() ;
 bool numpagepast() ;
 
 int JCurve::mouseScale(float dx,float xold,float x) {
+     unlockGraphYRange();
      float grens=dwidth/2.0;
 //     auto startduration=duration;
      auto move=dx*80;
@@ -1350,6 +1494,7 @@ static bool ybezig=false;
     return 0;
     }
 void JCurve::xscaleGesture(float scalex,float midx) {
+    unlockGraphYRange();
     if(fixatex)
         return;
 
@@ -1835,6 +1980,7 @@ void resetcurvestate() {
     showpers=false;
     #endif
     selshown=false;
+    appcurve.graphselectionactive=false;
     selmenu=0;
     emptytap=false;
     nrmenu=0;
@@ -1971,6 +2117,11 @@ int getmenu(int tapx,float dwidth) {
     return tapx*maxmenu/dwidth;
     }
  void    JCurve::withredisplay(NVGcontext* avg,uint32_t nu)  {
+#ifndef WEAROS
+    modernnormal=modernui;
+#else
+    modernnormal=false;
+#endif
     startstep(avg,*getwhite());
 #ifndef WEAROS
     if(showpers) {
@@ -1985,7 +2136,11 @@ int oldtapx=tapx;
 tapx=-8000;
 #endif
 
-        if( !displaycurve(avg,nu)&&( ((tapx
+        if(modernnormal) {
+            nrmenu=0;
+            displaycurve(avg,nu);
+            }
+        else if( !displaycurve(avg,nu)&&( ((tapx
 #ifdef WEAROSx
 
         =oldtapx
@@ -1995,6 +2150,7 @@ tapx=-8000;
            }
         }
     tapx=-8000;
+    modernnormal=false;
 
 
 LOGAR("end withredisplay");
@@ -2343,6 +2499,14 @@ void JCurve::resizescreen(int widthin, int heightin,int initscreenwidth) {
     width=widthin;
     height=heightin;
     LOGGER("resize(%d,%d)\n",width,height);
+#ifndef WEAROS
+    const float graphinset=modernui?density*20.0f:0.0f;
+    dleft=graphinset;
+    dright=graphinset;
+#else
+    dleft=0.0f;
+    dright=0.0f;
+#endif
     dwidth=width-dleft-dright; //Display area for graph in pixels
 
     textheight=density*48;

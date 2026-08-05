@@ -54,7 +54,19 @@ public void onSurfaceChanged(GL10 gl, int w, int h) {
             Natives.resize(w, h,Applic.initscreenwidth);
             widthdiff=w-Applic.initscreenwidth;
         }
-       GlucoseCurve.setgeo(w,h);
+       if(Applic.isWearable) {
+           GlucoseCurve.setgeo(w,h);
+           }
+       else {
+           // On phones the GL surface is now hosted inside the dashboard card.
+           // Legacy Java screens still need the whole window size, not the
+           // smaller chart viewport.
+           MainActivity activity=MainActivity.thisone;
+           if(activity!=null) {
+               MainActivity.setsizes(activity);
+               GlucoseCurve.setgeo(MainActivity.screenwidth,MainActivity.screenheight);
+               }
+           }
         }
    public void onSurfaceCreated(GL10 gl, EGLConfig config) {
         if(Applic.Nativesloaded) {

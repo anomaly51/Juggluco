@@ -33,6 +33,7 @@ import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -138,6 +139,10 @@ public static void setHtmlIgnoringHtmlColors(TextView textView, String html) {
     @SuppressWarnings("deprecation")
   public static   void  basehelp(String text,ContextThemeWrapper act,Consumer<ViewGroup>  okproc,Placer place, ViewGroup.MarginLayoutParams params) {
     hidekeyboard((MainActivity) getActivity(act));
+    if(!isWearable) {
+        phoneHelp(text,act,okproc);
+        return;
+        }
     ScrollView       helpscroll=new ScrollView(act);
     TextView helpview=new TextView(act);
     setHtmlIgnoringHtmlColors(helpview,text);
@@ -215,12 +220,98 @@ final var helplayout2=helplayout;
 };
 
     @SuppressLint("deprecation")
+private static void phoneHelp(String text,ContextThemeWrapper act,
+        Consumer<ViewGroup> okproc) {
+    Activity activity=getActivity(act);
+    if(!(activity instanceof MainActivity))
+        return;
+    hidekeyboard((MainActivity)activity);
+
+    ViewGroup screen=whelplayout==null?null:whelplayout.get();
+    TextView article=whelpview==null?null:whelpview.get();
+    Button close=okbutton==null?null:okbutton.get();
+    boolean needsScreen=screen==null||article==null||close==null
+            ||screen.getContext()!=act;
+
+    if(needsScreen) {
+        LinearLayout page=new LinearLayout(act);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setBackgroundColor(ClinicalUi.window(act));
+        page.setPadding(
+                systembarLeft+ClinicalUi.dp(act,20),
+                systembarTop+ClinicalUi.dp(act,8),
+                systembarRight+ClinicalUi.dp(act,20),
+                systembarBottom+ClinicalUi.dp(act,12));
+
+        close=ClinicalUi.button(act,act.getString(R.string.closename),
+                ClinicalUi.ButtonRole.SECONDARY);
+        close.setMinWidth(ClinicalUi.dp(act,72));
+        page.addView(ClinicalUi.header(act,act.getString(R.string.helpname),close),
+                new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+
+        article=new TextView(act);
+        article.setTextColor(ClinicalUi.primaryText(act));
+        article.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,16.0f);
+        article.setLineSpacing(ClinicalUi.dp(act,3),1.12f);
+        article.setTextIsSelectable(true);
+        article.setMovementMethod(LinkMovementMethod.getInstance());
+        article.setLinksClickable(true);
+        article.setPadding(ClinicalUi.dp(act,2),ClinicalUi.dp(act,18),
+                ClinicalUi.dp(act,2),ClinicalUi.dp(act,32));
+
+        ScrollView scroll=new ScrollView(act);
+        scroll.setFillViewport(true);
+        scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        scroll.setVerticalScrollBarEnabled(true);
+        scroll.setScrollbarFadingEnabled(true);
+        scroll.addView(article,new ScrollView.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+        page.addView(scroll,new LinearLayout.LayoutParams(MATCH_PARENT,0,1.0f));
+
+        screen=page;
+        whelplayout=new WeakReference<>(screen);
+        whelpview=new WeakReference<>(article);
+        okbutton=new WeakReference<>(close);
+        MainActivity.addMyContentView(activity,screen,
+                new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+        }
+    else {
+        screen.setVisibility(VISIBLE);
+        screen.bringToFront();
+        close.setVisibility(VISIBLE);
+        }
+
+    if(MainActivity.rtl) {
+        article.setGravity(Gravity.RIGHT);
+        article.setTextDirection(View.TEXT_DIRECTION_RTL);
+        }
+    else {
+        article.setGravity(Gravity.LEFT);
+        article.setTextDirection(View.TEXT_DIRECTION_LTR);
+        }
+    setHtmlIgnoringHtmlColors(article,text);
+
+    final ViewGroup finalScreen=screen;
+    final Button finalClose=close;
+    Runnable closerun=()-> {
+        finalScreen.setVisibility(GONE);
+        finalClose.setVisibility(GONE);
+        okproc.accept(finalScreen);
+        };
+    setonback(closerun);
+    close.setOnClickListener(v->doonback());
+    }
+
+    @SuppressLint("deprecation")
 public static   void help(String text,ContextThemeWrapper act,Consumer<ViewGroup>  okproc,Placer place, ViewGroup.MarginLayoutParams params) {
     if(doLog) {
           var len=text.length();
           if(doLog) {Log.i(LOG_ID,"help "+((len==0?"":text.substring(0,Math.min(20,len)))));};
           }
       hidekeyboard((MainActivity) getActivity(act));
+      if(!isWearable) {
+          phoneHelp(text,act,okproc);
+          return;
+          }
       Button ok;
       ViewGroup helplayout;
       if(whelplayout==null||((helplayout=whelplayout.get())==null)||act!=helplayout.getContext()||( (ok=    okbutton.get())==null) ) {
@@ -289,15 +380,14 @@ public static   void help(String text,ContextThemeWrapper act,Consumer<ViewGroup
          helplayout.setLayoutParams(params);
         helplayout.requestLayout();
         var activity=getActivity(act);
-       activity.addContentView(helplayout, params);
+       MainActivity.addMyContentView(activity,helplayout,params);
 
 //       var okmarg=getMargins(ok);
        var  okparams =    new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, MainActivity.rtl?Gravity.LEFT:Gravity.RIGHT| Gravity.TOP);
        okparams.topMargin=(int)(MainActivity.systembarTop*.71f);
        okparams.rightMargin=MainActivity.systembarRight;
        okparams.leftMargin=MainActivity.systembarLeft;
-           activity.addContentView(ok, okparams);
-          DynamicThemeUtils.applyTheme(ok);
+           MainActivity.addMyContentView(activity,ok,okparams);
           }
         whelplayout=new WeakReference<ViewGroup>(helplayout);
        }
@@ -372,10 +462,12 @@ public static void hidekeyboard(MainActivity activity) {
             return;
         InputMethodManager imm = (InputMethodManager) activity.getSystemService(INPUT_METHOD_SERVICE);
            View focus= activity.getCurrentFocus();
-       if(focus==null)
+       if(focus==null) {
             focus=activity.findViewById(android.R.id.content);
-           if(focus!=null)
+            }
+       if(focus!=null) {
             imm.hideSoftInputFromWindow(focus.getWindowToken(), 0);
+            }
         }
 public static Activity getActivity(ContextThemeWrapper context) {
     do {

@@ -21,22 +21,22 @@
 
 package tk.glucodata.settings;
 
-import android.app.Activity;
 import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.util.ArrayList;
 
 import androidx.annotation.NonNull;
-import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import tk.glucodata.Applic;
 import tk.glucodata.CheckDirectionBox;
-import tk.glucodata.Layout;
+import tk.glucodata.ClinicalUi;
 import tk.glucodata.Log;
 import tk.glucodata.MainActivity;
 import tk.glucodata.Natives;
@@ -53,7 +53,6 @@ import static tk.glucodata.RingTones.EnableControls;
 import static tk.glucodata.help.hidekeyboard;
 import static tk.glucodata.settings.Settings.hideSystemUI;
 import static tk.glucodata.settings.Settings.removeContentView;
-import static tk.glucodata.util.getbutton;
 import static tk.glucodata.util.getcheckbox;
 
 public class LibreNumbers  {
@@ -77,13 +76,17 @@ static public class LibreNumberAdapter extends RecyclerView.Adapter<LibreNumberH
     @NonNull
 	@Override
     public LibreNumberHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-    	Button view=new Button( parent.getContext());
-
-	view.setTransformationMethod(null);
-   //     view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f);
-   if(!isWearable)
-           view.setTextSize(TypedValue.COMPLEX_UNIT_PX,Applic.largefontsize);
-	view.setLayoutParams(new ViewGroup.LayoutParams(  ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        Button view = ClinicalUi.button(parent.getContext(), "",
+                ClinicalUi.ButtonRole.SECONDARY);
+        view.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        view.setSingleLine(false);
+        view.setMinHeight(ClinicalUi.dp(parent.getContext(), 58));
+        view.setBackground(ClinicalUi.surface(parent.getContext(), false, true));
+        RecyclerView.LayoutParams params = new RecyclerView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.bottomMargin = ClinicalUi.dp(parent.getContext(), 8);
+        view.setLayoutParams(params);
 
         return new LibreNumberHolder(view,layout,sendnumbers,night);
 
@@ -108,26 +111,55 @@ static public class LibreNumberAdapter extends RecyclerView.Adapter<LibreNumberH
 
 public static void    mklayout(MainActivity context, int night, CheckDirectionBox donum, int[] donothing, View parent) {
 	parent.setVisibility(INVISIBLE);
-	Button close = new Button(context);
-	close.setText(R.string.closename);
+	Button close = ClinicalUi.button(context, context.getString(R.string.closename),
+            ClinicalUi.ButtonRole.SECONDARY);
 	RecyclerView recycle = new RecyclerView(context);
-	recycle.setHasFixedSize(true);
-	GridLayoutManager lin=new GridLayoutManager(context,3);
+	recycle.setHasFixedSize(false);
+	LinearLayoutManager lin=new LinearLayoutManager(context);
 	recycle.setLayoutManager(lin);
-	var help=getbutton(context,R.string.helpname);
+	Button help=ClinicalUi.button(context, context.getString(R.string.helpname),
+            ClinicalUi.ButtonRole.SECONDARY);
 
-	var sendnumbers=getcheckbox(context,donum.getText().toString(),donum.isChecked());
-	var remark=new TextView(context);
+	CheckDirectionBox sendnumbers=getcheckbox(context,donum.getText().toString(),donum.isChecked());
+	TextView remark=ClinicalUi.body(context, "");
 	if(!canSendNumbers(night)) {
 		sendnumbers.setEnabled(false);
 		remark.setText(R.string.libresetalllabels);
 		}
 
-	recycle.setLayoutParams(new ViewGroup.LayoutParams(   ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
-    final ViewGroup  librenumlayout=new Layout(context,(x,w,h)->{ hideSystemUI(); return new int[] {w,h}; },new View[] {recycle},new View[]{remark},new View[]{help,sendnumbers,close});
-
-	librenumlayout.setPadding(MainActivity.systembarLeft,MainActivity.systembarTop,MainActivity.systembarRight,MainActivity.systembarBottom);
-	var adapt = new LibreNumberAdapter(librenumlayout,sendnumbers,night);
+    LinearLayout librenumlayout=ClinicalUi.verticalContent(context);
+    librenumlayout.setPaddingRelative(
+            MainActivity.systembarLeft + ClinicalUi.dp(context,20),
+            MainActivity.systembarTop + ClinicalUi.dp(context,8),
+            MainActivity.systembarRight + ClinicalUi.dp(context,20),
+            MainActivity.systembarBottom + ClinicalUi.dp(context,18));
+    librenumlayout.setLayoutParams(new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    librenumlayout.addView(ClinicalUi.header(context,
+            context.getString(R.string.clinical_amount_mapping_title),close));
+    TextView intro=ClinicalUi.body(context,
+            context.getString(R.string.clinical_amount_mapping_intro));
+    intro.setPaddingRelative(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
+            ClinicalUi.dp(context,6));
+    librenumlayout.addView(intro);
+    librenumlayout.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.clinical_sending_section)));
+    librenumlayout.addView(ClinicalUi.card(context,
+            ClinicalUi.toggleRow(context,sendnumbers,
+                    context.getString(R.string.clinical_send_amounts_hint))));
+    if(remark.getText().length()>0) {
+        remark.setPaddingRelative(ClinicalUi.dp(context,4),ClinicalUi.dp(context,10),
+                ClinicalUi.dp(context,4),0);
+        remark.setTextColor(ClinicalUi.danger(context));
+        librenumlayout.addView(remark);
+        }
+    librenumlayout.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.clinical_label_mapping_section)));
+    recycle.setClipToPadding(false);
+    recycle.setPadding(0,0,0,ClinicalUi.dp(context,8));
+    librenumlayout.addView(recycle,new LinearLayout.LayoutParams(MATCH_PARENT,0,1f));
+    librenumlayout.addView(help,new LinearLayout.LayoutParams(MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT));
+    var adapt = new LibreNumberAdapter(librenumlayout,sendnumbers,night);
 	recycle.setAdapter(adapt);
 
 	Runnable closerun=()-> {
@@ -144,8 +176,6 @@ public static void    mklayout(MainActivity context, int night, CheckDirectionBo
 	    poponback();
     	   closerun.run();
     });
-
-        librenumlayout.setBackgroundColor(Applic.backgroundcolor);
         context.addMyContentView(librenumlayout, new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT));
 	help.setOnClickListener(v->{
 		EnableControls(librenumlayout,false);

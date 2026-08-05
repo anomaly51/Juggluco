@@ -15,6 +15,7 @@ import android.content.res.ColorStateList;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -304,8 +305,10 @@ private static class ReselectSpinner extends Spinner {
         
 
         TextView themeName = new TextView(context);
-        themeName.setTextSize(20);
-        themeName.setGravity(Gravity.CENTER_HORIZONTAL);
+        themeName.setTextSize(28);
+        themeName.setTypeface(Typeface.create("sans-serif",Typeface.BOLD));
+        themeName.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+        themeName.setMinHeight(dp(context,64));
 
         TextView themesLabel = new TextView(context);
         themesLabel.setText(R.string.themesname);
@@ -460,17 +463,9 @@ private static class ReselectSpinner extends Spinner {
         int textColor = DynamicThemeUtils.resolveAttributeColor( themeContext, android.R.attr.textColorPrimary, Color.BLACK);
 
 //        root.setBackgroundResource(R.drawable.dialogbackground);
-        Drawable bg=themeContext.getDrawable(R.drawable.dialogbackground);
-//        Drawable bg = getDrawableFromTheme(themeContext, tk.glucodata.R.attr.dialogbackground);
-        if(bg != null) {
-            Log.i(LOG_ID,"getDrawableFromTheme(..)!=null");
-            root.setBackground(bg);
-            }  
-         else {
-            Log.i(LOG_ID,"getDrawableFromTheme(..)==null");
-            int windowBg = DynamicThemeUtils.resolveAttributeColor( themeContext, android.R.attr.windowBackground, Color.WHITE);
-            root.setBackgroundColor(windowBg);
-            }
+        int windowBg = DynamicThemeUtils.resolveAttributeColor(
+                themeContext,android.R.attr.windowBackground,Color.WHITE);
+        root.setBackgroundColor(windowBg);
 
         themeName.setText(selectedTheme.toString());
         themeName.setTextColor(textColor);
@@ -725,12 +720,14 @@ private static void styleSpinnerShell(Context themeContext, Spinner spinner) {
 
     public static void show(MainActivity act,View parent) {
         EnableControls(parent,false);
-        int height= GlucoseCurve.getheight();
         var layout = createThemeConfigurationPanel(act,parent);
-        var params = new FrameLayout.LayoutParams( WRAP_CONTENT, (int)(height*.8f), Gravity.CENTER_HORIZONTAL | Gravity.TOP);
-
-    //    var params = new FrameLayout.LayoutParams( (int)(width*.5f), WRAP_CONTENT, Gravity.CENTER_HORIZONTAL | Gravity.TOP);
-
+        layout.setPaddingRelative(MainActivity.systembarLeft+dp(act,20),
+                MainActivity.systembarTop+dp(act,10),
+                MainActivity.systembarRight+dp(act,20),
+                MainActivity.systembarBottom+dp(act,22));
+        if(layout instanceof Layout)
+            ((Layout)layout).setDistributeExtraSpace(false);
+        var params = new FrameLayout.LayoutParams(MATCH_PARENT,MATCH_PARENT);
         act.addMyContentView(layout, params);
     }
 

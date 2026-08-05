@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="connection_show_secret">Показать секрет</string>
+    <string name="connection_support_section">Помощь</string>
+
+    <string name="connection_web_server_title">Веб-сервер</string>
+    <string name="connection_web_server_intro">Передавайте показания глюкозы доверенным приложениям в своей сети. Локальный HTTP использует порт 17580, а SSL — порт ниже.</string>
+    <string name="connection_server_section">Доступ к серверу</string>
+    <string name="connection_network_section">Сеть</string>
+    <string name="connection_security_section">Защита SSL</string>
+    <string name="connection_ssl_port">Порт SSL</string>
+    <string name="connection_update_interval">Интервал обновления</string>
+    <string name="connection_http_port_note">Когда сервер включён, HTTP доступен на порту 17580.</string>
+    <string name="connection_certificate_hint">Выбрать полную цепочку SSL-сертификатов</string>
+    <string name="connection_private_key_hint">Выбрать соответствующий закрытый ключ</string>
+    <string name="connection_web_help_hint">Настройка, безопасность и совместимые клиенты</string>
+    <string name="connection_secret_too_long">Секрет должен содержать не более %1$d символов.</string>
+    <string name="connection_invalid_port">Введите корректный числовой порт.</string>
+    <string name="connection_invalid_interval">Введите корректный числовой интервал обновления.</string>
+
+    <string name="connection_uploader_title">Отправка в Nightscout</string>
+    <string name="connection_uploader_intro">Фоновая отправка глюкозы и выбранных записей в ваш Nightscout.</string>
+    <string name="connection_account_section">Учётная запись</string>
+    <string name="connection_upload_section">Параметры отправки</string>
+    <string name="connection_maintenance_section">Обслуживание</string>
+    <string name="connection_nightscout_v3">Использовать Nightscout API v3</string>
+    <string name="connection_send_now_hint">Запустить отправку ожидающих данных сейчас</string>
+    <string name="connection_uploader_help_hint">URL, секрет и устранение проблем Nightscout</string>
+    <string name="connection_invalid_url">Введите полный адрес Nightscout с HTTP или HTTPS.</string>
+
+    <string name="connection_show_password">Показать пароль</string>
+    <string name="connection_russian_region">Использовать российский регион LibreView</string>
+    <string name="connection_libre_title">LibreView</string>
+    <string name="connection_libre_intro">Подключите учётную запись LibreView и выберите, какие показания и записи будет отправлять Juggluco.</string>
+    <string name="connection_libre_send_hint">Отправить ожидающие данные LibreView сейчас</string>
+    <string name="connection_libre_resend_hint">Выбрать дату, начиная с которой данные будут отправлены повторно</string>
+    <string name="connection_libre_account_hint">ID учётной записи: %1$d</string>
+    <string name="connection_libre_help_hint">Учётная запись, регион и устранение проблем отправки</string>
+    <string name="connection_libre_credentials_error">Введите адрес от 3 до 255 символов и пароль от 3 до 36 символов.</string>
+
+    <string name="connection_turn_title">Сервер-посредник</string>
+    <string name="connection_turn_intro">Настройте TURN-сервер, который используется, если прямое соединение между устройствами установить не удалось.</string>
+    <string name="connection_server_details_section">Параметры сервера</string>
+    <string name="connection_credentials_section">Учётные данные</string>
+    <string name="connection_turn_help_hint">Когда нужен посредник и как защищаются учётные данные</string>
+    <string name="connection_host_required">Введите имя сервера-посредника.</string>
+
+    <string name="connection_receivers_intro">Выберите, какие из %1$d совместимых приложений могут получать показания глюкозы.</string>
+    <string name="connection_receivers_section">Разрешённые приложения</string>
+
+    <string name="connection_mirror_title">Связанные устройства</string>
+    <string name="connection_mirror_intro">Синхронизируйте выбранные данные глюкозы с другим телефоном, планшетом или часами.</string>
+    <string name="connection_this_device_section">Это устройство</string>
+    <string name="connection_addresses">Wi‑Fi: %1$s\nWi‑Fi Direct: %2$s\nBluetooth PAN: %3$s</string>
+    <string name="connection_receive_port">Порт приёма</string>
+    <string name="connection_mirrors_section">Настроенные устройства</string>
+    <string name="connection_options_section">Инструменты подключения</string>
+    <string name="connection_turn_action_hint">Настроить посредника для подключения вне локальной сети</string>
+    <string name="connection_sync_hint">Изменить направление синхронизации</string>
+    <string name="connection_reinit_hint">Перезапустить все подключения</string>
+    <string name="connection_auto_qr_hint">Создать QR-код автоматической настройки</string>
+    <string name="connection_battery_hint">Разрешить надёжную фоновую синхронизацию</string>
+    <string name="connection_mirror_help_hint">Настройка, конфиденциальность и устранение проблем</string>
+    <string name="connection_mirror_port_error">Используйте порт от 1024 до 65535, не занятый веб-сервером.</string>
+    <string name="connection_mirror_receive">Приём</string>
+    <string name="connection_mirror_last_sync">Последняя синхронизация: %1$s</string>
+    <string name="connection_mirror_disabled">Выключено</string>
+    <string name="connection_mirror_detect">Автоматический адрес</string>
+
+    <string name="connection_mirror_details_title">Сведения о подключении</string>
+    <string name="connection_mirror_details_intro">Проверьте состояние подключения или измените параметры синхронизации.</string>
+    <string name="connection_status_section">Состояние</string>
+    <string name="connection_modify_mirror_hint">Изменить адрес, направление и общие данные</string>
+    <string name="connection_mirror_qr_hint">Показать QR-код этого подключения</string>
+
+    <string name="connection_mirror_editor_title">Подключение устройства</string>
+    <string name="connection_mirror_editor_intro">Выберите способ подключения и данные глюкозы для каждого направления.</string>
+    <string name="connection_transport_section">Способ подключения</string>
+    <string name="connection_endpoint_section">Адрес</string>
+    <string name="connection_address_number">Адрес %1$d</string>
+    <string name="connection_direction_section">Направление соединения</string>
+    <string name="connection_data_flow_section">Общие данные</string>
+    <string name="connection_send_from_hint">С какого момента синхронизировать новые типы данных</string>
+
+    <string name="connection_meters_title">Глюкометры</string>
+    <string name="connection_meters_intro">Управляйте сохранёнными глюкометрами и устройствами, передающими измерения из крови.</string>
+    <string name="connection_meters_section">Сохранённые глюкометры</string>
+    <string name="connection_meter_help_hint">Совместимые модели, сопряжение и устранение проблем</string>
+    <string name="connection_find_meters_title">Поиск глюкометра</string>
+    <string name="connection_find_meters_intro">Во время поиска здесь появляются совместимые устройства Bluetooth поблизости.</string>
+    <string name="connection_scan_filter_section">Тип устройства</string>
+    <string name="connection_nearby_devices_section">Устройства поблизости</string>
+    <string name="connection_device_scan_help_hint">Разрешения Bluetooth и совместимые названия устройств</string>
+
+    <string name="connection_sensor_mirror_title">Зеркальный сенсор</string>
+    <string name="connection_sensor_mirror_intro">Просматривайте сенсоры с другого устройства Juggluco и управляйте локальным Bluetooth.</string>
+    <string name="connection_sensor_section">Сенсор</string>
+    <string name="connection_active_sensor">Активный сенсор</string>
+    <string name="connection_sensor_mirror_help_hint">Как работают зеркальные сенсоры и владение Bluetooth</string>
+
+    <string name="connection_account_id_title">ID учётной записи LibreView</string>
+    <string name="connection_account_id_intro">Используйте ID, полученный от LibreView, или введите известный ID учётной записи вручную.</string>
+    <string name="connection_account_id_source_section">Источник ID</string>
+    <string name="connection_account_id_field">ID учётной записи</string>
+    <string name="connection_account_id_server_title">Получить из LibreView</string>
+    <string name="connection_account_id_server_hint">Запросить ID с помощью сохранённых данных учётной записи LibreView</string>
+    <string name="connection_account_id_error_empty">Введите ID учётной записи.</string>
+    <string name="connection_account_id_error_format">ID должен быть целым числом.</string>
+    <string name="connection_account_request_title">Запросить ID учётной записи?</string>
+    <string name="connection_account_request_message">Для связи с LibreView будут использованы сохранённые данные. Полученный ID заменит текущее значение.</string>
+    <string name="connection_account_request_action">Запросить</string>
+
+    <string name="connection_resend_title">Повторная отправка в LibreView</string>
+    <string name="connection_resend_intro">Выберите точный момент, начиная с которого данные нужно снова поставить в очередь.</string>
+    <string name="connection_resend_from_section">Отправить повторно с</string>
+    <string name="connection_date_label">Дата</string>
+    <string name="connection_time_label">Время</string>
+    <string name="connection_resend_confirm_title">Поставить данные в очередь снова?</string>
+    <string name="connection_resend_confirm_message">Ранее отправленные данные начиная с выбранной даты будут снова поставлены в очередь LibreView.</string>
+    <string name="connection_resend_confirm_action">Отправить снова</string>
+    <string name="connection_nightscout_resend_title">Повторно отправить данные Nightscout?</string>
+    <string name="connection_nightscout_resend_message">Позиция отправки будет сброшена, чтобы данные глюкозы можно было загрузить ещё раз.</string>
+
+    <string name="connection_auto_qr_title">Автоматическая настройка QR</string>
+    <string name="connection_auto_qr_intro">Выберите направление и сеть. Juggluco создаст готовое зеркальное подключение.</string>
+    <string name="connection_auto_qr_send_section">Это устройство отправляет</string>
+    <string name="connection_auto_qr_receive_section">Это устройство принимает</string>
+    <string name="connection_home_network_title">Домашняя сеть</string>
+    <string name="connection_home_network_hint">Прямая настройка устройств в одной доверенной сети</string>
+    <string name="connection_internet_title">Интернет</string>
+    <string name="connection_internet_hint">Настройка через посредник для устройств в разных сетях</string>
+    <string name="connection_qr_title">QR настройки зеркала</string>
+    <string name="connection_qr_intro">Отсканируйте код на другом устройстве с Juggluco. Не показывайте его посторонним: он содержит данные подключения.</string>
+    <string name="connection_qr_help_hint">Как отсканировать код и завершить настройку зеркала</string>
+
+    <string name="connection_meter_config_title">Настройки глюкометра</string>
+    <string name="connection_meter_config_intro">Выберите начало импорта измерений крови и способ их сохранения.</string>
+    <string name="connection_meter_device_section">Устройство</string>
+    <string name="connection_meter_import_section">Импортировать измерения после</string>
+    <string name="connection_meter_record_section">Тип записи</string>
+    <string name="connection_meter_record_hint">Выбранная метка будет использоваться для измерений, полученных с этого глюкометра.</string>
+    <string name="connection_meter_invalid_record">Выберите корректную метку измерения крови.</string>
+    <string name="connection_meter_delete_title">Удалить этот глюкометр?</string>
+    <string name="connection_meter_delete_message">Сохранённое Bluetooth-сопряжение будет удалено. Существующие записи глюкозы останутся на устройстве.</string>
+    <string name="connection_meter_cancelled">Глюкометр не будет использоваться.</string>
+
+    <string name="connection_mirror_delete_title">Удалить это подключение?</string>
+    <string name="connection_mirror_delete_message">Зеркальное устройство будет удалено. Его можно добавить снова позднее.</string>
+    <string name="connection_mirror_resend_title">Отправить данные зеркала повторно?</string>
+    <string name="connection_mirror_resend_message">Позиция передачи для этого подключения будет сброшена, и доступные данные будут отправлены повторно.</string>
+    <string name="connection_discard_title">Отменить несохранённые изменения?</string>
+    <string name="connection_discard_message">Изменения на этом экране не будут сохранены.</string>
+    <string name="connection_discard_action">Отменить изменения</string>
+    <string name="connection_sensor_finish_message">Сенсор будет отмечен завершённым на этом устройстве. Получение его показаний прекратится.</string>
+</resources>

@@ -21,6 +21,7 @@
 
 package tk.glucodata;
 
+import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.text.InputFilter;
@@ -34,6 +35,8 @@ import android.widget.Button;
 
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Space;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -80,7 +83,7 @@ class GarminStatus {
 	AllData alldata;
 	Button next;
 	Button sync;
-	Layout layout;
+	View layout;
 	private static final String LOG_ID = "GarminStatus";
 
 	static String displaystr(IQDevice device) {
@@ -89,127 +92,109 @@ class GarminStatus {
 		return ((friendly == null) ? device.getDeviceIdentifier() : friendly) + " - " + stat.name();
 	}
 
-	static private void setidview(MainActivity context, AllData alldata,View parent,View parentlayout) {
+	static boolean validGarminAppId(String value) {
+		return value!=null&&value.matches("[0-9A-Fa-f]{32}");
+	}
+
+	static private void setidview(MainActivity context,AllData alldata,View parent,
+			View parentlayout) {
 		EnableControls(parent,false);
-		var idlabel = getlabel(context, "Garmin Watch app ID:");
-
-		var defaultapp = new CheckDirectionBox(context);
-		defaultapp.setText(R.string.defaultname);
-		var editid = new EditText(context);
-		editid.setImeOptions(tk.glucodata.settings.Settings.editoptions);
-		final String defaultid = Natives.getdefaultid();
-		String garminid = Natives.getgarminid();
-		editid.setText(garminid);
-		var filter = new InputFilter() {
-			@Override
-			public CharSequence filter(CharSequence source,
-									   int start,
-									   int end,
-									   Spanned dest,
-									   int dstart,
-									   int dend) {
-				StringBuilder builder = new StringBuilder();
-				for (int i = start; i < end; i++) {
-					if (Character.digit(source.charAt(i), 16) == -1)
-						return "";
-					builder.append(Character.toUpperCase(source.charAt(i)));
+		CheckDirectionBox defaultApp=getcheckbox(context,R.string.defaultname,false);
+		EditText appId=new EditText(context);
+		appId.setImeOptions(tk.glucodata.settings.Settings.editoptions);
+		String defaultId=Natives.getdefaultid();
+		String savedId=Natives.getgarminid();
+		appId.setText(savedId);
+		appId.setFilters(new InputFilter[]{(source,start,end,dest,dstart,dend)-> {
+			StringBuilder result=new StringBuilder();
+			for(int index=start;index<end;index++) {
+				if(Character.digit(source.charAt(index),16)==-1)
+					return "";
+				result.append(Character.toUpperCase(source.charAt(index)));
 				}
-				return builder.toString();
-			}
-		};
-		editid.setFilters(new InputFilter[]{filter});
-		if (defaultid.equals(garminid)) {
-			defaultapp.setChecked(true);
-			editid.setInputType(TYPE_NULL);
-		} else {
-			defaultapp.setChecked(false);
-//			editid.setInputType(InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD|InputType.TYPE_TEXT_FLAG_CAP_WORDS);
-			editid.setInputType(InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-			//	editid.setKeyListener(DigitsKeyListener.getInstance("0123456789ABCDEF"));
-		}
+			return result.toString();
+			}});
+		ConnectionUi.styleInput(appId);
+		defaultApp.setChecked(defaultId.equals(savedId));
+		if(defaultApp.isChecked())
+			appId.setInputType(TYPE_NULL);
+		else
+			appId.setInputType(InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+		defaultApp.setOnCheckedChangeListener((button,checked)-> {
+			if(checked) {
+				appId.setText(defaultId);
+				appId.setInputType(TYPE_NULL);
+				hidekeyboard(context);
+				}
+			else {
+				appId.setInputType(InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+				appId.requestFocus();
+				tk.glucodata.help.showkeyboard(context,appId);
+				}
+			});
 
-		defaultapp.setOnCheckedChangeListener(
-				(buttonView, isChecked) -> {
-					if (isChecked) {
-						editid.setText(defaultid);
-						editid.setInputType(TYPE_NULL);
-						hidekeyboard(context);
-						context.hideSystemUI();
-					} else {
-						//		editid.setInputType(InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD|InputType.TYPE_TEXT_FLAG_CAP_WORDS);
-						editid.setInputType(InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-//					editid.setKeyListener(DigitsKeyListener.getInstance("0123456789ABCDEF"));
-						editid.requestFocus();
-						tk.glucodata.help.showkeyboard(context, editid);
-					}
-
-				});
-		var Save = getbutton(context, R.string.save);
-		var Cancel = getbutton(context, R.string.cancel);
-
-		var layout = new Layout(context, (l, w, h) -> {
-        /*
-			var width = GlucoseCurve.getwidth();
-			if (width > w)
-				l.setX((width - w) / 2);
-			l.setY(0);
-            */
-			return new int[]{w, h};
-		}, new View[]{idlabel, defaultapp}, new View[]{editid}, new View[]{Cancel, Save});
-
-		float density = GlucoseCurve.metrics.density;
-		int laypad = (int) (density * 4.0);
-		layout.setPadding(laypad * 2, laypad * 2, laypad * 2, laypad);
-
-
-//	layout.setBackgroundResource(R.drawable.dialogbackground);
-   layout.setBackgroundResource(R.drawable.dialogbackground);
-
-    var  params =    new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER_HORIZONTAL);
-
-    context.addMyContentView(layout, params);
-//		context.addMyContentView(layout, new ViewGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
-		context.setonback(() -> {
+		Button cancel=ConnectionUi.headerButton(context,R.string.cancel);
+		Button save=ClinicalUi.button(context,context.getString(R.string.save),
+				ClinicalUi.ButtonRole.PRIMARY);
+		TextView error=ConnectionUi.status(context,"",true);
+		LinearLayout content=ConnectionUi.content(context);
+		content.addView(ClinicalUi.header(context,
+				context.getString(R.string.clinical_garmin_id_title),cancel));
+		content.addView(ConnectionUi.intro(context,R.string.clinical_garmin_id_intro));
+		content.addView(ClinicalUi.sectionLabel(context,
+				context.getString(R.string.clinical_garmin_app_section)));
+		content.addView(ClinicalUi.card(context,
+				ConnectionUi.directToggle(context,defaultApp),
+				ClinicalUi.fieldRow(context,
+						context.getString(R.string.clinical_garmin_app_id),appId)));
+		LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+		errorParams.topMargin=ClinicalUi.dp(context,12);
+		error.setLayoutParams(errorParams);
+		content.addView(error);
+		LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+		saveParams.topMargin=ClinicalUi.dp(context,20);
+		save.setLayoutParams(saveParams);
+		content.addView(save);
+		ScrollView screen=ConnectionUi.screen(context,content);
+		ConnectionUi.fullScreen(context,screen);
+		context.setonback(()-> {
 			EnableControls(parent,true);
-			removeContentView(layout);
+			removeContentView(screen);
 			context.hideSystemUI();
 			hidekeyboard(context);
-
-		});
-		Cancel.setOnClickListener(
-				v -> context.doonback()
-                                );
-		Save.setOnClickListener(
-				v -> {
-					boolean changed = false;
-					if (defaultapp.isChecked()) {
-						if (!defaultid.equals(garminid)) {
-							changed = Natives.setgarminid(null);
-						}
-					} else {
-						String id = editid.getText().toString();
-						int idlen = id.length();
-						if (idlen != 32) {
-							Applic.argToaster(context, "ID should be 32 characters long (now " + idlen + ")", Toast.LENGTH_SHORT);
-							return;
-						}
-						if (!garminid.equals(id)) {
-							if (!(changed = Natives.setgarminid(id))) {
-								Applic.argToaster(context, "Changed id failed", Toast.LENGTH_SHORT);
-								return;
-							}
-
+			});
+		cancel.setOnClickListener(view->context.doonback());
+		save.setOnClickListener(view-> {
+			boolean changed=false;
+			if(defaultApp.isChecked()) {
+				if(!defaultId.equals(savedId))
+					changed=Natives.setgarminid(null);
+				}
+			else {
+				String value=appId.getText().toString();
+				if(!validGarminAppId(value)) {
+					error.setText(R.string.clinical_garmin_id_error);
+					error.setVisibility(VISIBLE);
+					return;
+					}
+				if(!savedId.equals(value)) {
+					changed=Natives.setgarminid(value);
+					if(!changed) {
+						error.setText(R.string.clinical_garmin_id_save_error);
+						error.setVisibility(VISIBLE);
+						return;
 						}
 					}
-					if (changed)
-						alldata.reinit(context);
-					context.doonback();
-					context.doonback();
-					context.doonback();
-					new GarminStatus(context, alldata,parentlayout);
-
-				});
-
+				}
+			if(changed)
+				alldata.reinit(context);
+			context.doonback();
+			context.doonback();
+			context.doonback();
+			new GarminStatus(context,alldata,parentlayout);
+			});
 	}
 
 	public GarminStatus(MainActivity context, AllData alldata,View parentlayout) {
@@ -233,33 +218,37 @@ class GarminStatus {
 
 			@Override
 			public void onNothingSelected(AdapterView<?> parent) {
-				Applic.argToaster(parent.getContext(), "Nothing selected", Toast.LENGTH_SHORT);
+				Applic.argToaster(parent.getContext(),R.string.clinical_garmin_nothing_selected,
+						Toast.LENGTH_SHORT);
 			}
 		});
 		RangeAdapter<IQDevice> adap = new RangeAdapter<>(alldata.devices, context, GarminStatus::displaystr);
 		spinner.setAdapter(adap);
 		avoidSpinnerDropdownFocus(spinner);
+		spinner.setMinimumHeight(ClinicalUi.dp(context,54));
+		spinner.setPaddingRelative(ClinicalUi.dp(context,12),0,
+				ClinicalUi.dp(context,12),0);
+		spinner.setBackground(ClinicalUi.surface(context,false,true));
 
 		sdkreadyview = new TextView(context);
-		float density = GlucoseCurve.metrics.density;
-		int pad = (int) density;
-		int morepad = (int) (density * 4.0);
-		sdkreadyview.setPadding(pad, morepad, morepad, pad * 2);
-//		sdkreadyview.setPadding(0,0,0,0);
 		registeredview = new TextView(context);
 		restview = new TextView(context);
-		sync = new Button(context);
-		sync.setText(R.string.sync);
-		sync.setOnClickListener(
-				v -> alldata.sync());
-		Button refresh = new Button(context);
-		refresh.setText(R.string.refresh);
-		refresh.setOnClickListener(
-				v -> show());
-		Button ok = new Button(context);
-		ok.setText(R.string.closename);
-		Button help = getbutton(context, R.string.helpname);
-		help.setOnClickListener(v -> helplight(R.string.kerfstok, context));
+		for(TextView status:new TextView[]{sdkreadyview,registeredview,restview}) {
+			status.setTextColor(ClinicalUi.primaryText(context));
+			status.setTextSize(15);
+			status.setPadding(ClinicalUi.dp(context,16),ClinicalUi.dp(context,12),
+					ClinicalUi.dp(context,16),ClinicalUi.dp(context,12));
+			}
+		sync=ClinicalUi.button(context,context.getString(R.string.sync),
+				ClinicalUi.ButtonRole.PRIMARY);
+		sync.setOnClickListener(view->alldata.sync());
+		Button close=ConnectionUi.headerButton(context,R.string.closename);
+		LinearLayout refresh=ClinicalUi.actionRow(context,context.getString(R.string.refresh),
+				context.getString(R.string.clinical_garmin_refresh_hint));
+		refresh.setOnClickListener(view->show());
+		LinearLayout help=ClinicalUi.actionRow(context,context.getString(R.string.helpname),
+				context.getString(R.string.clinical_garmin_help_hint));
+		help.setOnClickListener(view->helplight(R.string.kerfstok,context));
 		glucose = new CheckDirectionBox(context);
 		glucose.setText(R.string.glucose);
 		glucose.setChecked(alldata.sendtowatch);
@@ -271,47 +260,48 @@ class GarminStatus {
 					else
 						alldata.stopglucose();
 				});
-		next = new Button(context);
-		next.setText(R.string.sendqueue);
+		next=ClinicalUi.button(context,context.getString(R.string.sendqueue),
+				ClinicalUi.ButtonRole.SECONDARY);
 		next.setOnClickListener(v -> alldata.nextmessage());
-		Button reinit = new Button(context);
-		reinit.setText(R.string.reinit);
-		reinit.setOnClickListener(v -> alldata.reinit(context));
-//		var setid = getbutton(context, "ID");
-//		setid.setOnClickListener(v -> setidview(context, alldata));
-		Button config = getbutton(context, R.string.config);
-		config.setOnClickListener(v -> kerfstokconfig(context,alldata,layout,parentlayout));
-//		restview.setPadding(0,0,0,0);
-		layout = new Layout(context, (l, w, h) -> {
-        /*
-			var width = GlucoseCurve.getwidth();
-			var height = GlucoseCurve.getheight();
-			if (width > w && height > h) {
-				l.setX((width - w) / 2);
-				l.setY((height - h) / 2);
-			}
-            */
-			return new int[]{w, h};
-		}, new View[]{spinner, refresh}, new View[]{sdkreadyview, registeredview,help}, new View[]{restview,glucose}, new View[]{sync, next, reinit, config, ok}
-		);
-//	layout.setBackgroundResource(R.drawable.dialogbackground);
-   layout.setBackgroundResource(R.drawable.dialogbackground);
-		int laypad = (int) (density * 4.0);
-		layout.setPadding(laypad * 2, laypad * 2, laypad * 2, laypad*2);
+		LinearLayout reinit=ClinicalUi.actionRow(context,context.getString(R.string.reinit),
+				context.getString(R.string.clinical_garmin_reinit_hint));
+		reinit.setOnClickListener(view->alldata.reinit(context));
+		LinearLayout config=ClinicalUi.actionRow(context,context.getString(R.string.config),
+				context.getString(R.string.clinical_garmin_config_hint));
+		config.setOnClickListener(view->kerfstokconfig(context,alldata,layout,parentlayout));
 
-    var  params =    new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER|Gravity.CENTER_HORIZONTAL);
-
-    context.addMyContentView(layout, params);
-	//	context.addMyContentView(layout, new ViewGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
-
-		ok.setOnClickListener(
-				v -> {
-				 context.doonback();
-				}
-			);
+		LinearLayout content=ConnectionUi.content(context);
+		content.addView(ClinicalUi.header(context,
+				context.getString(R.string.clinical_garmin_status_title),close));
+		content.addView(ConnectionUi.intro(context,R.string.clinical_garmin_status_intro));
+		content.addView(ClinicalUi.sectionLabel(context,
+				context.getString(R.string.clinical_garmin_device_section)));
+		content.addView(ClinicalUi.card(context,
+				ClinicalUi.fieldRow(context,context.getString(R.string.clinical_garmin_device),spinner),
+				refresh));
+		content.addView(ClinicalUi.sectionLabel(context,
+				context.getString(R.string.clinical_garmin_connection_section)));
+		content.addView(ClinicalUi.card(context,sdkreadyview,registeredview,restview));
+		content.addView(ClinicalUi.sectionLabel(context,
+				context.getString(R.string.clinical_garmin_transfer_section)));
+		content.addView(ClinicalUi.card(context,ConnectionUi.directToggle(context,glucose)));
+		content.addView(sync,new LinearLayout.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT));
+		LinearLayout.LayoutParams nextParams=new LinearLayout.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+		nextParams.topMargin=ClinicalUi.dp(context,10);
+		next.setLayoutParams(nextParams);
+		content.addView(next);
+		content.addView(ClinicalUi.sectionLabel(context,
+				context.getString(R.string.clinical_garmin_tools_section)));
+		content.addView(ClinicalUi.card(context,reinit,config,help));
+		ScrollView screen=ConnectionUi.screen(context,content);
+		layout=screen;
+		ConnectionUi.fullScreen(context,screen);
+		close.setOnClickListener(view->context.doonback());
 		context.setonback(() ->  {
                         EnableControls(parentlayout,true);
-                        removeContentView(layout);
+                        removeContentView(screen);
                         });
 		show();
 	}
@@ -324,31 +314,36 @@ class GarminStatus {
 				spinner.setSelection(alldata.devused);
 				//		spinner.getAdapter().notifyDataSetChanged();
 			}
-			sdkreadyview.setText("SDK ready: " + (alldata.sdkready() ? "Yes" : "No"));
-			registeredview.setText("Registered: " + (alldata.usewatch ? "Yes" : "No"));
+			Context resources=spinner.getContext();
+			String yes=resources.getString(R.string.clinical_state_yes);
+			String no=resources.getString(R.string.clinical_state_no);
+			sdkreadyview.setText(resources.getString(R.string.clinical_garmin_sdk_ready,
+					alldata.sdkready()?yes:no));
+			registeredview.setText(resources.getString(R.string.clinical_garmin_registered,
+					alldata.usewatch?yes:no));
 	/*	if(alldata.appmissing==0)
 			apppresent.setVisibility(INVISIBLE);
 		else*/
 			StringBuilder builder = new StringBuilder();
 			if (alldata.sendtime != 0L) {
-				builder.append("Send: Yes\t\t");
-				builder.append(timestring(alldata.sendtime));
-				builder.append("\n");
+				builder.append(resources.getString(R.string.clinical_garmin_sent_at,
+						timestring(alldata.sendtime))).append('\n');
 				if (alldata.sendtime > alldata.statustime) {
-					builder.append("No status information\n");
+					builder.append(resources.getString(R.string.clinical_garmin_no_status))
+							.append('\n');
 				} else {
-					builder.append("Status:\t");
-					builder.append(alldata.sendstatus.name());
-					builder.append("\n");
+					builder.append(resources.getString(R.string.clinical_garmin_status_value,
+							alldata.sendstatus.name())).append('\n');
 				}
 			} else {
-				builder.append("Send: No\n");
+				builder.append(resources.getString(R.string.clinical_garmin_not_sent))
+						.append('\n');
 			}
 			if (alldata.receivedmessage == 0) {
-				builder.append("Received: No");
+				builder.append(resources.getString(R.string.clinical_garmin_not_received));
 			} else {
-				builder.append("Received: Yes\t\t");
-				builder.append(timestring(alldata.receivedmessage));
+				builder.append(resources.getString(R.string.clinical_garmin_received_at,
+						timestring(alldata.receivedmessage)));
 			}
 			String alltext=builder.toString();
 			{if(doLog) {Log.i(LOG_ID,"setText "+alltext);};};
@@ -372,10 +367,38 @@ class GarminStatus {
 
 	static private void kerfstokconfig(MainActivity context,AllData alldata,View parent,View parentlayout) {
 		EnableControls(parent,false);
-		var setid = getbutton(context, "ID");
+		Button close=ConnectionUi.headerButton(context,R.string.closename);
+		String appTitle=(AllData.appmissing<0)?context.getString(R.string.watchappinstalled):
+				context.getString(R.string.getkerfstok);
+		LinearLayout app=ClinicalUi.actionRow(context,appTitle,
+				context.getString(R.string.clinical_garmin_store_hint));
+		LinearLayout appId=ClinicalUi.actionRow(context,
+				context.getString(R.string.clinical_garmin_app_id),
+				context.getString(R.string.clinical_garmin_id_hint));
+		LinearLayout shortcuts=ClinicalUi.actionRow(context,
+				context.getString(R.string.shutcuts),
+				context.getString(R.string.clinical_garmin_shortcuts_hint));
+		CheckDirectionBox darkMode=getcheckbox(context,R.string.darkmode,getkerfstokblack());
+		LinearLayout help=ClinicalUi.actionRow(context,context.getString(R.string.helpname),
+				context.getString(R.string.clinical_garmin_config_help_hint));
 
-		Button apppresent = getbutton(context, ((AllData.appmissing < 0) ? context.getString(R.string.watchappinstalled) : context.getString(R.string.getkerfstok)));
-		apppresent.setOnClickListener(v -> {
+		LinearLayout content=ConnectionUi.content(context);
+		content.addView(ClinicalUi.header(context,
+				context.getString(R.string.clinical_garmin_config_title),close));
+		content.addView(ConnectionUi.intro(context,R.string.clinical_garmin_config_intro));
+		content.addView(ClinicalUi.sectionLabel(context,
+				context.getString(R.string.clinical_garmin_app_section)));
+		content.addView(ClinicalUi.card(context,app,appId,shortcuts));
+		content.addView(ClinicalUi.sectionLabel(context,
+				context.getString(R.string.clinical_garmin_appearance_section)));
+		content.addView(ClinicalUi.card(context,ConnectionUi.directToggle(context,darkMode)));
+		content.addView(ClinicalUi.sectionLabel(context,
+				context.getString(R.string.connection_support_section)));
+		content.addView(ClinicalUi.card(context,help));
+		ScrollView screen=ConnectionUi.screen(context,content);
+		ConnectionUi.fullScreen(context,screen);
+
+		app.setOnClickListener(v -> {
 			final String url = "https://apps.garmin.com/en-US/apps/b6348ccc-86d8-4780-8013-d9e19fed5260";
 			Uri uri = Uri.parse(url);
 			Intent intent = new Intent(Intent.ACTION_VIEW, uri);
@@ -389,50 +412,23 @@ class GarminStatus {
 				}
 
 		});
-		var shortcuts = getbutton(context, R.string.shutcuts);
 		shortcuts.setOnClickListener(v -> {
             context.themeLightBars();
 			hidekeyboard(context);
 			new Shortcuts().mkshortlistview(context);
 		});
-		var blackmode = getcheckbox(context,R.string.darkmode, getkerfstokblack());
-		blackmode.setOnCheckedChangeListener((buttonView, isChecked) -> {
+		darkMode.setOnCheckedChangeListener((buttonView, isChecked) -> {
 			Applic.app.numdata.setcolor(isChecked);
 			setkerfstokblack(isChecked);
 		});
-		var Help = getbutton(context, R.string.helpname);
-		Help.setOnClickListener(v-> helplight(tk.glucodata.R.string.garminconfig,context));
-		var Close = getbutton(context, R.string.closename);
-		var layout = new Layout(context, (l, w, h) -> {
-        /*
-			var width = GlucoseCurve.getwidth();
-			var height = GlucoseCurve.getheight();
-			if (width > w)
-				l.setX((width - w) / 2);
-			if (height > h)
-				l.setY((height - h) / 2);
-                */
-			return new int[]{w, h};
-		},new View[]{apppresent,setid}, new View[]{shortcuts, blackmode}, new View[]{Help, Close});
-
-		float density = GlucoseCurve.metrics.density;
-		int laypad = (int) (density * 4.0);
-		layout.setPadding(laypad * 2, laypad * 2, laypad * 2, laypad);
-		setid.setOnClickListener(v -> setidview(context, alldata,layout,parentlayout));
-
-		layout.setBackgroundColor(Applic.backgroundcolor);
-
-    var  params =    new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT,  Gravity.CENTER|Gravity.CENTER_HORIZONTAL);
-
-    context.addMyContentView(layout, params);
-	//	context.addMyContentView(layout, new ViewGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT));
+		appId.setOnClickListener(v->setidview(context,alldata,screen,parentlayout));
+		help.setOnClickListener(v->helplight(R.string.garminconfig,context));
 		context.setonback(() -> {
 			EnableControls(parent,true);
-			removeContentView(layout);
+			removeContentView(screen);
 			context.hideSystemUI();
 			hidekeyboard(context);
 		});
-		Close.setOnClickListener(
-				v -> context.doonback());
+		close.setOnClickListener(view->context.doonback());
 	}
 }

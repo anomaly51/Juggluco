@@ -317,6 +317,22 @@ boolean usebaseline=true;
 int rowmax;
 int totHeight;
 int maxHeight; 
+private boolean distributeExtraSpace=Applic.isWearable;
+
+/**
+ * Legacy phone screens used to spread every row over the full display, which
+ * produced enormous, unpredictable gaps. Phone rows are compact by default;
+ * a rare screen that genuinely needs the old distribution can opt in.
+ */
+public void setDistributeExtraSpace(boolean distribute) {
+    distributeExtraSpace=distribute;
+    requestLayout();
+    }
+
+private int rowSpacing() {
+    return Applic.isWearable?0:Math.round(
+            6.0f*getResources().getDisplayMetrics().density);
+    }
 
 
 private int[] domeasure(int widthMeasureSpec, int heightMeasureSpec) {
@@ -332,6 +348,8 @@ private int[] domeasure(int widthMeasureSpec, int heightMeasureSpec) {
          totHeight += height;
          start=rowend[i];
          }
+   if(rownr>1)
+       totHeight+=rowSpacing()*(rownr-1);
 
    int maxWidth = 0;
     for(int el:maxwidths) {
@@ -519,12 +537,13 @@ protected void onLayout(boolean changed, int l, int t, int r, int b) {
     int ptop=t;
     int start=0;
     int height=b-t;
-    int heightleft=height-totHeight;
-    int yspace= (rownr>1&&heightleft>0)?(heightleft/(rownr-1)):0;
+    int heightleft=Math.max(0,height-totHeight);
+    int yspace=distributeExtraSpace&&rownr>1&&heightleft>0
+            ?heightleft/(rownr-1):rowSpacing();
     for(int i=0;i<rownr;i++) {
         //Log.i(LOG_ID,"row="+i+" top="+top);
         if(i==rowmax) 
-            top=layrow(top,start,i,maxHeight+heightleft);
+            top=layrow(top,start,i,maxHeight+(distributeExtraSpace?heightleft:0));
         else {
             top=layrow(top,start,i,maxHeight);
             }

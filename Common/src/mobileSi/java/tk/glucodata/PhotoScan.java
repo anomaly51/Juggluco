@@ -35,6 +35,7 @@ import static tk.glucodata.ZXing.scanZXingAlg;
 import static tk.glucodata.settings.Settings.editoptions;
 import static tk.glucodata.settings.Settings.removeContentView;
 import static tk.glucodata.util.getbutton;
+import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 import static tk.glucodata.util.getlabel;
 import static tk.glucodata.util.getcheckbox;
@@ -48,7 +49,9 @@ import android.view.View;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.RadioGroup;
+import android.widget.ScrollView;
 import android.widget.Toast;
 
 
@@ -102,40 +105,53 @@ longserialnumber
 Sibionics2:
 */
 private static void asktransmitter(MainActivity act,String name,long sensorptr) {
-    var title=getlabel(act,R.string.scantranstitle);
-    var message=getlabel(act, R.string.scantransmessage);
-    var cancel=getbutton(act,R.string.cancel);
-    var ok=getbutton(act,R.string.ok);
-    var reset=getcheckbox(act,R.string.resetname, true);
+    act.lightBars(false);
+    var cancel=ClinicalUi.button(act,act.getString(R.string.cancel),
+            ClinicalUi.ButtonRole.SECONDARY);
+    var proceed=ClinicalUi.button(act,act.getString(R.string.hardware_scan_transmitter),
+            ClinicalUi.ButtonRole.PRIMARY);
+    var reset=getcheckbox(act,R.string.resetname,true);
+
+    LinearLayout content=ClinicalUi.verticalContent(act);
+    content.setPadding(ClinicalUi.dp(act,20),
+            MainActivity.systembarTop+ClinicalUi.dp(act,8),
+            ClinicalUi.dp(act,20),ClinicalUi.dp(act,30));
+    content.addView(ClinicalUi.header(act,
+            act.getString(R.string.scantranstitle),cancel));
+    var message=ClinicalUi.body(act,act.getString(R.string.scantransmessage));
+    message.setPadding(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),
+            ClinicalUi.dp(act,8));
+    content.addView(message);
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.hardware_sensor_setup)));
+    content.addView(ClinicalUi.card(act,ClinicalUi.toggleRow(act,reset,
+            act.getString(R.string.hardware_reset_helper))));
+    LinearLayout.LayoutParams proceedParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    proceedParams.topMargin=ClinicalUi.dp(act,20);
+    content.addView(proceed,proceedParams);
+    ScrollView screen=ClinicalUi.scrollScreen(act,content);
 
     cancel.setOnClickListener(v-> {
         MainActivity.doonback();
         });
-    var layout=new Layout(act,(l,w,h)->{
-         return new int[] {w,h};
-           },new View[]{title},new View[]{message},new View[]{cancel,reset,ok});
-    ok.setOnClickListener(v-> {
+    proceed.setOnClickListener(v-> {
         MainActivity.poponback();
-        removeContentView(layout);
+        removeContentView(screen);
         Natives.setSensorptrResetSibionics2(sensorptr,reset.isChecked());
         scanner(act,REQUEST_BARCODE_SIB2,sensorptr);
         });   
    MainActivity.setonback(() -> {
-      removeContentView(layout);
+      removeContentView(screen);
       Natives.finishfromSensorptr(sensorptr);
       SensorBluetooth.sensorEnded(name);
       });
-    layout.setBackgroundResource(R.drawable.dialogbackground);
-   final int rand=(int)tk.glucodata.GlucoseCurve.metrics.density*10;
-   final int siderand=(int)tk.glucodata.GlucoseCurve.metrics.density*20;
-   layout.setPadding(siderand,rand,siderand,rand);
-    var  params =    new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER_HORIZONTAL| Gravity.CENTER);
-
-   act.addMyContentView(layout, params);
+   act.addMyContentView(screen,new FrameLayout.LayoutParams(MATCH_PARENT,MATCH_PARENT));
     }
 
 
 private static void selectType(String name,long sensorptr,MainActivity act) {
+    act.lightBars(false);
     int subtype=Natives.getSensorptrSiSubtype(sensorptr);
 
     var group=new RadioGroup(act);
@@ -145,20 +161,30 @@ private static void selectType(String name,long sensorptr,MainActivity act) {
     group.addView(getradiobuttonId(act,R.string.chsibionics,id++));
     group.addView(getradiobuttonId(act,R.string.sibionics2,id++));
     group.check(subtype);
-   var ok=getbutton(act, R.string.ok);
-    int height = GlucoseCurve.getheight();
-    int width = GlucoseCurve.getwidth();
-   final int rand=(int)tk.glucodata.GlucoseCurve.metrics.density*15;
-   group.setPadding(rand,rand,(int)tk.glucodata.GlucoseCurve.metrics.density*25,(int)tk.glucodata.GlucoseCurve.metrics.density*20);
-   var layout=new Layout(act,(l,w,h)->{
-//         l.setX((width-w)*.5f);
- //        l.setY((height-h)*.3f);
-         return new int[] {w,h};
-           },new View[]{group},new View[]{ok});
-   layout.setBackgroundColor(Applic.backgroundcolor);
-   layout.setPadding(0,0,0,rand);
+    group.setPadding(ClinicalUi.dp(act,12),ClinicalUi.dp(act,8),
+            ClinicalUi.dp(act,12),ClinicalUi.dp(act,8));
+    var proceed=ClinicalUi.button(act,act.getString(R.string.hardware_continue_setup),
+            ClinicalUi.ButtonRole.PRIMARY);
+    LinearLayout content=ClinicalUi.verticalContent(act);
+    content.setPadding(ClinicalUi.dp(act,20),
+            MainActivity.systembarTop+ClinicalUi.dp(act,8),
+            ClinicalUi.dp(act,20),ClinicalUi.dp(act,30));
+    content.addView(ClinicalUi.header(act,
+            act.getString(R.string.hardware_sensor_model_title),null));
+    var intro=ClinicalUi.body(act,act.getString(R.string.hardware_sensor_model_intro));
+    intro.setPadding(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),
+            ClinicalUi.dp(act,8));
+    content.addView(intro);
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.hardware_sensor_model_section)));
+    content.addView(ClinicalUi.card(act,group));
+    LinearLayout.LayoutParams proceedParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    proceedParams.topMargin=ClinicalUi.dp(act,20);
+    content.addView(proceed,proceedParams);
+    ScrollView screen=ClinicalUi.scrollScreen(act,content);
    MainActivity.setonback(() -> {
-      removeContentView(layout);
+      removeContentView(screen);
       int type=group.getCheckedRadioButtonId();
       Log.i(LOG_ID,"getCheckedRadioButtonId()="+type);
       if(type>=0) {
@@ -171,12 +197,11 @@ private static void selectType(String name,long sensorptr,MainActivity act) {
             }
 
       });
-   ok.setOnClickListener(v-> {
+   proceed.setOnClickListener(v-> {
         MainActivity.doonback();
         });
 
-    var  params =    new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER_HORIZONTAL| Gravity.CENTER);
-    act.addMyContentView(layout, params);
+    act.addMyContentView(screen,new FrameLayout.LayoutParams(MATCH_PARENT,MATCH_PARENT));
     }
 static void deviceAdded(MainActivity act) {
      Log.i(LOG_ID,"deviceAdded");

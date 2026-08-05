@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="hardware_scan_transmitter">Scan transmitter</string>
+    <string name="hardware_sensor_setup">Sensor setup</string>
+    <string name="hardware_reset_helper">Reset the saved transmitter name before scanning the new code.</string>
+    <string name="hardware_continue_setup">Continue</string>
+    <string name="hardware_sensor_model_title">Choose sensor model</string>
+    <string name="hardware_sensor_model_intro">Select the exact model printed on the sensor package. This determines the activation and Bluetooth protocol.</string>
+    <string name="hardware_sensor_model_section">Available models</string>
+
+    <string name="hardware_account_id">Account ID</string>
+    <string name="hardware_account_section">Account</string>
+    <string name="hardware_manual_account_title">Enter account ID</string>
+    <string name="hardware_manual_account_intro">Enter the numeric account ID supplied by SIBIONICS.</string>
+    <string name="hardware_account_error_positive">Enter an account ID greater than zero.</string>
+    <string name="hardware_account_error_empty">Account ID is required.</string>
+    <string name="hardware_account_error_format">Use digits only for the account ID.</string>
+    <string name="hardware_server_account_title">Retrieve account ID</string>
+    <string name="hardware_server_account_intro">Sign in to retrieve the account ID required for this sensor. Credentials are used only for this request.</string>
+    <string name="hardware_credentials_section">SIBIONICS credentials</string>
+    <string name="hardware_show_password">Show password</string>
+    <string name="hardware_password_helper">Temporarily reveal the password while typing.</string>
+    <string name="hardware_not_retrieved">Not retrieved</string>
+    <string name="hardware_credentials_error">Check the email address and password requirements.</string>
+    <string name="hardware_account_setup_title">SIBIONICS account</string>
+    <string name="hardware_current_account_section">Current account ID</string>
+    <string name="hardware_account_method_section">Choose setup method</string>
+
+    <string name="hardware_novopen_title">Import NovoPen doses</string>
+    <string name="hardware_import_window_section">Import period</string>
+    <string name="hardware_import_after_date">After date</string>
+    <string name="hardware_import_after_time">After time</string>
+    <string name="hardware_record_type_section">Record type</string>
+</resources>

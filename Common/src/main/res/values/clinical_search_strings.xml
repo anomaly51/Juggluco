@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="clinical_search_title">Search records</string>
+    <string name="clinical_search_back">Back</string>
+    <string name="clinical_search_help">Help</string>
+    <string name="clinical_search_intro">Find glucose readings, scans, insulin, meals, or activity without leaving the graph.</string>
+
+    <string name="clinical_search_type_section">What to find</string>
+    <string name="clinical_search_record_type">Record type</string>
+    <string name="clinical_search_sources_section">Glucose sources</string>
+    <string name="clinical_search_sources_hint">Select one or more glucose sources. Choosing a saved record type clears these sources.</string>
+
+    <string name="clinical_search_range_section">Value range</string>
+    <string name="clinical_search_lower_value">Lower limit</string>
+    <string name="clinical_search_upper_value">Upper limit</string>
+    <string name="clinical_search_lower_hint">0</string>
+    <string name="clinical_search_upper_hint">999</string>
+    <string name="clinical_search_record_amount_unit">amount</string>
+
+    <string name="clinical_search_time_section">Time of day</string>
+    <string name="clinical_search_from_time">From</string>
+    <string name="clinical_search_to_time">To</string>
+    <string name="clinical_search_any_time">Any time</string>
+
+    <string name="clinical_search_meal_section">Meal conditions</string>
+    <string name="clinical_search_ingredient">Ingredient</string>
+    <string name="clinical_search_ingredient_hint">e.g. rice</string>
+    <string name="clinical_search_minimum_amount">Minimum amount</string>
+    <string name="clinical_search_optional">Optional</string>
+    <string name="clinical_search_ingredient_unit">g</string>
+
+    <string name="clinical_search_direction_section">Search direction</string>
+    <string name="clinical_search_direction_hint">Look before or after the current position on the graph.</string>
+    <string name="clinical_search_earlier">Earlier</string>
+    <string name="clinical_search_later">Later</string>
+
+    <string name="clinical_search_reset">Reset filters</string>
+    <string name="clinical_search_action">Search</string>
+    <string name="clinical_search_result">Search result</string>
+    <string name="clinical_search_previous_result">Previous result</string>
+    <string name="clinical_search_next_result">Next result</string>
+    <string name="clinical_search_close_results">Close search results</string>
+
+    <string name="clinical_search_error_limits_required">Enter both value limits.</string>
+    <string name="clinical_search_error_limits_number">Use valid numbers for both value limits.</string>
+    <string name="clinical_search_error_range_order">The lower limit must not exceed the upper limit.</string>
+    <string name="clinical_search_error_amount_number">Enter a valid minimum ingredient amount.</string>
+    <string name="clinical_search_error_amount_negative">The minimum ingredient amount cannot be negative.</string>
+    <string name="clinical_search_error_ingredient_required">Enter an ingredient before setting its minimum amount.</string>
+    <string name="clinical_search_no_results">No matching record. Adjust the filters and try again.</string>
+</resources>

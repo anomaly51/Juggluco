@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="connection_show_secret">Show secret</string>
+    <string name="connection_support_section">Help</string>
+
+    <string name="connection_web_server_title">Web server</string>
+    <string name="connection_web_server_intro">Share glucose readings with trusted apps on your network. Local access works on HTTP port 17580; SSL uses the port below.</string>
+    <string name="connection_server_section">Server access</string>
+    <string name="connection_network_section">Network</string>
+    <string name="connection_security_section">SSL security</string>
+    <string name="connection_ssl_port">SSL port</string>
+    <string name="connection_update_interval">Update interval</string>
+    <string name="connection_http_port_note">HTTP remains available on port 17580 when the server is active.</string>
+    <string name="connection_certificate_hint">Choose the full SSL certificate chain</string>
+    <string name="connection_private_key_hint">Choose the matching private key</string>
+    <string name="connection_web_help_hint">Setup, security and compatible client guidance</string>
+    <string name="connection_secret_too_long">Secret must contain at most %1$d characters.</string>
+    <string name="connection_invalid_port">Enter a valid numeric port.</string>
+    <string name="connection_invalid_interval">Enter a valid numeric update interval.</string>
+
+    <string name="connection_uploader_title">Nightscout uploader</string>
+    <string name="connection_uploader_intro">Send glucose and optional treatment data to your Nightscout site in the background.</string>
+    <string name="connection_account_section">Account</string>
+    <string name="connection_upload_section">Upload options</string>
+    <string name="connection_maintenance_section">Maintenance</string>
+    <string name="connection_nightscout_v3">Use Nightscout API v3</string>
+    <string name="connection_send_now_hint">Wake the uploader and send pending data</string>
+    <string name="connection_uploader_help_hint">Nightscout URL, secret and upload troubleshooting</string>
+    <string name="connection_invalid_url">Enter a complete HTTP or HTTPS Nightscout URL.</string>
+
+    <string name="connection_show_password">Show password</string>
+    <string name="connection_russian_region">Use Russian LibreView region</string>
+    <string name="connection_libre_title">LibreView</string>
+    <string name="connection_libre_intro">Connect your LibreView account and choose exactly which readings and records Juggluco sends.</string>
+    <string name="connection_libre_send_hint">Send pending LibreView data now</string>
+    <string name="connection_libre_resend_hint">Choose the date from which data should be sent again</string>
+    <string name="connection_libre_account_hint">Account ID: %1$d</string>
+    <string name="connection_libre_help_hint">Account, region and upload troubleshooting</string>
+    <string name="connection_libre_credentials_error">Enter an email of 3–255 characters and a password of 3–36 characters.</string>
+
+    <string name="connection_turn_title">Relay server</string>
+    <string name="connection_turn_intro">Configure the TURN relay used when a direct mirror connection cannot be established.</string>
+    <string name="connection_server_details_section">Server details</string>
+    <string name="connection_credentials_section">Credentials</string>
+    <string name="connection_turn_help_hint">When a relay is needed and how credentials are protected</string>
+    <string name="connection_host_required">Enter the relay server hostname.</string>
+
+    <string name="connection_receivers_intro">Choose which of the %1$d compatible apps may receive glucose broadcasts.</string>
+    <string name="connection_receivers_section">Allowed apps</string>
+
+    <string name="connection_mirror_title">Mirror devices</string>
+    <string name="connection_mirror_intro">Keep selected glucose data in sync with another phone, tablet or watch.</string>
+    <string name="connection_this_device_section">This device</string>
+    <string name="connection_addresses">Wi‑Fi: %1$s\nWi‑Fi Direct: %2$s\nBluetooth PAN: %3$s</string>
+    <string name="connection_receive_port">Receive port</string>
+    <string name="connection_mirrors_section">Configured devices</string>
+    <string name="connection_options_section">Connection tools</string>
+    <string name="connection_turn_action_hint">Configure a relay for connections outside your local network</string>
+    <string name="connection_sync_hint">Switch synchronisation direction</string>
+    <string name="connection_reinit_hint">Restart all mirror connections</string>
+    <string name="connection_auto_qr_hint">Create an automatic setup QR code</string>
+    <string name="connection_battery_hint">Allow reliable background synchronisation</string>
+    <string name="connection_mirror_help_hint">Setup, privacy and troubleshooting for mirror devices</string>
+    <string name="connection_mirror_port_error">Use a port from 1024 to 65535 that is not already assigned to the web server.</string>
+    <string name="connection_mirror_receive">Receive</string>
+    <string name="connection_mirror_last_sync">Last sync: %1$s</string>
+    <string name="connection_mirror_disabled">Off</string>
+    <string name="connection_mirror_detect">Automatic address</string>
+
+    <string name="connection_mirror_details_title">Connection details</string>
+    <string name="connection_mirror_details_intro">Review the latest connection state or change how this device synchronises.</string>
+    <string name="connection_status_section">Status</string>
+    <string name="connection_modify_mirror_hint">Edit endpoint, direction and shared data</string>
+    <string name="connection_mirror_qr_hint">Show a QR code for this connection</string>
+
+    <string name="connection_mirror_editor_title">Mirror connection</string>
+    <string name="connection_mirror_editor_intro">Choose how this device is reached and which glucose data moves in each direction.</string>
+    <string name="connection_transport_section">Transport</string>
+    <string name="connection_endpoint_section">Endpoint</string>
+    <string name="connection_address_number">Address %1$d</string>
+    <string name="connection_direction_section">Connection direction</string>
+    <string name="connection_data_flow_section">Shared data</string>
+    <string name="connection_send_from_hint">When newly enabled data should start synchronising</string>
+
+    <string name="connection_meters_title">Blood glucose meters</string>
+    <string name="connection_meters_intro">Manage paired meters and choose which devices may send finger-stick readings.</string>
+    <string name="connection_meters_section">Saved meters</string>
+    <string name="connection_meter_help_hint">Supported meters, pairing and connection troubleshooting</string>
+    <string name="connection_find_meters_title">Find a meter</string>
+    <string name="connection_find_meters_intro">Nearby compatible Bluetooth devices appear here while scanning.</string>
+    <string name="connection_scan_filter_section">Device type</string>
+    <string name="connection_nearby_devices_section">Nearby devices</string>
+    <string name="connection_device_scan_help_hint">Bluetooth permissions and supported device names</string>
+
+    <string name="connection_sensor_mirror_title">Mirror sensor</string>
+    <string name="connection_sensor_mirror_intro">Review sensors received from another Juggluco device and control local Bluetooth use.</string>
+    <string name="connection_sensor_section">Sensor</string>
+    <string name="connection_active_sensor">Active sensor</string>
+    <string name="connection_sensor_mirror_help_hint">How mirrored sensors and Bluetooth ownership work</string>
+
+    <string name="connection_account_id_title">LibreView account ID</string>
+    <string name="connection_account_id_intro">Use the ID supplied by LibreView or enter a known account ID manually.</string>
+    <string name="connection_account_id_source_section">ID source</string>
+    <string name="connection_account_id_field">Account ID</string>
+    <string name="connection_account_id_server_title">Get from LibreView</string>
+    <string name="connection_account_id_server_hint">Request the account ID using the saved LibreView credentials</string>
+    <string name="connection_account_id_error_empty">Enter an account ID.</string>
+    <string name="connection_account_id_error_format">Account ID must be a whole number.</string>
+    <string name="connection_account_request_title">Request account ID?</string>
+    <string name="connection_account_request_message">LibreView will be contacted using the saved account. The received account ID replaces the current value.</string>
+    <string name="connection_account_request_action">Request</string>
+
+    <string name="connection_resend_title">Resend LibreView data</string>
+    <string name="connection_resend_intro">Choose the exact point from which LibreView data should be queued again.</string>
+    <string name="connection_resend_from_section">Send again from</string>
+    <string name="connection_date_label">Date</string>
+    <string name="connection_time_label">Time</string>
+    <string name="connection_resend_confirm_title">Queue data again?</string>
+    <string name="connection_resend_confirm_message">Previously sent data from the selected date will be queued for LibreView again.</string>
+    <string name="connection_resend_confirm_action">Queue again</string>
+    <string name="connection_nightscout_resend_title">Resend Nightscout data?</string>
+    <string name="connection_nightscout_resend_message">The uploader cursor will be reset so pending glucose data can be uploaded again.</string>
+
+    <string name="connection_auto_qr_title">Automatic QR setup</string>
+    <string name="connection_auto_qr_intro">Choose the direction and network. Juggluco creates a ready-to-scan mirror connection.</string>
+    <string name="connection_auto_qr_send_section">This device sends</string>
+    <string name="connection_auto_qr_receive_section">This device receives</string>
+    <string name="connection_home_network_title">Home network</string>
+    <string name="connection_home_network_hint">Direct setup for devices on the same trusted network</string>
+    <string name="connection_internet_title">Internet</string>
+    <string name="connection_internet_hint">Relay-assisted setup for devices on different networks</string>
+    <string name="connection_qr_title">Mirror setup QR</string>
+    <string name="connection_qr_intro">Scan this code on the other Juggluco device. Keep the code private: it contains connection details.</string>
+    <string name="connection_qr_help_hint">How to scan and complete mirror setup</string>
+
+    <string name="connection_meter_config_title">Meter settings</string>
+    <string name="connection_meter_config_intro">Choose where imported finger-stick readings begin and how they are stored.</string>
+    <string name="connection_meter_device_section">Device</string>
+    <string name="connection_meter_import_section">Import readings after</string>
+    <string name="connection_meter_record_section">Record type</string>
+    <string name="connection_meter_record_hint">The selected label is used for readings received from this meter.</string>
+    <string name="connection_meter_invalid_record">Choose a valid blood-reading label.</string>
+    <string name="connection_meter_delete_title">Remove this meter?</string>
+    <string name="connection_meter_delete_message">The saved Bluetooth pairing will be removed. Existing glucose records stay on the device.</string>
+    <string name="connection_meter_cancelled">The glucose meter will not be used.</string>
+
+    <string name="connection_mirror_delete_title">Remove this connection?</string>
+    <string name="connection_mirror_delete_message">This mirror device will be removed. You can add it again later.</string>
+    <string name="connection_mirror_resend_title">Resend mirror data?</string>
+    <string name="connection_mirror_resend_message">The transfer cursor for this connection will be reset and available data will be sent again.</string>
+    <string name="connection_discard_title">Discard unsaved changes?</string>
+    <string name="connection_discard_message">Changes made on this screen will not be saved.</string>
+    <string name="connection_discard_action">Discard</string>
+    <string name="connection_sensor_finish_message">This sensor will be marked finished on this device. Incoming readings from it will stop.</string>
+</resources>

@@ -21,12 +21,23 @@
 
 package tk.glucodata;
 
+import java.util.UUID;
 
 
 class AidexXGattCallback extends SuperGattCallback {
 
+static final UUID ScanServiceUUID = UUID.fromString("0000181f-0000-1000-8000-00805f9b34fb");
+
 AidexXGattCallback(String SerialNumber, long dataptr) {
         super(SerialNumber, dataptr, 0x50);
+    }
+
+static String deviceName2name(String deviceName) {
+    return "";
+    }
+
+static boolean addbyDeviceName(MainActivity activity,String deviceName) {
+    return false;
     }
 
 public void startUnpair(UnpairOverlayHost host,Predicate<Boolean> ended) {

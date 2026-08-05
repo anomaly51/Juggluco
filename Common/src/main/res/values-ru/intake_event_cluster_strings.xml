@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="intake_event_cluster_title">
+        <item quantity="one">%1$d запись</item>
+        <item quantity="few">%1$d записи</item>
+        <item quantity="many">%1$d записей</item>
+        <item quantity="other">%1$d записи</item>
+    </plurals>
+    <string name="intake_event_cluster_close">Закрыть сгруппированные записи</string>
+    <string name="intake_event_cluster_hint">Эти записи расположены рядом при текущем масштабе графика. Выберите запись, чтобы посмотреть подробности или удалить её.</string>
+    <string name="intake_event_cluster_same_time">Записано %1$s</string>
+    <string name="intake_event_cluster_time_range">%1$s – %2$s</string>
+    <string name="intake_event_cluster_meta">%1$s · %2$s</string>
+    <string name="intake_event_cluster_absorption">Усвоение: %1$s</string>
+    <string name="intake_event_cluster_open">Открыть: %1$s, %2$s</string>
+</resources>

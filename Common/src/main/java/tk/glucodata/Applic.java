@@ -130,6 +130,9 @@ public void redraw() {
     var tmpcurve=curve;
     if(tmpcurve!=null)
         tmpcurve.requestRender();
+    var activity=MainActivity.thisone;
+    if(activity!=null)
+        activity.refreshDashboardData();
     }
 
 static private Handler mHandler;
@@ -577,6 +580,9 @@ void domintime() {
         if((curve.render.stepresult & STEPBACK) == 0) {
             {if(doLog) {Log.i(LOG_ID,"requestRender()");};};
             curve.requestRender();
+            var activity=MainActivity.thisone;
+            if(activity!=null)
+                activity.refreshDashboardData();
             if (!isWearable) {
                 numdata.sendmessages();
             }
@@ -759,6 +765,16 @@ static void doglucose(String SerialNumber, int mgdl, float gl, float rate, int a
         }
     SuperGattCallback.dowithglucose( SerialNumber,  mgdl, gl,rate,  alarm,  timmsec,sensorstartmsec,Notify.glucosetimeout,sensorgen);
     if(!isWearable) {
+            // Prediction sync is backend-only and must never delay or endanger
+            // the sensor callback. The repository immediately hands all work
+            // to its single background executor.
+            try {
+                ForecastRepository.enqueueLiveReading(app, timmsec);
+            }
+            catch(Throwable error) {
+                if(doLog) Log.e(LOG_ID,"forecast live sync skipped: "
+                        +error.getClass().getSimpleName());
+            }
             if(sensorptr!=0L) {
                 {if(doLog) {Log.i(LOG_ID,"sensorptr="+format("%x",sensorptr));};};
                 if(Build.VERSION.SDK_INT >= 28) {

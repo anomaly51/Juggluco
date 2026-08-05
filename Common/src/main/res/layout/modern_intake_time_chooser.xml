@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="16dp"
+    android:fillViewport="false"
+    android:overScrollMode="ifContentScrolls"
+    android:scrollbars="none">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/intake_time_sheet"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/intake_time_choose_title"
+        android:textColor="@color/modern_secondary_text_primary"
+        android:textSize="22sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/intake_time_chooser_selection"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textColor="@color/modern_secondary_text_secondary"
+        android:textSize="13sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="7dp"
+        android:text="@string/intake_time_quick_title"
+        android:textColor="@color/modern_secondary_text_muted"
+        android:textSize="11sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/intake_time_now"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@drawable/intake_chip"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:stateListAnimator="@null"
+            android:text="@string/intake_time_now"
+            android:textAllCaps="false"
+            android:textColor="@color/modern_secondary_text_primary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/intake_time_5m"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/intake_chip"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:stateListAnimator="@null"
+            android:text="@string/intake_time_5m"
+            android:textAllCaps="false"
+            android:textColor="@color/modern_secondary_text_primary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/intake_time_10m"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/intake_chip"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:stateListAnimator="@null"
+            android:text="@string/intake_time_10m"
+            android:textAllCaps="false"
+            android:textColor="@color/modern_secondary_text_primary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginTop="6dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/intake_time_20m"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@drawable/intake_chip"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:stateListAnimator="@null"
+            android:text="@string/intake_time_20m"
+            android:textAllCaps="false"
+            android:textColor="@color/modern_secondary_text_primary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/intake_time_30m"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/intake_chip"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:stateListAnimator="@null"
+            android:text="@string/intake_time_30m"
+            android:textAllCaps="false"
+            android:textColor="@color/modern_secondary_text_primary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/intake_time_40m"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/intake_chip"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:stateListAnimator="@null"
+            android:text="@string/intake_time_40m"
+            android:textAllCaps="false"
+            android:textColor="@color/modern_secondary_text_primary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginTop="6dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/intake_time_50m"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@drawable/intake_chip"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:stateListAnimator="@null"
+            android:text="@string/intake_time_50m"
+            android:textAllCaps="false"
+            android:textColor="@color/modern_secondary_text_primary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/intake_time_60m"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/intake_chip"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:stateListAnimator="@null"
+            android:text="@string/intake_time_60m"
+            android:textAllCaps="false"
+            android:textColor="@color/modern_secondary_text_primary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/intake_time_exact"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginTop="12dp"
+        android:background="@drawable/intake_button_secondary"
+        android:stateListAnimator="@null"
+        android:text="@string/intake_time_exact"
+        android:textAllCaps="false"
+        android:textColor="@color/modern_secondary_text_primary"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+
+    <Button
+        android:id="@+id/intake_time_cancel"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:layout_marginTop="2dp"
+        android:background="@android:color/transparent"
+        android:stateListAnimator="@null"
+        android:text="@string/intake_time_cancel"
+        android:textAllCaps="false"
+        android:textColor="@color/modern_secondary_text_muted"
+        android:textSize="13sp" />
+</LinearLayout>
+</ScrollView>

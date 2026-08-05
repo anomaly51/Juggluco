@@ -24,6 +24,7 @@ package tk.glucodata.NovoPen;
 import static android.graphics.Typeface.BOLD;
 import static android.graphics.Typeface.DEFAULT_BOLD;
 import static android.view.View.INVISIBLE;
+import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 import static tk.glucodata.Dialogs.fdatename;
 import static tk.glucodata.Log.doLog;
@@ -47,6 +48,8 @@ import android.nfc.Tag;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Space;
 import android.widget.Spinner;
 
@@ -59,6 +62,7 @@ import tk.glucodata.NovoPen.opennov.OpContext;
 import tk.glucodata.NovoPen.opennov.OpenNov;
 
 import tk.glucodata.Applic;
+import tk.glucodata.ClinicalUi;
 import tk.glucodata.GlucoseCurve;
 import tk.glucodata.LabelAdapter;
 import tk.glucodata.Layout;
@@ -166,20 +170,21 @@ static void setInsulin(MainActivity context, OpContext op) {
 
         } });
     spinner.setSelection(selected[0]);
-    float density=GlucoseCurve.metrics.density;
-    int laypad=(int)(density*4.0);
-
-
-    var after=getlabel(context,context.getString(R.string.dosesprior));
-    after.setPadding((int)(density*5.0f),laypad*2,laypad*3,0);
-    var label=getlabel(context,"PEN"+serial);
-    label.setTypeface(DEFAULT_BOLD,BOLD);
-        var cancel=getbutton(context,R.string.cancel);
-        var typestr=getlabel(context,context.getString(R.string.type));
-    typestr.setPadding(laypad*2,0,0,laypad*5);
-    var ok=getbutton(context, R.string.save);
+    context.lightBars(false);
+    var after=ClinicalUi.body(context,context.getString(R.string.dosesprior));
+    after.setPadding(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
+            ClinicalUi.dp(context,8));
+    var device=ClinicalUi.body(context,"PEN "+serial);
+    device.setTextColor(ClinicalUi.accent(context));
+    device.setTypeface(DEFAULT_BOLD,BOLD);
+    var cancel=ClinicalUi.button(context,context.getString(R.string.cancel),
+            ClinicalUi.ButtonRole.SECONDARY);
+    var ok=ClinicalUi.button(context,context.getString(R.string.save),
+            ClinicalUi.ButtonRole.PRIMARY);
     long[] newtime={lasttime};
-    final    var datebutton=getbutton(context, DateFormat.getDateInstance(DateFormat.DEFAULT).format(lasttime));
+    final var datebutton=ClinicalUi.button(context,
+            DateFormat.getDateInstance(DateFormat.DEFAULT).format(lasttime),
+            ClinicalUi.ButtonRole.SECONDARY);
     var cal = Calendar.getInstance();
         datebutton.setOnClickListener(
                 v -> { 
@@ -197,11 +202,37 @@ static void setInsulin(MainActivity context, OpContext op) {
     cal.setTimeInMillis(newtime[0]);
     int[] hour={cal.get(Calendar.HOUR_OF_DAY)};
     int[]  min={cal.get(Calendar.MINUTE)};
-    var timebutton=getbutton(context,  String.format(Locale.US,"%02d:%02d",hour[0],min[0] ));
-    Layout.getMargins(ok).bottomMargin=Layout.getMargins(cancel).bottomMargin=(int)(density*18.0f);
-    var  layout=new Layout(context,new View[]{label},new View[]{after},new View[]{datebutton,timebutton},new View[]{typestr,spinner},new View[]{ok,cancel});
+    var timebutton=ClinicalUi.button(context,
+            String.format(Locale.US,"%02d:%02d",hour[0],min[0]),
+            ClinicalUi.ButtonRole.SECONDARY);
+    spinner.setMinimumHeight(ClinicalUi.dp(context,52));
+    spinner.setMinimumWidth(ClinicalUi.dp(context,150));
+    LinearLayout content=ClinicalUi.verticalContent(context);
+    content.setPadding(ClinicalUi.dp(context,20),
+            MainActivity.systembarTop+ClinicalUi.dp(context,8),
+            ClinicalUi.dp(context,20),ClinicalUi.dp(context,30));
+    content.addView(ClinicalUi.header(context,
+            context.getString(R.string.hardware_novopen_title),cancel));
+    content.addView(device);
+    content.addView(after);
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.hardware_import_window_section)));
+    content.addView(ClinicalUi.card(context,
+            ClinicalUi.fieldRow(context,
+                    context.getString(R.string.hardware_import_after_date),datebutton),
+            ClinicalUi.fieldRow(context,
+                    context.getString(R.string.hardware_import_after_time),timebutton)));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.hardware_record_type_section)));
+    content.addView(ClinicalUi.card(context,
+            ClinicalUi.fieldRow(context,context.getString(R.string.type),spinner)));
+    LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    saveParams.topMargin=ClinicalUi.dp(context,20);
+    content.addView(ok,saveParams);
+    ScrollView screen=ClinicalUi.scrollScreen(context,content);
     timebutton.setOnClickListener(v-> {
-        layout.setVisibility(INVISIBLE);
+        screen.setVisibility(INVISIBLE);
             context.getnumberview().gettimepicker(context,hour[0], min[0], (h,m) -> {
                 hour[0]=h;
                 min[0]=m;
@@ -209,12 +240,9 @@ static void setInsulin(MainActivity context, OpContext op) {
                 cal.set(Calendar.MINUTE,m);
                      newtime[0]= cal.getTimeInMillis();
                 timebutton.setText(String.format(Locale.US,"%02d:%02d",h,m));
-               },()-> layout.setVisibility(View.VISIBLE));});
-        layout.setBackgroundColor(Applic.backgroundcolor);
-    int pad=(int)(10.0*density);
-    layout.setPadding(pad,pad,pad,0);
+               },()-> screen.setVisibility(View.VISIBLE));});
 
-    context.setonback(() -> removeContentView(layout) );
+    context.setonback(() -> removeContentView(screen));
     ok.setOnClickListener(v -> {
             var doses=op.doses;
             int ty=selected[0];
@@ -260,9 +288,7 @@ static void setInsulin(MainActivity context, OpContext op) {
             }
             );
     cancel.setOnClickListener(v -> context.doonback());
-//    var  params =    new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER|Gravity.CENTER_HORIZONTAL);
-    var  params =    new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER_HORIZONTAL);
-    params.topMargin=MainActivity.systembarTop*4/5;
-    context.addMyContentView(layout, params);
+    context.addMyContentView(screen,
+            new FrameLayout.LayoutParams(MATCH_PARENT,MATCH_PARENT));
     }
 }

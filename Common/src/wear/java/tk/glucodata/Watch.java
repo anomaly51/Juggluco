@@ -22,4 +22,5 @@
 package tk.glucodata;
 public class Watch  {
 static void show(MainActivity act) {}
+static void show(MainActivity act,boolean restoreStandaloneUi) {}
 }

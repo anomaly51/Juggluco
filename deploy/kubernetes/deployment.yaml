@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: juggluco-backend
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: juggluco-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: juggluco-backend
+    spec:
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: backend
+          image: ghcr.io/anomaly51/juggluco-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8765
+          env:
+            - name: JUGGLUCO_DATABASE_PATH
+              value: /data/juggluco.db
+            - name: JUGGLUCO_ALLOWED_HOSTS
+              value: 127.0.0.1,localhost,juggluco-backend,juggluco-backend.juggluco,juggluco-backend.juggluco.svc,juggluco-backend.juggluco.svc.cluster.local
+            - name: JUGGLUCO_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: juggluco-backend-secrets
+                  key: JUGGLUCO_API_TOKEN
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: juggluco-backend-secrets
+                  key: OPENROUTER_API_KEY
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: localhost
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: localhost
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: temporary-files
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: juggluco-backend-data
+        - name: temporary-files
+          emptyDir: {}

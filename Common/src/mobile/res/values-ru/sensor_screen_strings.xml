@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sensor_screen_subtitle">Подключение и поток данных</string>
+    <string name="sensor_screen_active_sensor">Активный сенсор</string>
+    <string name="sensor_screen_choose_sensor">Выбранное устройство</string>
+    <string name="sensor_screen_device_address">Адрес устройства</string>
+    <string name="sensor_screen_diagnostics">Диагностика</string>
+    <string name="sensor_screen_diagnostics_hint">Последние события подключения и обмена с сенсором</string>
+    <string name="sensor_screen_started">Сенсор запущен</string>
+    <string name="sensor_screen_connection_settings">Настройки подключения</string>
+    <string name="sensor_screen_alarm_clock">Будильник сенсора</string>
+    <string name="sensor_screen_high_priority">Высокий приоритет Bluetooth-соединения</string>
+    <string name="sensor_screen_android_autoconnect">Автоподключение Bluetooth в Android</string>
+</resources>

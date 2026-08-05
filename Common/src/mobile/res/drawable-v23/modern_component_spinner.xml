@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/modern_component_text_field" />
+
+    <item
+        android:width="20dp"
+        android:height="20dp"
+        android:end="12dp"
+        android:gravity="end|center_vertical">
+        <vector
+            android:width="20dp"
+            android:height="20dp"
+            android:tint="?attr/colorControlNormal"
+            android:viewportWidth="24"
+            android:viewportHeight="24">
+            <path
+                android:fillColor="#FFFFFFFF"
+                android:pathData="M7,9.5L12,14.5L17,9.5Z" />
+        </vector>
+    </item>
+</layer-list>

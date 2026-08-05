@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Secondary destinations remain stable even though they are not primary-nav items. -->
+    <item name="modern_dashboard_records" type="id" />
+    <item name="modern_dashboard_statistics" type="id" />
+</resources>

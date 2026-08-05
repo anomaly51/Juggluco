@@ -1,337 +1,152 @@
 <?xml version="1.0" encoding="utf-8"?>
-<GridLayout
-    xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/menusview"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:columnCount="7"
-    android:rowCount="7"
-    android:textAlignment="textStart"
-    >
+    android:layoutDirection="locale"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:theme="@style/ModernDashboardThemeOverlay">
 
-    <CheckBox
-        android:id="@+id/systemui"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="0"
-        android:layout_column="0"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/system_ui" />
-    <CheckBox
-        android:id="@+id/menus"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="1"
-        android:layout_column="0"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-	android:checked="true"
-        android:text="@string/menus" />
+    <View
+        android:id="@+id/modern_menu_backdrop"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/modern_menu_backdrop"
+        android:clickable="true"
+        android:contentDescription="@string/closename"
+        android:focusable="true" />
 
-    <Button
-        android:id="@+id/watch"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_row="2"
+    <LinearLayout
+        android:id="@+id/modern_menu_panel"
+        android:layout_width="360dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:background="@drawable/modern_menu_panel"
+        android:clickable="true"
+        android:clipToPadding="false"
+        android:elevation="18dp"
+        android:focusable="false"
+        android:importantForAccessibility="no"
+        android:orientation="vertical"
+        tools:ignore="KeyboardInaccessibleWidget">
 
-        android:layout_column="0"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/watches" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="18dp"
+            android:paddingTop="14dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="12dp">
 
-    <Button
-        android:id="@+id/sensor"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_row="3"
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
 
-        android:layout_column="0"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/sensor" />
+                <TextView
+                    style="@style/ModernMenuTitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/dashboard_more" />
 
-    <Button
-        android:id="@+id/settings"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_row="4"
+                <TextView
+                    style="@style/ModernMenuSubtitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:text="@string/menu_screen_subtitle" />
+            </LinearLayout>
 
-        android:layout_column="0"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/settings" />
+            <ImageButton
+                android:id="@+id/menus"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginStart="10dp"
+                android:background="@drawable/modern_menu_action"
+                android:contentDescription="@string/closename"
+                android:padding="12dp"
+                android:src="@drawable/modern_secondary_close" />
+        </LinearLayout>
 
-    <Button
-        android:id="@+id/about"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_row="5"
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/modern_secondary_border_subtle" />
 
-        android:layout_column="0"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/aboutname" />
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:fillViewport="true"
+            android:overScrollMode="ifContentScrolls"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp">
 
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingTop="10dp"
+                android:paddingBottom="18dp">
 
+                <TextView
+                    style="@style/ModernMenuSectionTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="8dp"
+                    android:paddingBottom="7dp"
+                    android:text="@string/menu_screen_quick" />
 
-    <Button
-        android:id="@+id/close"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_row="6"
-        android:layout_column="0"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/closename" />
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
 
-    <Space
-        android:layout_width="0dp"
-        android:layout_column="1"
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                        <Button android:id="@+id/sensor" style="@style/ModernMenuTileAction" android:layout_width="0dp" android:layout_height="56dp" android:layout_weight="1" android:drawableStart="@drawable/modern_dashboard_sensor" android:text="@string/sensor" />
+                    </LinearLayout>
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:visibility="gone">
+                        <Button android:id="@+id/list" style="@style/ModernMenuTileAction" android:layout_width="0dp" android:layout_height="56dp" android:layout_weight="1" android:drawableStart="@drawable/modern_dashboard_records" android:text="@string/list" android:visibility="gone" />
+                        <Button android:id="@+id/statistics" style="@style/ModernMenuTileAction" android:layout_width="0dp" android:layout_height="56dp" android:layout_marginStart="6dp" android:layout_weight="1" android:drawableStart="@drawable/modern_dashboard_statistics" android:text="@string/statistics" android:visibility="gone" />
+                    </LinearLayout>
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:orientation="horizontal">
+                        <Button android:id="@+id/settings" style="@style/ModernMenuTileAction" android:layout_width="0dp" android:layout_height="56dp" android:layout_weight="1" android:drawableStart="@drawable/modern_secondary_settings" android:text="@string/settings" />
+                        <Button android:id="@+id/lastscan" style="@style/ModernMenuTileAction" android:layout_width="0dp" android:layout_height="56dp" android:layout_marginStart="6dp" android:layout_weight="1" android:drawableStart="@drawable/modern_secondary_scan" android:text="@string/last_scan" android:visibility="gone" />
+                    </LinearLayout>
+                </LinearLayout>
 
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
+                <TextView
+                    android:id="@+id/menu_app_title"
+                    style="@style/ModernMenuSectionTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="8dp"
+                    android:paddingTop="16dp"
+                    android:paddingBottom="7dp"
+                    android:text="@string/menu_screen_app" />
 
-        />
-
-    <Button
-        android:id="@+id/export"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_row="0"
-
-        android:layout_column="2"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/export" />
-
-    <Button
-        android:id="@+id/mirror"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_row="1"
-
-        android:layout_column="2"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/mirror" />
-
-    <Button
-        android:id="@+id/newamount"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="2"
-        android:layout_column="2"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/new_amount" />
-    <Button
-        android:id="@+id/list"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="3"
-        android:layout_column="2"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/list" />
-
-    <Button
-        android:id="@+id/statistics"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_row="4"
-
-        android:layout_column="2"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/statistics" />
-
-    <Button
-        android:id="@+id/talk"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_row="5"
-
-        android:layout_column="2"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/talk" />
-
-    <CheckBox
-        android:id="@+id/glucosefloat"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_row="6"
-
-        android:layout_column="2"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/floatname" />
-
-    <Space
-        android:layout_width="0dp"
-        android:layout_column="3"
-
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-
-        />
-
-    <Button
-        android:id="@+id/lastscan"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="0"
-        android:layout_column="4"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/last_scan" />
-    <CheckBox
-        android:id="@+id/scans"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="1"
-        android:layout_column="4"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/scansname" />
-    <CheckBox
-        android:id="@+id/stream"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="2"
-        android:layout_column="4"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/streamname" />
-    <CheckBox
-        android:id="@+id/history"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="3"
-        android:layout_column="4"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/historyname" />
-    <CheckBox
-        android:id="@+id/amounts"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="4"
-        android:layout_column="4"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/amountsname" />
-    <CheckBox
-        android:id="@+id/meals"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="5"
-        android:layout_column="4"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/mealsname" />
-    <CheckBox
-        android:id="@+id/darkmode"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="6"
-        android:layout_column="4"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/darkmode" />
-
-    <CheckBox
-        android:id="@+id/calibratedscans"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="1"
-        android:layout_column="5"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="" />
-
-    <CheckBox
-        android:id="@+id/calibratedstream"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="2"
-        android:layout_column="5"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="" />
-
-    <CheckBox
-        android:id="@+id/calibratedhistory"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="3"
-        android:layout_column="5"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="" />
-
-    <Button
-        android:id="@+id/now"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="0"
-        android:layout_column="6"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/now" />
-    <Button
-        android:id="@+id/search"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="1"
-        android:layout_column="6"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/search" />
-    <Button
-        android:id="@+id/date"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="2"
-        android:layout_column="6"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/date" />
-    <Button
-        android:id="@+id/dayback"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="3"
-        android:layout_column="6"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/day_back" />
-    <Button
-        android:id="@+id/daylater"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="4"
-        android:layout_column="6"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/day_later" />
-    <Button
-        android:id="@+id/weekback"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="5"
-        android:layout_column="6"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/week_back" />
-    <Button
-        android:id="@+id/weeklater"
-        android:layout_width="wrap_content"
-        android:layout_height="0dp"
-        android:layout_row="6"
-        android:layout_column="6"
-        android:layout_columnWeight="1"
-        android:layout_rowWeight="1"
-        android:text="@string/week_later" />
-</GridLayout>
+                <LinearLayout
+                    android:id="@+id/menu_app_section"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/modern_menu_section"
+                    android:orientation="vertical"
+                    android:padding="4dp">
+                    <Button android:id="@+id/watch" style="@style/ModernMenuListAction" android:layout_width="match_parent" android:layout_height="52dp" android:drawableStart="@drawable/modern_secondary_watch" android:drawableTint="@color/modern_secondary_accent" android:text="@string/watches" android:visibility="gone" />
+                    <Button android:id="@+id/talk" style="@style/ModernMenuListAction" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="2dp" android:text="@string/talk" android:visibility="gone" />
+                    <Button android:id="@+id/mirror" style="@style/ModernMenuListAction" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="2dp" android:text="@string/mirror" android:visibility="gone" />
+                    <Button android:id="@+id/export" style="@style/ModernMenuListAction" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="2dp" android:text="@string/export" android:visibility="gone" />
+                    <Button android:id="@+id/about" style="@style/ModernMenuListAction" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="2dp" android:text="@string/aboutname" />
+                    <Button android:id="@+id/close" style="@style/ModernMenuCloseListAction" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="4dp" android:text="@string/menu_screen_close_app" android:visibility="gone" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+</FrameLayout>

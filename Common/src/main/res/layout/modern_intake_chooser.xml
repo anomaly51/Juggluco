@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/intake_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/modern_secondary_background"
+    android:clickable="true"
+    android:focusable="true">
+
+    <LinearLayout
+        android:id="@+id/intake_page"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp">
+
+            <ImageButton
+                android:id="@+id/intake_close"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@drawable/intake_button_secondary"
+                android:contentDescription="@string/intake_close"
+                android:padding="12dp"
+                android:src="@drawable/intake_close" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif-medium"
+                    android:includeFontPadding="false"
+                    android:text="@string/intake_flow_title"
+                    android:textColor="@color/modern_secondary_text_primary"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:includeFontPadding="false"
+                    android:text="@string/intake_flow_subtitle"
+                    android:textColor="@color/modern_secondary_text_muted"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/intake_backend_status"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:background="@drawable/intake_chip"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:maxWidth="124dp"
+                android:maxLines="2"
+                android:minWidth="82dp"
+                android:paddingStart="9dp"
+                android:paddingEnd="9dp"
+                android:text="@string/intake_backend_checking"
+                android:textAlignment="center"
+                android:textColor="@color/modern_secondary_text_secondary"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:fillViewport="true"
+            android:overScrollMode="never"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="24dp"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="32dp"
+                    android:layout_marginBottom="18dp"
+                    android:fontFamily="sans-serif-medium"
+                    android:gravity="center"
+                    android:text="@string/intake_choose_prompt"
+                    android:textColor="@color/modern_secondary_text_primary"
+                    android:textSize="26sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:id="@+id/intake_choose_insulin"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/intake_choice_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="112dp"
+                    android:orientation="horizontal"
+                    android:padding="18dp">
+                    <TextView
+                        android:layout_width="56dp"
+                        android:layout_height="56dp"
+                        android:background="@drawable/intake_choice_icon"
+                        android:gravity="center"
+                        android:text="+"
+                        android:textColor="@color/modern_secondary_accent"
+                        android:textSize="30sp"
+                        android:textStyle="bold" />
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="16dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/intake_choose_insulin_title"
+                            android:textColor="@color/modern_secondary_text_primary"
+                            android:textSize="19sp"
+                            android:textStyle="bold" />
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:text="@string/intake_choose_insulin_subtitle"
+                            android:textColor="@color/modern_secondary_text_secondary"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+                    <TextView
+                        android:layout_width="32dp"
+                        android:layout_height="48dp"
+                        android:gravity="center"
+                        android:text="›"
+                        android:textColor="@color/modern_secondary_text_muted"
+                        android:textSize="30sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/intake_choose_meal"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/intake_choice_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="112dp"
+                    android:orientation="horizontal"
+                    android:padding="18dp">
+                    <TextView
+                        android:layout_width="56dp"
+                        android:layout_height="56dp"
+                        android:background="@drawable/intake_choice_icon"
+                        android:gravity="center"
+                        android:text="AI"
+                        android:textColor="@color/modern_secondary_accent"
+                        android:textSize="17sp"
+                        android:textStyle="bold" />
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="16dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/intake_choose_meal_title"
+                            android:textColor="@color/modern_secondary_text_primary"
+                            android:textSize="19sp"
+                            android:textStyle="bold" />
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:text="@string/intake_choose_meal_subtitle"
+                            android:textColor="@color/modern_secondary_text_secondary"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+                    <TextView
+                        android:layout_width="32dp"
+                        android:layout_height="48dp"
+                        android:gravity="center"
+                        android:text="›"
+                        android:textColor="@color/modern_secondary_text_muted"
+                        android:textSize="30sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:gravity="center"
+                    android:lineSpacingExtra="2dp"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:text="@string/intake_separate_hint"
+                    android:textColor="@color/modern_secondary_text_muted"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+</FrameLayout>

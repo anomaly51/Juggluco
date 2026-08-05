@@ -23,6 +23,8 @@ public final class UnpairOverlayHost {
         }
     public void postFinished(final String message, final boolean success) {
         }
+    public void postMessage(final String message) {
+        }
     public void postCloser() {
         }
 

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_display_title">Отображение графика</string>
+    <string name="settings_display_intro">Выберите клинические данные на графике, а затем настройте диапазоны и поведение. Изменения сохраняются при выходе с экрана.</string>
+    <string name="settings_graph_readings_section">Показания глюкозы</string>
+    <string name="settings_graph_records_section">Сохранённые события</string>
+    <string name="settings_graph_presentation_section">Отображение приложения</string>
+    <string name="settings_graph_scans_hint">Показывать значения, полученные при ручном сканировании</string>
+    <string name="settings_graph_calibrated_scans_hint">Показывать калиброванные значения сканирования</string>
+    <string name="settings_graph_stream_hint">Показывать текущие значения от сенсора</string>
+    <string name="settings_graph_calibrated_stream_hint">Показывать калиброванные текущие значения</string>
+    <string name="settings_graph_history_hint">Показывать историю, считанную из сенсора</string>
+    <string name="settings_graph_calibrated_history_hint">Показывать калиброванную историю</string>
+    <string name="settings_graph_amounts_hint">Показывать инсулин, углеводы и другие сохранённые записи</string>
+    <string name="settings_graph_meals_hint">Показывать отметки сохранённых приёмов пищи</string>
+    <string name="settings_graph_floating_hint">Показывать текущую глюкозу в плавающем окне</string>
+    <string name="settings_graph_dark_hint">Использовать тёмное оформление приложения</string>
+    <string name="settings_graph_system_ui_hint">Показывать строки состояния и навигации Android</string>
+    <string name="settings_ranges_section">Диапазоны глюкозы</string>
+    <string name="settings_chart_section">Поведение графика</string>
+    <string name="settings_appearance_section">Внешний вид и язык</string>
+    <string name="settings_support_section">Помощь</string>
+    <string name="settings_manual_time_hint">Разрешить ручное перемещение по оси времени</string>
+    <string name="settings_manual_glucose_hint">Разрешить ручное масштабирование по оси глюкозы</string>
+    <string name="settings_colors_hint">Настроить клинические цвета графика</string>
+    <string name="settings_theme_hint">Выбрать оформление приложения</string>
+    <string name="settings_iob_hint">Настроить расчёт активного инсулина</string>
+    <string name="settings_display_help_hint">Описание настроек графика и отображения</string>
+
+    <string name="settings_alarm_title">Оповещения о глюкозе</string>
+    <string name="settings_alarm_intro">Настройте важные оповещения. У каждого включённого сигнала есть свой порог и звук.</string>
+    <string name="settings_profile_section">Активный профиль</string>
+    <string name="settings_primary_alerts_section">Пределы глюкозы</string>
+    <string name="settings_signal_section">Сигнал и новые показания</string>
+    <string name="settings_delivery_section">Способ оповещения</string>
+    <string name="settings_more_alerts_section">Дополнительные оповещения</string>
+    <string name="settings_threshold_value">Порог</string>
+    <string name="settings_signal_wait">Сообщить через</string>
+    <string name="settings_sound_mode">Воспроизводить сигнал как</string>
+    <string name="settings_low_alarm_hint">Предупреждать при снижении ниже этого значения</string>
+    <string name="settings_high_alarm_hint">Предупреждать при повышении выше этого значения</string>
+    <string name="settings_value_alarm_hint">Сообщать о появлении нового показания глюкозы</string>
+    <string name="settings_signal_alarm_hint">Сообщать, если показания перестали поступать</string>
+
+    <string name="settings_advanced_alarm_title">Расширенные оповещения</string>
+    <string name="settings_advanced_alarm_intro">Добавьте ранние предупреждения и критические пределы, не меняя основные низкий и высокий сигналы.</string>
+    <string name="settings_schedule_section">Автоматизация</string>
+    <string name="settings_schedules_hint">Менять активный профиль оповещений по времени суток</string>
+    <string name="settings_urgent_alerts_section">Критические пределы</string>
+    <string name="settings_early_alerts_section">Ранние предупреждения</string>
+    <string name="settings_alarm_level_hint">Включить этот уровень и задать его порог</string>
+    <string name="settings_advanced_help_hint">Как работают расширенные сигналы и профили</string>
+
+    <string name="settings_schedules_title">Расписание оповещений</string>
+    <string name="settings_schedules_count">Настроено расписаний: %1$d</string>
+    <string name="settings_add_schedule">Добавить расписание</string>
+    <string name="settings_schedule_help_hint">Как применяются профили по времени</string>
+    <string name="settings_schedule_new_title">Новое расписание</string>
+    <string name="settings_schedule_edit_title">Изменить расписание</string>
+    <string name="settings_schedule_editor_intro">Выберите время активации другого профиля оповещений.</string>
+    <string name="settings_schedule_details_section">Параметры расписания</string>
+    <string name="settings_time">Время</string>
+
+    <string name="settings_exchange_title">Подключения и данные</string>
+    <string name="settings_exchange_intro">Управляйте приложениями, которые получают показания, а также хранением и экспортом данных.</string>
+    <string name="settings_broadcasts_section">Подключённые приложения</string>
+    <string name="settings_services_section">Сервисы</string>
+    <string name="settings_data_section">Работа с данными</string>
+    <string name="settings_juggluco_broadcast">Передача в Juggluco</string>
+    <string name="settings_webserver_hint">Передавать показания через локальный Nightscout-совместимый сервер</string>
+    <string name="settings_uploader_hint">Настроить защищённую отправку в Nightscout</string>
+    <string name="settings_health_connect_hint">Записывать поддерживаемые данные в Android Health Connect</string>
+    <string name="settings_export_hint">Создать файл с историей глюкозы и записей</string>
+    <string name="settings_mirror_hint">Синхронизировать данные с другим устройством Juggluco</string>
+    <string name="settings_meters_hint">Управлять подключёнными глюкометрами</string>
+    <string name="settings_exchange_help_hint">Справка о подключениях, передаче и конфиденциальности</string>
+
+    <string name="settings_section_connections">Подключения</string>
+    <string name="settings_section_technical">Технические настройки</string>
+    <string name="settings_legacy_title">Legacy</string>
+    <string name="settings_legacy_intro">Старые и специализированные инструменты собраны здесь, чтобы основные настройки оставались простыми и понятными.</string>
+    <string name="settings_legacy_records_section">Записи и отчёты</string>
+    <string name="settings_legacy_utilities_section">Устройства и инструменты</string>
+    <string name="settings_legacy_list_hint">Открыть существующий список сохранённых записей</string>
+    <string name="settings_legacy_statistics_hint">Посмотреть существующий отчёт по глюкозе</string>
+    <string name="settings_legacy_last_scan_hint">Вернуться к последнему ручному сканированию сенсора</string>
+    <string name="settings_legacy_export_hint">Создать файл с историей глюкозы и записей</string>
+    <string name="settings_legacy_watch_hint">Настроить часы и внешние экраны глюкозы</string>
+    <string name="settings_legacy_talk_hint">Настроить озвучивание показаний</string>
+    <string name="settings_legacy_floating_hint">Настроить плавающее окно глюкозы</string>
+    <string name="settings_legacy_reminders_hint">Управлять существующими напоминаниями</string>
+    <string name="settings_legacy_labels_hint">Управлять метками сохранённых записей</string>
+</resources>

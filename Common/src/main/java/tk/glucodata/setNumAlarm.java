@@ -25,6 +25,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import androidx.appcompat.app.AlertDialog;
 import android.content.DialogInterface;
+import android.graphics.Typeface;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.GestureDetector;
@@ -75,6 +76,12 @@ import static tk.glucodata.util.getbutton;
 
 public class setNumAlarm {
     Layout genlayout=null;
+    private ViewGroup phoneScreen;
+    private RecyclerView phoneRecycler;
+    private View phoneEmptyState;
+    private TextView phoneReminderCount;
+    private TextView phoneFormTitle;
+    private TextView phoneFormError;
 NumAlarmAdapter numadapt;
 private final static String LOG_ID="setNumAlarm";
     //static final private String LOG_ID="setNumAlarm";
@@ -93,8 +100,12 @@ public static boolean issaved;
 };*/
 @SuppressLint("ClickableViewAccessibility")
 public void mkviews(MainActivity act, View set) {
-issaved=false;
-{if(doLog) {Log.i(LOG_ID,"mkviews");};};
+ issaved=false;
+ if(!isWearable) {
+     mkPhoneViews(act,set);
+     return;
+     }
+ {if(doLog) {Log.i(LOG_ID,"mkviews");};};
 set.setVisibility(GONE);
 if(genlayout==null) {
     Button ok=getbutton(act,R.string.closename);
@@ -211,6 +222,203 @@ act.setonback( () -> {
     	});
 }
 
+private void mkPhoneViews(MainActivity act,View set) {
+    set.setVisibility(GONE);
+    if(phoneScreen==null) {
+        LinearLayout content=new LinearLayout(act);
+        content.setOrientation(VERTICAL);
+        content.setBackgroundColor(ClinicalUi.window(act));
+        content.setPadding(ClinicalUi.dp(act,20),MainActivity.systembarTop+ClinicalUi.dp(act,8),
+                ClinicalUi.dp(act,20),
+                MainActivity.systembarBottom+ClinicalUi.dp(act,24));
+
+        Button close=ClinicalUi.button(act,act.getString(R.string.closename),
+                ClinicalUi.ButtonRole.SECONDARY);
+        close.setContentDescription(act.getString(R.string.closename));
+        content.addView(ClinicalUi.header(act,
+                act.getString(R.string.reminder_modern_title),close));
+
+        TextView intro=ClinicalUi.body(act,
+                act.getString(R.string.reminder_modern_subtitle));
+        intro.setPadding(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),
+                ClinicalUi.dp(act,8));
+        content.addView(intro);
+
+        LinearLayout sectionHeader=new LinearLayout(act);
+        sectionHeader.setOrientation(LinearLayout.HORIZONTAL);
+        sectionHeader.setGravity(Gravity.CENTER_VERTICAL);
+        TextView section=ClinicalUi.sectionLabel(act,
+                act.getString(R.string.reminder_modern_scheduled));
+        sectionHeader.addView(section,new LinearLayout.LayoutParams(
+                0,WRAP_CONTENT,1f));
+        phoneReminderCount=ClinicalUi.body(act,"");
+        phoneReminderCount.setTextSize(TypedValue.COMPLEX_UNIT_SP,13);
+        phoneReminderCount.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);
+        sectionHeader.addView(phoneReminderCount,new LinearLayout.LayoutParams(
+                WRAP_CONTENT,MATCH_PARENT));
+        content.addView(sectionHeader);
+
+        FrameLayout listHost=new FrameLayout(act);
+        listHost.setMinimumHeight(ClinicalUi.dp(act,420));
+        LinearLayout.LayoutParams listHostParams=new LinearLayout.LayoutParams(
+                MATCH_PARENT,WRAP_CONTENT);
+        listHostParams.bottomMargin=ClinicalUi.dp(act,14);
+        content.addView(listHost,listHostParams);
+
+        phoneRecycler=new RecyclerView(act);
+        phoneRecycler.setLayoutManager(new LinearLayoutManager(act));
+        phoneRecycler.setNestedScrollingEnabled(false);
+        phoneRecycler.setClipToPadding(false);
+        phoneRecycler.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        phoneRecycler.setPadding(0,ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,10));
+        listHost.addView(phoneRecycler,new FrameLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+
+        phoneEmptyState=makePhoneEmptyState(act);
+        FrameLayout.LayoutParams emptyParams=new FrameLayout.LayoutParams(
+                MATCH_PARENT,WRAP_CONTENT,Gravity.CENTER);
+        listHost.addView(phoneEmptyState,emptyParams);
+
+        Button add=ClinicalUi.button(act,
+                act.getString(R.string.reminder_modern_add),ClinicalUi.ButtonRole.PRIMARY);
+        add.setContentDescription(act.getString(R.string.reminder_modern_add));
+        content.addView(add,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+
+        Button sound=ClinicalUi.button(act,
+                act.getString(R.string.reminder_modern_sound),ClinicalUi.ButtonRole.SECONDARY);
+        LinearLayout.LayoutParams secondaryParams=new LinearLayout.LayoutParams(
+                MATCH_PARENT,WRAP_CONTENT);
+        secondaryParams.topMargin=ClinicalUi.dp(act,10);
+        content.addView(sound,secondaryParams);
+
+        Button helpButton=ClinicalUi.button(act,
+                act.getString(R.string.helpname),ClinicalUi.ButtonRole.SECONDARY);
+        LinearLayout.LayoutParams helpParams=new LinearLayout.LayoutParams(
+                MATCH_PARENT,WRAP_CONTENT);
+        helpParams.topMargin=ClinicalUi.dp(act,10);
+        content.addView(helpButton,helpParams);
+
+        ScrollView screen=ClinicalUi.scrollScreen(act,content);
+        phoneScreen=screen;
+        numadapt=new NumAlarmAdapter(phoneScreen);
+        phoneRecycler.setAdapter(numadapt);
+        close.setOnClickListener(v->act.doonback());
+        add.setOnClickListener(v->{
+            mkitemlayout(act,phoneScreen);
+            emptyitemlayout();
+            });
+        sound.setOnClickListener(v->new RingTones(3).mkviews(act,null,phoneScreen));
+        helpButton.setOnClickListener(v->helplight(R.string.reminders,act));
+        }
+    if(phoneScreen.getParent()==null)
+        act.addMyContentView(phoneScreen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    phoneScreen.setVisibility(VISIBLE);
+    phoneScreen.bringToFront();
+    updatePhoneListState();
+    act.lightBars(false);
+    act.setonback(()->{
+        set.setVisibility(VISIBLE);
+        if(itemlayout!=null&&itemlayout.getParent()!=null)
+            removeContentView(itemlayout);
+        removeContentView(phoneScreen);
+        NumAlarm.handlealarm(act.getApplication());
+        act.themeLightBars();
+        });
+    }
+
+private View makePhoneEmptyState(MainActivity act) {
+    LinearLayout empty=new LinearLayout(act);
+    empty.setOrientation(VERTICAL);
+    empty.setGravity(Gravity.CENTER);
+    empty.setPadding(ClinicalUi.dp(act,24),ClinicalUi.dp(act,30),
+            ClinicalUi.dp(act,24),ClinicalUi.dp(act,30));
+    empty.setBackground(ClinicalUi.surface(act,false,false));
+    TextView title=new TextView(act);
+    title.setText(R.string.reminder_modern_empty_title);
+    title.setTextColor(ClinicalUi.primaryText(act));
+    title.setTextSize(TypedValue.COMPLEX_UNIT_SP,20);
+    title.setTypeface(Typeface.create("sans-serif-medium",Typeface.BOLD));
+    title.setGravity(Gravity.CENTER);
+    empty.addView(title);
+    TextView body=ClinicalUi.body(act,act.getString(R.string.reminder_modern_empty_body));
+    body.setGravity(Gravity.CENTER);
+    body.setPadding(0,ClinicalUi.dp(act,8),0,0);
+    empty.addView(body);
+    return empty;
+    }
+
+private void updatePhoneListState() {
+    if(phoneRecycler==null||phoneEmptyState==null)
+        return;
+    int count=Natives.getNumAlarmCount();
+    phoneRecycler.setVisibility(count==0?GONE:VISIBLE);
+    phoneEmptyState.setVisibility(count==0?VISIBLE:GONE);
+    if(phoneReminderCount!=null)
+        phoneReminderCount.setText(phoneRecycler.getContext().getString(
+                R.string.reminder_modern_count,count));
+    }
+
+static final int REMINDER_VALID=0;
+static final int REMINDER_INVALID_LABEL=1;
+static final int REMINDER_EMPTY_VALUE=2;
+static final int REMINDER_INVALID_VALUE=3;
+static final int REMINDER_SAME_TIME=4;
+
+static int validateReminderInput(String rawValue,int labelIndex,int start,int end) {
+    if(labelIndex<0)
+        return REMINDER_INVALID_LABEL;
+    if(rawValue==null||rawValue.trim().isEmpty())
+        return REMINDER_EMPTY_VALUE;
+    try {
+        float parsed=parseReminderValue(rawValue);
+        if(!Float.isFinite(parsed))
+            return REMINDER_INVALID_VALUE;
+        }
+    catch(NumberFormatException ex) {
+        return REMINDER_INVALID_VALUE;
+        }
+    if(start<0||start>=24*60||end<0||end>=24*60||start==end)
+        return REMINDER_SAME_TIME;
+    return REMINDER_VALID;
+    }
+
+static float parseReminderValue(String rawValue) {
+    return Float.parseFloat(rawValue.trim().replace(',','.'));
+    }
+
+static String formatTimeRange(int start,int end) {
+    return String.format(Locale.US,"%02d:%02d – %02d:%02d",
+            start/60,start%60,end/60,end%60);
+    }
+
+private CharSequence phoneReminderError(MainActivity act,int validation) {
+    switch(validation) {
+        case REMINDER_INVALID_LABEL:
+            return act.getString(R.string.reminder_modern_error_label);
+        case REMINDER_EMPTY_VALUE:
+            return act.getString(R.string.reminder_modern_error_empty_value);
+        case REMINDER_INVALID_VALUE:
+            return act.getString(R.string.reminder_modern_error_value);
+        case REMINDER_SAME_TIME:
+            return act.getString(R.string.reminder_modern_error_time);
+        default:
+            return "";
+        }
+    }
+
+private void showPhoneFormError(MainActivity act,int validation) {
+    if(phoneFormError==null)
+        return;
+    if(validation==REMINDER_VALID) {
+        phoneFormError.setText("");
+        phoneFormError.setVisibility(GONE);
+        }
+    else {
+        phoneFormError.setText(phoneReminderError(act,validation));
+        phoneFormError.setVisibility(VISIBLE);
+        phoneFormError.announceForAccessibility(phoneFormError.getText());
+        }
+    }
+
 
     int alarmpos=-1;
 public class NumAlarmHolder extends RecyclerView.ViewHolder {
@@ -228,6 +436,54 @@ public class NumAlarmHolder extends RecyclerView.ViewHolder {
 
 }
 
+private static final class ReminderCardView extends LinearLayout {
+    private final TextView labelView;
+    private final TextView valueView;
+    private final TextView timeView;
+
+    ReminderCardView(android.content.Context context) {
+        super(context);
+        setOrientation(VERTICAL);
+        setGravity(Gravity.START);
+        setPadding(ClinicalUi.dp(context,18),ClinicalUi.dp(context,15),
+                ClinicalUi.dp(context,18),ClinicalUi.dp(context,15));
+        setMinimumHeight(ClinicalUi.dp(context,96));
+        setBackground(ClinicalUi.surface(context,true,true));
+        setFocusable(true);
+        setClickable(true);
+
+        labelView=new TextView(context);
+        labelView.setTextColor(ClinicalUi.primaryText(context));
+        labelView.setTextSize(TypedValue.COMPLEX_UNIT_SP,18);
+        labelView.setTypeface(Typeface.create("sans-serif-medium",Typeface.BOLD));
+        labelView.setGravity(Gravity.START);
+        addView(labelView,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+
+        LinearLayout details=new LinearLayout(context);
+        details.setOrientation(LinearLayout.HORIZONTAL);
+        details.setGravity(Gravity.CENTER_VERTICAL);
+        details.setPadding(0,ClinicalUi.dp(context,9),0,0);
+        valueView=ClinicalUi.body(context,"");
+        valueView.setTextSize(TypedValue.COMPLEX_UNIT_SP,14);
+        details.addView(valueView,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1f));
+        timeView=new TextView(context);
+        timeView.setTextColor(ClinicalUi.accent(context));
+        timeView.setTextSize(TypedValue.COMPLEX_UNIT_SP,14);
+        timeView.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        timeView.setGravity(Gravity.END);
+        details.addView(timeView,new LinearLayout.LayoutParams(WRAP_CONTENT,WRAP_CONTENT));
+        addView(details,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+        }
+
+    void bind(String label,String value,int start,int end) {
+        labelView.setText(label);
+        valueView.setText(getContext().getString(R.string.reminder_modern_value_summary,value));
+        timeView.setText(formatTimeRange(start,end));
+        setContentDescription(getContext().getString(
+                R.string.reminder_modern_card_description,label,value,formatTimeRange(start,end)));
+        }
+    }
+
 public class NumAlarmAdapter extends RecyclerView.Adapter<NumAlarmHolder> {
    final private ArrayList<String> labels;
     final private View ok;
@@ -238,7 +494,14 @@ public class NumAlarmAdapter extends RecyclerView.Adapter<NumAlarmHolder> {
     @NonNull
     @Override
     public NumAlarmHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-         var view=new TextView( parent.getContext());
+          if(!isWearable) {
+              ReminderCardView card=new ReminderCardView(parent.getContext());
+              RecyclerView.LayoutParams params=new RecyclerView.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+              params.setMargins(0,0,0,ClinicalUi.dp(parent.getContext(),10));
+              card.setLayoutParams(params);
+              return new NumAlarmHolder(card,ok);
+              }
+          var view=new TextView( parent.getContext());
           view.setTransformationMethod(null);
           view.setTextSize(TypedValue.COMPLEX_UNIT_PX, Applic.largefontsize);
           view.setLayoutParams(new ViewGroup.LayoutParams(  MATCH_PARENT, WRAP_CONTENT));
@@ -251,12 +514,20 @@ public class NumAlarmAdapter extends RecyclerView.Adapter<NumAlarmHolder> {
 
     @Override
     public void onBindViewHolder(final NumAlarmHolder holder, int pos) {
-    	TextView text=(TextView)holder.itemView;
     	 Object[] alarmobj=getNumAlarm(pos);
     	 float value=(Float)alarmobj[0];
     	 short[] rest=(short[])alarmobj[1];
     	final short type= rest[3];
-    	final String lab=(type<labels.size())?labels.get(type):"UNLABELED";
+      final String lab=(type>=0&&type<labels.size())?labels.get(type):
+              (isWearable?"UNLABELED":holder.itemView.getContext().getString(
+                      R.string.reminder_modern_unknown_label));
+      if(!isWearable) {
+         short start=rest[0];
+         short alarm=rest[1];
+         ((ReminderCardView)holder.itemView).bind(lab,float2string(value),start,alarm);
+         return;
+         }
+      TextView text=(TextView)holder.itemView;
       if(isWearable)  {
     	      text.setText(String.format(usedlocale,"%s  %s", float2string(value),lab) );
             /*
@@ -319,10 +590,17 @@ void dodelete(View parent,int alarmpos) {
     	this.alarmpos=-1;
     	itemlayout.setVisibility(GONE); 
       if(!isWearable)
+         {
          EnableControls(parent,true);
+         updatePhoneListState();
+         }
       MainActivity.poponback();
     	}
 private void askdelete( View parent,int alarmpos) {
+    if(!isWearable) {
+        askPhoneDelete(parent,alarmpos);
+        return;
+        }
      Object[] alarmobj=getNumAlarm(alarmpos);
      float flvalue=(Float)alarmobj[0];
      short[] rest=(short[])alarmobj[1];
@@ -344,7 +622,198 @@ private void askdelete( View parent,int alarmpos) {
         }).show().setCanceledOnTouchOutside(false);
     }
 
+private void askPhoneDelete(View parent,int alarmIndex) {
+    Object[] alarmobj=getNumAlarm(alarmIndex);
+    float flvalue=(Float)alarmobj[0];
+    short[] rest=(short[])alarmobj[1];
+    short type=rest[3];
+    ArrayList<String> labels=Natives.getLabels();
+    String label=(type>=0&&type<labels.size())?labels.get(type):
+            parent.getContext().getString(R.string.reminder_modern_unknown_label);
+    String valueText=float2string(flvalue);
+    String timeText=formatTimeRange(rest[0],rest[1]);
+    android.content.Context dialogContext=parent.getContext();
+    AlertDialog dialog=new AlertDialog.Builder(dialogContext)
+            .setTitle(R.string.reminder_modern_delete_title)
+            .setMessage(dialogContext.getString(R.string.reminder_modern_delete_message,
+                    label,valueText,timeText))
+            .setNegativeButton(R.string.cancel,null)
+            .setPositiveButton(R.string.delete,(which,id)->dodelete(parent,alarmIndex))
+            .create();
+    dialog.setCanceledOnTouchOutside(false);
+    dialog.setOnShowListener(ignored->{
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(ClinicalUi.danger(dialogContext));
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(ClinicalUi.primaryText(dialogContext));
+        if(dialog.getWindow()!=null)
+            dialog.getWindow().setBackgroundDrawable(ClinicalUi.surface(dialogContext,true,false));
+        });
+    dialog.show();
+    }
+
+private void mkPhoneItemLayout(MainActivity act,View parent) {
+    if(itemlayout==null) {
+        LinearLayout content=ClinicalUi.verticalContent(act);
+        content.setPadding(ClinicalUi.dp(act,20),MainActivity.systembarTop+ClinicalUi.dp(act,8),
+                ClinicalUi.dp(act,20),ClinicalUi.dp(act,30));
+
+        Button headerClose=ClinicalUi.button(act,act.getString(R.string.cancel),
+                ClinicalUi.ButtonRole.SECONDARY);
+        LinearLayout header=ClinicalUi.header(act,"",headerClose);
+        phoneFormTitle=(TextView)header.getChildAt(0);
+        content.addView(header);
+
+        TextView intro=ClinicalUi.body(act,
+                act.getString(R.string.reminder_modern_form_subtitle));
+        intro.setPadding(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),ClinicalUi.dp(act,4));
+        content.addView(intro);
+        content.addView(ClinicalUi.sectionLabel(act,
+                act.getString(R.string.reminder_modern_details)));
+
+        spinner=getGenSpin(act);
+        LabelAdapter<String> labelAdapter=new LabelAdapter<>(act,Natives.getLabels(),1);
+        spinner.setAdapter(labelAdapter);
+        spinner.setMinimumHeight(ClinicalUi.dp(act,50));
+        spinner.setMinimumWidth(ClinicalUi.dp(act,150));
+        spinner.setPaddingRelative(ClinicalUi.dp(act,12),0,ClinicalUi.dp(act,12),0);
+        spinner.setBackground(ClinicalUi.surface(act,false,true));
+        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> selectedParent,View view,int position,long id) {
+                labelsel=position;
+                showPhoneFormError(act,REMINDER_VALID);
+                }
+            @Override
+            public void onNothingSelected(AdapterView<?> selectedParent) {
+                labelsel=-1;
+                }
+            });
+        spinner.setOnTouchListener((view,event)->{
+            hidekeyboard(act);
+            return false;
+            });
+
+        value=makePhoneNumberInput(act);
+        View[] layoutReference=new View[1];
+        startbut=getPhoneTimeView(act,minutes,0,layoutReference);
+        alarmbut=getPhoneTimeView(act,minutes,1,layoutReference);
+        LinearLayout details=ClinicalUi.card(act,
+                ClinicalUi.fieldRow(act,act.getString(R.string.reminder_modern_label),spinner),
+                ClinicalUi.fieldRow(act,act.getString(R.string.reminder_modern_value),value),
+                ClinicalUi.fieldRow(act,act.getString(R.string.reminder_modern_start),startbut),
+                ClinicalUi.fieldRow(act,act.getString(R.string.reminder_modern_end),alarmbut));
+        content.addView(details);
+
+        phoneFormError=ClinicalUi.body(act,"");
+        phoneFormError.setTextColor(ClinicalUi.danger(act));
+        phoneFormError.setTextSize(TypedValue.COMPLEX_UNIT_SP,14);
+        phoneFormError.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        phoneFormError.setPadding(ClinicalUi.dp(act,16),ClinicalUi.dp(act,13),
+                ClinicalUi.dp(act,16),ClinicalUi.dp(act,13));
+        phoneFormError.setBackground(ClinicalUi.surface(act,false,false));
+        phoneFormError.setVisibility(GONE);
+        LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+        errorParams.topMargin=ClinicalUi.dp(act,12);
+        content.addView(phoneFormError,errorParams);
+
+        content.addView(ClinicalUi.sectionLabel(act,
+                act.getString(R.string.reminder_modern_actions)));
+        Button save=ClinicalUi.button(act,act.getString(R.string.reminder_modern_save),
+                ClinicalUi.ButtonRole.PRIMARY);
+        Button cancel=ClinicalUi.button(act,act.getString(R.string.cancel),
+                ClinicalUi.ButtonRole.SECONDARY);
+        Delete=ClinicalUi.button(act,act.getString(R.string.reminder_modern_delete),
+                ClinicalUi.ButtonRole.DANGER);
+        content.addView(save,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+        LinearLayout.LayoutParams actionParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+        actionParams.topMargin=ClinicalUi.dp(act,10);
+        content.addView(cancel,actionParams);
+        LinearLayout.LayoutParams deleteParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+        deleteParams.topMargin=ClinicalUi.dp(act,10);
+        content.addView(Delete,deleteParams);
+
+        ScrollView screen=ClinicalUi.scrollScreen(act,content);
+        itemlayout=screen;
+        layoutReference[0]=itemlayout;
+        headerClose.setOnClickListener(v->act.doonback());
+        cancel.setOnClickListener(v->act.doonback());
+        Delete.setOnClickListener(v->{
+            hidekeyboard(act);
+            if(alarmpos>=0)
+                askdelete(parent,alarmpos);
+            });
+        save.setOnClickListener(v->savePhoneReminder(act,parent));
+        }
+    if(itemlayout.getParent()==null)
+        act.addMyContentView(itemlayout,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    itemlayout.setVisibility(VISIBLE);
+    itemlayout.bringToFront();
+    showPhoneFormError(act,REMINDER_VALID);
+    MainActivity.setonback(()->{
+        hidekeyboard(act);
+        itemlayout.setVisibility(GONE);
+        EnableControls(parent,true);
+        });
+    EnableControls(parent,false);
+    }
+
+private EditText makePhoneNumberInput(MainActivity act) {
+    EditText input=new EditText(act);
+    input.setSingleLine(true);
+    input.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);
+    input.setImeOptions(editoptions);
+    input.setTextColor(ClinicalUi.primaryText(act));
+    input.setHintTextColor(ClinicalUi.secondaryText(act));
+    input.setTextSize(TypedValue.COMPLEX_UNIT_SP,17);
+    input.setGravity(Gravity.CENTER);
+    input.setMinWidth(ClinicalUi.dp(act,112));
+    input.setMinimumHeight(ClinicalUi.dp(act,50));
+    input.setPadding(ClinicalUi.dp(act,12),0,ClinicalUi.dp(act,12),0);
+    input.setBackground(ClinicalUi.surface(act,false,true));
+    return input;
+    }
+
+private static Button getPhoneTimeView(MainActivity act,int[] minutes,int index,View[] parent) {
+    Button button=ClinicalUi.button(act,"00:00",ClinicalUi.ButtonRole.SECONDARY);
+    button.setMinWidth(ClinicalUi.dp(act,112));
+    button.setOnClickListener(v->{
+        parent[0].setVisibility(INVISIBLE);
+        hidekeyboard(act);
+        act.getnumberview().gettimepicker(act,minutes[index]/60,minutes[index]%60,
+                (hour,minute)->{
+                    minutes[index]=hour*60+minute;
+                    button.setText(String.format(Locale.US,"%02d:%02d",hour,minute));
+                    },()->parent[0].setVisibility(VISIBLE));
+        });
+    return button;
+    }
+
+private void savePhoneReminder(MainActivity act,View parent) {
+    int validation=validateReminderInput(value.getText().toString(),labelsel,
+            minutes[0],minutes[1]);
+    if(validation!=REMINDER_VALID) {
+        showPhoneFormError(act,validation);
+        return;
+        }
+    hidekeyboard(act);
+    float parsed=parseReminderValue(value.getText().toString());
+    issaved=true;
+    if(alarmpos>=0) {
+        Natives.delNumAlarm(alarmpos);
+        alarmpos=-1;
+        }
+    Natives.setNumAlarm(labelsel,parsed,minutes[0],minutes[1]);
+    numadapt.notifyDataSetChanged();
+    updatePhoneListState();
+    itemlayout.setVisibility(GONE);
+    EnableControls(parent,true);
+    MainActivity.poponback();
+    }
+
 void  mkitemlayout(MainActivity act,View parent) {
+  if(!isWearable) {
+      mkPhoneItemLayout(act,parent);
+      return;
+      }
   if(itemlayout==null) {
         spinner=getGenSpin(act);
 //        if(isWearable) spinner.setDropDownVerticalOffset((int)(GlucoseCurve.getheight()*.54));
@@ -540,8 +1009,14 @@ void emptyitemlayout() {
     settime(alarmbut,0);
     alarmpos=-1;
     spinner.setSelection(0);
+    labelsel=0;
     //Delete.setVisibility(isWearable?GONE:INVISIBLE); 
-    Delete.setVisibility(INVISIBLE); 
+    Delete.setVisibility(isWearable?INVISIBLE:GONE);
+    if(!isWearable&&phoneFormTitle!=null) {
+        phoneFormTitle.setText(R.string.reminder_modern_add_title);
+        if(phoneFormError!=null)
+            phoneFormError.setVisibility(GONE);
+        }
     }
 void fillitemlayout(int pos) {
     Object[] alarmobj=getNumAlarm(pos);
@@ -551,11 +1026,17 @@ void fillitemlayout(int pos) {
     short alarm=rest[1];
     short type=rest[3];
     spinner.setSelection(type);
+    labelsel=type;
     value.setText(float2string(flvalue));
     minutes[0]=start;
     minutes[1]=alarm;
     settime(startbut,start);
     settime(alarmbut,alarm);
     Delete.setVisibility(VISIBLE); 
+    if(!isWearable&&phoneFormTitle!=null) {
+        phoneFormTitle.setText(R.string.reminder_modern_edit_title);
+        if(phoneFormError!=null)
+            phoneFormError.setVisibility(GONE);
+        }
     }
 }

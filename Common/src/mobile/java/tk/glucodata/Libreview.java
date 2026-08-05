@@ -33,8 +33,12 @@ import android.view.View;
 import android.view.ViewGroup;
 
 import android.widget.EditText;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Space;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.google.android.gms.security.ProviderInstaller;
@@ -566,212 +570,370 @@ final String libre210url=urlnames[Natives.getLibreCountry()];
       }
    }
 
+static long defaultLibreResendStart(long now) {
+   return now-89L*24L*60L*60L*1000L;
+   }
+
 private static void resendDateDialog(MainActivity context,View parent) {
    EnableControls(parent,false);
-   final var sendfrom=getlabel(context,context.getString(R.string.sendfrom));
-   var lasttime=System.currentTimeMillis()-89*24*60*60*1000L;
+   long lasttime=defaultLibreResendStart(System.currentTimeMillis());
    long[] newtime={lasttime};
-   final var helpbutton=getbutton(context,R.string.helpname);
-   helpbutton.setOnClickListener(v-> help.help(R.string.changestart,context));
-   final   var datebutton=getbutton(context, DateFormat.getDateInstance(DateFormat.DEFAULT).format(lasttime));
-   var cal = Calendar.getInstance();
-   var cancel=getbutton(context,R.string.cancel);
-   var ok=getbutton(context, R.string.save);
-   datebutton.setOnClickListener(
-                v -> { 
-         context.getnumberview().getdateviewal(context,newtime[0], (year,month,day)-> {
-           cal.set(Calendar.YEAR,year);
-           cal.set(Calendar.MONTH,month);
-           cal.set(Calendar.DAY_OF_MONTH,day);
-           long newmsec= cal.getTimeInMillis();
-           newtime[0]=newmsec;
-         datebutton.setText(DateFormat.getDateInstance(DateFormat.DEFAULT).format(newmsec));
-         });
-
-      });   
-   cal.setTimeInMillis(newtime[0]);
+   Calendar cal=Calendar.getInstance();
+   cal.setTimeInMillis(lasttime);
    int[] hour={cal.get(Calendar.HOUR_OF_DAY)};
-   int[]  min={cal.get(Calendar.MINUTE)};
-   var timebutton=getbutton(context,  String.format(Locale.US,"%02d:%02d",hour[0],min[0] ));
-   var layout=new Layout(context,(x,w,h)->{
-   /*
-         var width=GlucoseCurve.getwidth();
-         x.setX((width-w)/2);
-         x.setY(MainActivity.systembarTop);
-         */
-         return new int[] {w,h};
-           },new View[]{helpbutton,sendfrom},new View[]{datebutton,timebutton},new View[]{ok,cancel});
-   timebutton.setOnClickListener(v-> {
-     layout.setVisibility(INVISIBLE);
-     context.getnumberview().gettimepicker(context,hour[0], min[0], (h,m) -> {
-            hour[0]=h;
-            min[0]=m;
-            cal.set(Calendar.HOUR_OF_DAY,h);
-            cal.set(Calendar.MINUTE,m);
-                  newtime[0]= cal.getTimeInMillis();
-            timebutton.setText(String.format(Locale.US,"%02d:%02d",h,m));
-            },()-> layout.setVisibility(View.VISIBLE));});
-   layout.setBackgroundColor(Applic.backgroundcolor);
+   int[] min={cal.get(Calendar.MINUTE)};
 
-   var density= tk.glucodata.GlucoseCurve.metrics.density;
-   int pad=(int)(10.0*density);
-   layout.setPadding(pad,pad,pad,(int)(density*14.0));
-   Runnable closeall= () -> { 
-      removeContentView(layout);
+   Button cancel=ConnectionUi.headerButton(context,R.string.cancel);
+   Button datebutton=getbutton(context,
+         DateFormat.getDateInstance(DateFormat.DEFAULT).format(lasttime));
+   Button timebutton=getbutton(context,String.format(Locale.US,"%02d:%02d",hour[0],min[0]));
+   ConnectionUi.styleButton(context,datebutton,ClinicalUi.ButtonRole.SECONDARY);
+   ConnectionUi.styleButton(context,timebutton,ClinicalUi.ButtonRole.SECONDARY);
+   Button save=ClinicalUi.button(context,context.getString(R.string.save),
+         ClinicalUi.ButtonRole.PRIMARY);
+   LinearLayout helpRow=ClinicalUi.actionRow(context,context.getString(R.string.helpname),
+         context.getString(R.string.connection_libre_resend_hint));
+
+   LinearLayout content=ConnectionUi.content(context);
+   content.addView(ClinicalUi.header(context,
+         context.getString(R.string.connection_resend_title),cancel));
+   content.addView(ConnectionUi.intro(context,R.string.connection_resend_intro));
+   content.addView(ClinicalUi.sectionLabel(context,
+         context.getString(R.string.connection_resend_from_section)));
+   content.addView(ClinicalUi.card(context,
+         ClinicalUi.fieldRow(context,context.getString(R.string.connection_date_label),datebutton),
+         ClinicalUi.fieldRow(context,context.getString(R.string.connection_time_label),timebutton)));
+   content.addView(ClinicalUi.sectionLabel(context,
+         context.getString(R.string.connection_support_section)));
+   content.addView(ClinicalUi.card(context,helpRow));
+   LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(
+         ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+   saveParams.topMargin=ClinicalUi.dp(context,20);
+   save.setLayoutParams(saveParams);
+   content.addView(save);
+   ScrollView screen=ConnectionUi.screen(context,content);
+   ConnectionUi.fullScreen(context,screen);
+
+   datebutton.setOnClickListener(view->
+         context.getnumberview().getdateviewal(context,newtime[0],(year,month,day)-> {
+            cal.set(Calendar.YEAR,year);
+            cal.set(Calendar.MONTH,month);
+            cal.set(Calendar.DAY_OF_MONTH,day);
+            newtime[0]=cal.getTimeInMillis();
+            datebutton.setText(DateFormat.getDateInstance(DateFormat.DEFAULT)
+                  .format(newtime[0]));
+            }));
+   timebutton.setOnClickListener(view-> {
+      screen.setVisibility(INVISIBLE);
+      context.getnumberview().gettimepicker(context,hour[0],min[0],(selectedHour,selectedMinute)-> {
+         hour[0]=selectedHour;
+         min[0]=selectedMinute;
+         cal.set(Calendar.HOUR_OF_DAY,selectedHour);
+         cal.set(Calendar.MINUTE,selectedMinute);
+         newtime[0]=cal.getTimeInMillis();
+         timebutton.setText(String.format(Locale.US,"%02d:%02d",selectedHour,selectedMinute));
+         },()->screen.setVisibility(VISIBLE));
+      });
+   helpRow.setOnClickListener(view->help.help(R.string.changestart,context));
+   Runnable closeall=()-> {
+      removeContentView(screen);
       EnableControls(parent,true);
       {if(doLog) {Log.i(LOG_ID,"resendDateDialog back");};};
       };
    context.setonback(closeall);
-   ok.setOnClickListener(v -> {
-      context.poponback();
-      askclearlibreview(context,newtime[0],closeall);
-      });
-   cancel.setOnClickListener(v -> context.doonback());
-    var  params =    
-            new FrameLayout.LayoutParams(
-                    WRAP_CONTENT,
-                    WRAP_CONTENT,
-                    Gravity.CENTER_HORIZONTAL);
-    params.topMargin=MainActivity.systembarTop;
-   context.addMyContentView(layout, params);
+   cancel.setOnClickListener(view->context.doonback());
+   save.setOnClickListener(view->askclearlibreview(context,newtime[0],screen,closeall));
    }
 
-private static   void askclearlibreview(MainActivity context,long fromtime,Runnable r) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
-        var dialog=builder.setTitle(R.string.resendquestion).
-    setMessage(R.string.resendmessage).
-           setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int id) {
-               {if(doLog) {Log.i(LOG_ID,"askclearlibreview Click");};};
-               Natives.clearlibreFromMSec(fromtime);
-               r.run();
-               }
-                }) .setNegativeButton(R.string.cancel, new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int id) {
-         context.setonback(r);
-            }
-        }).create();
-   dialog.setCanceledOnTouchOutside(false);
-   dialog.show();
+private static void askclearlibreview(MainActivity context,long fromtime,View parent,
+      Runnable closeDateScreen) {
+   ConnectionUi.confirmSheet(context,parent,
+         context.getString(R.string.connection_resend_confirm_title),
+         context.getString(R.string.connection_resend_confirm_message),
+         context.getString(R.string.connection_resend_confirm_action),
+         ClinicalUi.ButtonRole.DANGER,()-> {
+            {if(doLog) {Log.i(LOG_ID,"askclearlibreview Click");};};
+            Natives.clearlibreFromMSec(fromtime);
+            context.poponback();
+            closeDateScreen.run();
+            });
    }
 
-private static void      confirmGetAccountID(MainActivity context) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
-       var dialog=builder.setTitle(R.string.getaccountidquestion).
-    setMessage(R.string.getaccountidmessage).
-           setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int id) {
-         Natives.setlibreAccountIDnumber(-1L);
-         Natives.askServerforAccountID();
-                    }
-                }) .setNegativeButton(R.string.cancel, new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int id) {
-            }
-        }).create();
-   dialog.setCanceledOnTouchOutside(false);
-   dialog.show();
+private static void confirmGetAccountID(MainActivity context,View parent) {
+   ConnectionUi.confirmSheet(context,parent,
+         context.getString(R.string.connection_account_request_title),
+         context.getString(R.string.connection_account_request_message),
+         context.getString(R.string.connection_account_request_action),
+         ClinicalUi.ButtonRole.PRIMARY,()-> {
+            Natives.setlibreAccountIDnumber(-1L);
+            Natives.askServerforAccountID();
+            });
    }
 
+static boolean validLibreAccountId(String value) {
+   if(value==null||value.trim().isEmpty())
+      return false;
+   try {
+      Long.parseLong(value.trim());
+      return true;
+      }
+   catch(Throwable ignored) {
+      return false;
+      }
+   }
 
-
-private static void getAccountid(MainActivity context,    Predicate<Boolean> getgegs,View settingsview,CheckDirectionBox sendto,boolean[] donothing) {
-   var setmanually=Natives.manualLibreAccountIDnumber()!=-1L;
-   var manual=getcheckbox(context,R.string.manual, setmanually);;
-   var writedown=getlabel(context,R.string.writedown);
-   writedown.setPadding((int)(tk.glucodata.GlucoseCurve.metrics.density*2),0,0,0);
+private static void getAccountid(MainActivity context,Predicate<Boolean> getgegs,
+      View settingsview,CheckDirectionBox sendto,boolean[] donothing) {
+   boolean setmanually=Natives.manualLibreAccountIDnumber()!=-1L;
+   CheckDirectionBox manual=getcheckbox(context,R.string.manual,setmanually);
    long accountidnum=Natives.getlibreAccountIDnumber();
-   var editid = new EditText(context);
-   editid.setText(accountidnum+"");
+   EditText editid=new EditText(context);
+   editid.setText(String.valueOf(accountidnum));
    editid.setImeOptions(tk.glucodata.settings.Settings.editoptions);
-   editid.setInputType(InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-        editid.setMinEms(5);
-   var fromlibreview=getbutton(context,R.string.fromlibreview);
-   var save=getbutton(context,R.string.save);
-   var close=getbutton(context,R.string.closename);
+   editid.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_SIGNED);
+   ConnectionUi.styleInput(editid);
 
-   var help=getbutton(context,R.string.helpname);
+   Button close=ConnectionUi.headerButton(context,R.string.closename);
+   Button save=ClinicalUi.button(context,context.getString(R.string.save),
+         ClinicalUi.ButtonRole.PRIMARY);
+   LinearLayout manualField=ClinicalUi.fieldRow(context,
+         context.getString(R.string.connection_account_id_field),editid);
+   LinearLayout fromLibreView=ClinicalUi.actionRow(context,
+         context.getString(R.string.connection_account_id_server_title),
+         context.getString(R.string.connection_account_id_server_hint));
+   LinearLayout helpRow=ClinicalUi.actionRow(context,context.getString(R.string.helpname),
+         context.getString(R.string.connection_libre_help_hint));
+   TextView formError=ConnectionUi.status(context,"",true);
 
-   help.setOnClickListener(v-> help(R.string.getaccountidhelp,context));
-   Consumer<Boolean> domanual= isChecked -> {
-      if(!isChecked) {
-         fromlibreview.setVisibility(VISIBLE);
-         writedown.setVisibility(GONE);
-         editid.setVisibility(INVISIBLE);
-         save.setVisibility(INVISIBLE);
+   LinearLayout content=ConnectionUi.content(context);
+   content.addView(ClinicalUi.header(context,
+         context.getString(R.string.connection_account_id_title),close));
+   content.addView(ConnectionUi.intro(context,R.string.connection_account_id_intro));
+   content.addView(ClinicalUi.sectionLabel(context,
+         context.getString(R.string.connection_account_id_source_section)));
+   LinearLayout sourceCard=ClinicalUi.card(context,
+         ConnectionUi.directToggle(context,manual),manualField,fromLibreView);
+   content.addView(sourceCard);
+   LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(
+         ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+   errorParams.topMargin=ClinicalUi.dp(context,12);
+   formError.setLayoutParams(errorParams);
+   content.addView(formError);
+   content.addView(ClinicalUi.sectionLabel(context,
+         context.getString(R.string.connection_support_section)));
+   content.addView(ClinicalUi.card(context,helpRow));
+   LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(
+         ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+   saveParams.topMargin=ClinicalUi.dp(context,20);
+   save.setLayoutParams(saveParams);
+   content.addView(save);
+   ScrollView screen=ConnectionUi.screen(context,content);
+   ConnectionUi.fullScreen(context,screen);
 
-      }
-      else {
-         writedown.setVisibility(VISIBLE);
-         editid.setVisibility(VISIBLE);
-         fromlibreview.setVisibility(GONE);
-         save.setVisibility(VISIBLE);
-      }
-   };
-   domanual.accept(setmanually);
-   manual.setOnCheckedChangeListener(
-         (buttonView,  isChecked) ->
-            domanual.accept(isChecked)
-
-
-   );
-  manual.setPadding(0,0,(int)(tk.glucodata.GlucoseCurve.metrics.density*10),0);
-  final Layout layout=new Layout(context, (lay, w, h) -> {
-      return new int[] {w,h};}, new View[]{manual,editid,help},new View[]{writedown,fromlibreview,close,save});
-
-      layout.setBackgroundResource(R.drawable.dialogbackground);
-      int pad= (int)tk.glucodata.GlucoseCurve.metrics.density*7;
-    layout.setPadding(pad,pad,pad,pad);
-    var  params =    new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER_HORIZONTAL);
-    params.topMargin= MainActivity.systembarTop;
-
-    context.addMyContentView(layout, params);
-   Runnable closerun=()-> {
-      layout.setVisibility(GONE);
-      removeContentView(layout);
-      config(context,  settingsview,sendto, donothing);
+   Consumer<Boolean> showManual=isChecked-> {
+      manualField.setVisibility(isChecked?VISIBLE:GONE);
+      fromLibreView.setVisibility(isChecked?GONE:VISIBLE);
+      save.setVisibility(isChecked?VISIBLE:GONE);
+      formError.setVisibility(GONE);
       };
-   save.setOnClickListener(v->  {
-      if(manual.isChecked()) {
-         String idstr = editid.getText().toString();
-         try {
-            if (idstr.length() > 0) {
-               long id = Long.parseLong(idstr);
-               Natives.setlibreAccountIDnumber(id);
+   showManual.accept(setmanually);
+   manual.setOnCheckedChangeListener((button,checked)->showManual.accept(checked));
 
-               Applic.argToaster(context, context.getString(R.string.saved)+ " "+ id, Toast.LENGTH_SHORT);
-            } else {
-
-               Applic.argToaster(context, context.getString(R.string.noaccountidspecified), Toast.LENGTH_SHORT);
-               return;
-            }
-         } catch (Throwable th) {
-            Applic.argToaster(context, context.getString(R.string.wrongformat) + idstr, Toast.LENGTH_SHORT);
-            Log.stack(LOG_ID, "parse account id", th);
-            return;
+   Runnable closerun=()-> {
+      removeContentView(screen);
+      config(context,settingsview,sendto,donothing);
+      };
+   context.setonback(closerun);
+   close.setOnClickListener(view->context.doonback());
+   helpRow.setOnClickListener(view->help(R.string.getaccountidhelp,context));
+   save.setOnClickListener(view-> {
+      String idText=editid.getText().toString().trim();
+      if(idText.isEmpty()) {
+         formError.setText(R.string.connection_account_id_error_empty);
+         formError.setVisibility(VISIBLE);
+         return;
          }
-      }
-      else {
-         Natives.setlibreAccountIDnumber(-1L);
+      if(!validLibreAccountId(idText)) {
+         formError.setText(R.string.connection_account_id_error_format);
+         formError.setVisibility(VISIBLE);
+         return;
          }
-
+      long id=Long.parseLong(idText);
+      Natives.setlibreAccountIDnumber(id);
+      Applic.argToaster(context,context.getString(R.string.saved)+" "+id,Toast.LENGTH_SHORT);
       context.doonback();
       });
-   
-   fromlibreview.setOnClickListener(v->   {
+   fromLibreView.setOnClickListener(view-> {
       if(!getgegs.test(true))
-            return;
-
-      confirmGetAccountID(context) ;
-      }
-      );
-
-   context.setonback(closerun);
-   close.setOnClickListener(v->  {
-         context.doonback();
-         });
+         return;
+      confirmGetAccountID(context,screen);
+      });
    }
 //      Natives.askServerforAccountID();
-public static void  config(MainActivity act, View settingsview,CheckDirectionBox sendto,boolean[] donothing) {
+static boolean validLibreCredentials(String email,String password,boolean enabled) {
+   if(!enabled)
+      return true;
+   return email!=null&&email.length()>=3&&email.length()<=255
+         &&password!=null&&password.length()>=3&&password.length()<=36;
+   }
+
+public static void config(MainActivity context,View settingsView,
+      CheckDirectionBox sendTo,boolean[] doNothing) {
+   EnableControls(settingsView,false);
+   EditText email=getedit(context,getlibreemail());
+   EditText password=new EditText(context);
+   password.setImeOptions(editoptions);
+   password.setInputType(InputType.TYPE_TEXT_VARIATION_PASSWORD);
+   password.setTransformationMethod(new PasswordTransformationMethod());
+   String previousPassword=getlibrepass();
+   if(previousPassword!=null)
+      password.setText(previousPassword);
+   ConnectionUi.styleInput(email);
+   ConnectionUi.styleInput(password);
+
+   CheckDirectionBox showPassword=getcheckbox(context,R.string.connection_show_password,false);
+   showPassword.setOnCheckedChangeListener((button,checked)-> {
+      int selection=password.getSelectionStart();
+      password.setInputType(checked?InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD:
+            InputType.TYPE_TEXT_VARIATION_PASSWORD);
+      password.setTransformationMethod(checked?null:new PasswordTransformationMethod());
+      password.setSelection(Math.max(0,Math.min(selection,password.length())));
+      });
+   boolean wasEnabled=getuselibreview();
+   CheckDirectionBox enabled=getcheckbox(context,R.string.uselibreview,wasEnabled);
+   CheckDirectionBox russian=getcheckbox(context,R.string.connection_russian_region,
+         Natives.getLibreCountry()==4);
+   CheckDirectionBox current=getcheckbox(context,R.string.librecurrent,Natives.getLibreCurrent());
+   current.setOnCheckedChangeListener((button,checked)->Natives.setLibreCurrent(checked));
+   CheckDirectionBox viewed=getcheckbox(context,R.string.libreisviewed,Natives.getLibreIsViewed());
+   viewed.setOnCheckedChangeListener((button,checked)->Natives.setLibreIsViewed(checked));
+   CheckDirectionBox numbers=getcheckbox(context,R.string.sendamounts,Natives.getSendNumbers());
+
+   Button cancel=ConnectionUi.headerButton(context,R.string.cancel);
+   Button save=ClinicalUi.button(context,context.getString(R.string.save),
+         ClinicalUi.ButtonRole.PRIMARY);
+   LinearLayout sendNow=ClinicalUi.actionRow(context,context.getString(R.string.sendnow),
+         context.getString(R.string.connection_libre_send_hint));
+   sendNow.setEnabled(wasEnabled);
+   sendNow.setAlpha(wasEnabled?1.0f:0.46f);
+   LinearLayout changeStart=ClinicalUi.actionRow(context,
+         context.getString(R.string.changestartbutton),
+         context.getString(R.string.connection_libre_resend_hint));
+   LinearLayout account=ClinicalUi.actionRow(context,
+         context.getString(R.string.getaccountid),
+         context.getString(R.string.connection_libre_account_hint,
+               Natives.getlibreAccountIDnumber()));
+   LinearLayout libreHelp=ClinicalUi.actionRow(context,
+         context.getString(R.string.helpname),context.getString(R.string.connection_libre_help_hint));
+   String localizedStatus=NightPost.visibleStatus(context,librestatus);
+   String visibleStatus=librestatus==success?(posttime+": "+localizedStatus):localizedStatus;
+   TextView status=ConnectionUi.status(context,visibleStatus,librestatus!=success&&librestatus!=nothing);
+   TextView formError=ConnectionUi.status(context,"",true);
+
+   LinearLayout content=ConnectionUi.content(context);
+   content.addView(ClinicalUi.header(context,
+         context.getString(R.string.connection_libre_title),cancel));
+   content.addView(ConnectionUi.intro(context,R.string.connection_libre_intro));
+   content.addView(ClinicalUi.sectionLabel(context,
+         context.getString(R.string.connection_account_section)));
+   content.addView(ClinicalUi.card(context,
+         ClinicalUi.fieldRow(context,context.getString(R.string.email),email),
+         ClinicalUi.fieldRow(context,context.getString(R.string.password),password),
+         ConnectionUi.directToggle(context,showPassword),
+         ConnectionUi.directToggle(context,russian),account));
+   content.addView(ClinicalUi.sectionLabel(context,
+         context.getString(R.string.connection_upload_section)));
+   content.addView(ClinicalUi.card(context,
+         ConnectionUi.directToggle(context,enabled),
+         ConnectionUi.directToggle(context,current),
+         ConnectionUi.directToggle(context,viewed),
+         ConnectionUi.directToggle(context,numbers),sendNow));
+   LinearLayout.LayoutParams statusParams=new LinearLayout.LayoutParams(
+         ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+   statusParams.topMargin=ClinicalUi.dp(context,12);
+   status.setLayoutParams(statusParams);
+   formError.setLayoutParams(statusParams);
+   content.addView(status);
+   content.addView(formError);
+   content.addView(ClinicalUi.sectionLabel(context,
+         context.getString(R.string.connection_maintenance_section)));
+   content.addView(ClinicalUi.card(context,changeStart));
+   content.addView(ClinicalUi.sectionLabel(context,
+         context.getString(R.string.connection_support_section)));
+   content.addView(ClinicalUi.card(context,libreHelp));
+   LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(
+         ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+   saveParams.topMargin=ClinicalUi.dp(context,20);
+   save.setLayoutParams(saveParams);
+   content.addView(save);
+   ScrollView screen=ConnectionUi.screen(context,content);
+   ConnectionUi.fullScreen(context,screen);
+
+   int[] noNumbersChange={0};
+   numbers.setOnCheckedChangeListener((button,checked)-> {
+      switch(noNumbersChange[0]) {
+         case 0:
+            noNumbersChange[0]++;
+            numbers.setChecked(!checked);
+            LibreNumbers.mklayout(context,0,numbers,noNumbersChange,screen);
+            break;
+         case 2:
+            Natives.setSendNumbers(checked);
+            break;
+         default:
+            break;
+         }
+      });
+   Runnable close=()-> {
+      removeContentView(screen);
+      EnableControls(settingsView,true);
+      sendTo.setChecked(wasEnabled);
+      doNothing[0]=false;
+      };
+   context.setonback(close);
+   cancel.setOnClickListener(view->context.doonback());
+   Predicate<Boolean> persistCredentials=turnOn-> {
+      String emailValue=email.getText().toString().trim();
+      String passwordValue=password.getText().toString();
+      if(!validLibreCredentials(emailValue,passwordValue,turnOn)) {
+         formError.setText(R.string.connection_libre_credentials_error);
+         formError.setVisibility(View.VISIBLE);
+         return false;
+         }
+      setlibreemail(emailValue);
+      setlibrepass(passwordValue);
+      if(emailValue.isEmpty()&&passwordValue.isEmpty())
+         Natives.clearlibreFromMSec(0L);
+      boolean wasRussian=Natives.getLibreCountry()==4;
+      if(wasRussian!=russian.isChecked())
+         Natives.setLibreCountry(russian.isChecked()?4:(Applic.unit==1?0:1));
+      return true;
+      };
+   save.setOnClickListener(view-> {
+      boolean turnOn=enabled.isChecked();
+      if(!persistCredentials.test(turnOn))
+         return;
+      setuselibreview(turnOn);
+      context.poponback();
+      removeContentView(screen);
+      EnableControls(settingsView,true);
+      sendTo.setChecked(turnOn);
+      doNothing[0]=false;
+      });
+   sendNow.setOnClickListener(view->wakelibreview(0));
+   changeStart.setOnClickListener(view->resendDateDialog(context,screen));
+   libreHelp.setOnClickListener(view->help(R.string.libreview,context));
+   account.setOnClickListener(view-> {
+      if(!persistCredentials.test(false))
+         return;
+      context.poponback();
+      removeContentView(screen);
+      getAccountid(context,persistCredentials,settingsView,sendTo,doNothing);
+      });
+   }
+
+@SuppressWarnings("unused")
+private static void legacyConfig(MainActivity act, View settingsview,CheckDirectionBox sendto,boolean[] donothing) {
    EnableControls(settingsview,false);
    var emaillabel=getlabel(act,R.string.email);
    var email=getedit(act, getlibreemail());
@@ -812,7 +974,8 @@ public static void  config(MainActivity act, View settingsview,CheckDirectionBox
       }); */
    var clear=getbutton(act,act.getString(R.string.changestartbutton));
 
-     var statusview=getlabel(act,librestatus==success?(posttime+": "+librestatus):librestatus);
+     String localizedStatus=NightPost.visibleStatus(act,librestatus);
+     var statusview=getlabel(act,librestatus==success?(posttime+": "+localizedStatus):localizedStatus);
      int statuspad=  (int)tk.glucodata.GlucoseCurve.metrics.density*7;
    statusview.setPadding(statuspad,statuspad,statuspad,statuspad);
    

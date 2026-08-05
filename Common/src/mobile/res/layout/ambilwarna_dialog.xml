@@ -7,23 +7,29 @@
         android:layout_height="wrap_content"
         android:layout_gravity="center"
         android:clipToPadding="false"
+        android:minWidth="300dp"
         android:paddingBottom="@dimen/ambilwarna_spacer"
-        android:paddingLeft="@dimen/ambilwarna_spacer"
+        android:paddingStart="@dimen/ambilwarna_spacer"
         android:paddingTop="@dimen/ambilwarna_spacer"
-        android:paddingRight="@dimen/ambilwarna_spacer" >
+        android:paddingEnd="@dimen/ambilwarna_spacer" >
 
         <Button
             android:id="@+id/helpambi"
             android:minWidth="88dp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_alignParentStart="true"
+            android:minHeight="48dp"
+            android:textAllCaps="false"
             android:text="@string/helpname" />
         <Button
             android:id="@+id/closeambi"
             android:minWidth="88dp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_toRightOf="@id/helpambi"
+            android:layout_alignParentEnd="true"
+            android:minHeight="48dp"
+            android:textAllCaps="false"
             android:text="@string/closename" />
 
     <yuku.ambilwarna.AmbilWarnaSquare
@@ -31,8 +37,8 @@
         android:layout_width="@dimen/ambilwarna_hsvWidth"
         android:layout_height="@dimen/ambilwarna_hsvHeight"
         android:layout_below="@+id/closeambi"
-
-
+        android:layout_alignParentStart="true"
+        android:layout_marginTop="16dp"
         android:layerType="software"
 
 	/>
@@ -42,14 +48,9 @@
             android:layout_width="@dimen/ambilwarna_hueWidth"
             android:layout_height="@dimen/ambilwarna_hsvHeight"
 	    android:layout_below="@+id/closeambi"
-
-        android:layout_alignRight="@+id/closeambi"
-
-            android:layout_marginRight="@dimen/ambilwarna_spacer"
-
-
-        android:layout_toRightOf="@id/ambilwarna_viewSatBri"
-
+        android:layout_marginStart="12dp"
+        android:layout_marginTop="16dp"
+        android:layout_toEndOf="@id/ambilwarna_viewSatBri"
             android:scaleType="fitXY"
             android:src="@drawable/ambilwarna_hue" />
 

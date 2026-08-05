@@ -37,6 +37,7 @@ extern jstring myNewStringUTF(JNIEnv *env,const std::string_view str);
 #include "fromjava.h"
 #include "rtl_label_converter.h"
 extern Backup *backup;
+extern void resetGraphPanYRangeLock();
 //#define fromjava(x) Java_tk_glucodata_Natives_ ##x
 
 
@@ -205,10 +206,12 @@ extern "C" JNIEXPORT void  JNICALL   fromjava(setAdvancedAlarms)(JNIEnv *env, jc
 extern "C" JNIEXPORT void  JNICALL   fromjava(setGraphRange)(JNIEnv *env, jclass cl,jfloat glow,jfloat ghigh) {
     settings->data()->glow=settings->tomgperL(glow);
     settings->data()->ghigh=settings->tomgperL(ghigh);
+    resetGraphPanYRangeLock();
     }
 extern "C" JNIEXPORT void  JNICALL   fromjava(setTargetRange)(JNIEnv *env, jclass cl,jfloat tlow,jfloat thigh) {
     settings->data()->tlow=settings->tomgperL(tlow);
     settings->data()->thigh=settings->tomgperL(thigh);
+    resetGraphPanYRangeLock();
     }
 /*
 extern "C" JNIEXPORT void  JNICALL   fromjava(setGraphhigh)(JNIEnv *env, jclass cl,jfloat value) {

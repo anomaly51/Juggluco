@@ -24,10 +24,12 @@ package tk.glucodata;
 import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Typeface;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.os.Build;
 import android.text.InputType;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -35,6 +37,7 @@ import android.widget.Button;
 
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Space;
 import android.widget.TextView;
@@ -121,8 +124,360 @@ static private void subEnableControls(View view,boolean enable){
 			subEnableControls(vg.getChildAt(i), enable);
 		}
 	}
-}
+	}
+
+static final int SOUND_INPUT_VALID=0;
+static final int SOUND_INPUT_EMPTY=1;
+static final int SOUND_INPUT_NOT_NUMBER=2;
+static final int SOUND_INPUT_NEGATIVE=3;
+static final int SOUND_INPUT_TOO_LARGE=4;
+
+static int validateDurationInput(String raw) {
+	return validateWholeNumber(raw,65535);
+	}
+
+static int validateSuspensionInput(String raw) {
+	return validateWholeNumber(raw,Short.MAX_VALUE);
+	}
+
+private static int validateWholeNumber(String raw,int maximum) {
+	if(raw==null||raw.trim().isEmpty())
+		return SOUND_INPUT_EMPTY;
+	final long parsed;
+	try {
+		parsed=Long.parseLong(raw.trim());
+		}
+	catch(NumberFormatException ex) {
+		return SOUND_INPUT_NOT_NUMBER;
+		}
+	if(parsed<0)
+		return SOUND_INPUT_NEGATIVE;
+	if(parsed>maximum)
+		return SOUND_INPUT_TOO_LARGE;
+	return SOUND_INPUT_VALID;
+	}
+
+static boolean usesSuspension(int kind) {
+	return kind<2||kind>4;
+	}
+
+static boolean isDefaultTone(String uri) {
+	return uri==null||uri.length()==0;
+	}
+
+private void mkPhoneViews(MainActivity context,String label,View parview) {
+	if(parview!=null)
+		EnableControls(parview,false);
+
+	LinearLayout content=ClinicalUi.verticalContent(context);
+	content.setPadding(ClinicalUi.dp(context,20),
+			MainActivity.systembarTop+ClinicalUi.dp(context,8),
+			ClinicalUi.dp(context,20),ClinicalUi.dp(context,30));
+	Button headerClose=ClinicalUi.button(context,context.getString(R.string.cancel),
+			ClinicalUi.ButtonRole.SECONDARY);
+	content.addView(ClinicalUi.header(context,
+			context.getString(R.string.sound_modern_title),headerClose));
+	TextView subtitle=ClinicalUi.body(context,label==null||label.trim().isEmpty()
+			?context.getString(R.string.sound_modern_reminder_context)
+			:context.getString(R.string.sound_modern_for_context,label));
+	subtitle.setPadding(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
+			ClinicalUi.dp(context,4));
+	content.addView(subtitle);
+
+	content.addView(ClinicalUi.sectionLabel(context,
+			context.getString(R.string.sound_modern_tone_section)));
+	Button select=ClinicalUi.button(context,
+			context.getString(R.string.sound_modern_choose),ClinicalUi.ButtonRole.SECONDARY);
+	LinearLayout currentTone=new LinearLayout(context);
+	currentTone.setOrientation(LinearLayout.HORIZONTAL);
+	currentTone.setGravity(Gravity.CENTER_VERTICAL);
+	currentTone.setMinimumHeight(ClinicalUi.dp(context,78));
+	currentTone.setPaddingRelative(ClinicalUi.dp(context,16),ClinicalUi.dp(context,10),
+			ClinicalUi.dp(context,10),ClinicalUi.dp(context,10));
+	LinearLayout toneCopy=new LinearLayout(context);
+	toneCopy.setOrientation(LinearLayout.VERTICAL);
+	toneCopy.setGravity(Gravity.CENTER_VERTICAL);
+	TextView toneCaption=ClinicalUi.body(context,
+			context.getString(R.string.sound_modern_current));
+	toneCaption.setTextSize(TypedValue.COMPLEX_UNIT_SP,13);
+	toneCopy.addView(toneCaption);
+	name=new TextView(context);
+	name.setText(gettitle(context,uri,kind));
+	name.setTextColor(ClinicalUi.primaryText(context));
+	name.setTextSize(TypedValue.COMPLEX_UNIT_SP,18);
+	name.setTypeface(Typeface.create("sans-serif-medium",Typeface.BOLD));
+	name.setPadding(0,ClinicalUi.dp(context,3),ClinicalUi.dp(context,10),0);
+	toneCopy.addView(name);
+	currentTone.addView(toneCopy,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1f));
+	currentTone.addView(select,new LinearLayout.LayoutParams(WRAP_CONTENT,WRAP_CONTENT));
+
+	CheckDirectionBox defaultTone=new CheckDirectionBox(context);
+	defaultTone.setText(R.string.defaultname);
+	defaultTone.setChecked(isDefaultTone(uri));
+	LinearLayout defaultRow=ClinicalUi.toggleRow(context,defaultTone,
+			context.getString(R.string.sound_modern_default_subtitle));
+	LinearLayout toneCard=ClinicalUi.card(context,currentTone,defaultRow);
+	content.addView(toneCard);
+
+	defaultTone.setOnCheckedChangeListener((button,checked)->{
+		if(checked) {
+			uri=null;
+			name.setText(gettitle(context,uri,kind));
+			select.setVisibility(GONE);
+			}
+		else
+			select.setVisibility(VISIBLE);
+		});
+	select.setVisibility(defaultTone.isChecked()?GONE:VISIBLE);
+	select.setOnClickListener(v->{
+		hidekeyboard(context);
+		try {
+			Intent intent=new Intent(RingtoneManager.ACTION_RINGTONE_PICKER);
+			intent.putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE,RingtoneManager.TYPE_ALL);
+			intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT,false);
+			intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT,false);
+			int request=MainActivity.REQUEST_RINGTONE|kind;
+			context.startActivityForResult(Intent.createChooser(intent,null),request);
+			}
+		catch(Throwable th) {
+			Applic.argToaster(context,R.string.no_ringtone_picker_found,Toast.LENGTH_LONG);
+			}
+		});
+
+	content.addView(ClinicalUi.sectionLabel(context,
+			context.getString(R.string.sound_modern_timing_section)));
+	EditText durationInput=makePhoneWholeNumberInput(context,duration);
+	LinearLayout timingCard;
+	final boolean glucoseAlarm=usesSuspension(kind);
+	EditText suspensionInput=makePhoneWholeNumberInput(context,susp);
+	View durationRow=ClinicalUi.fieldRow(context,
+			context.getString(R.string.sound_modern_duration),durationInput);
+	if(glucoseAlarm) {
+		View suspensionRow=ClinicalUi.fieldRow(context,
+				context.getString(R.string.sound_modern_suspension),suspensionInput);
+		timingCard=ClinicalUi.card(context,durationRow,suspensionRow);
+		}
+	else
+		timingCard=ClinicalUi.card(context,durationRow);
+	content.addView(timingCard);
+
+	content.addView(ClinicalUi.sectionLabel(context,
+			context.getString(R.string.sound_modern_delivery_section)));
+	CheckDirectionBox sound=new CheckDirectionBox(context);
+	sound.setText(R.string.soundname);
+	sound.setChecked(Natives.alarmhassound(kind));
+	CheckDirectionBox vibration=new CheckDirectionBox(context);
+	vibration.setText(R.string.vibrationname);
+	vibration.setChecked(Natives.alarmhasvibration(kind));
+	flashview=new CheckDirectionBox(context);
+	flashview.setText(R.string.flash);
+	final boolean hasFlash=Flash.hasFlash(context);
+	if(hasFlash)
+		flashview.setChecked(Natives.alarmhasflash(kind));
+	CheckDirectionBox disturb=new CheckDirectionBox(context);
+	if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.M) {
+		disturb.setText(R.string.disturb);
+		disturb.setChecked(getalarmdisturb(kind));
+		disturb.setOnCheckedChangeListener((button,checked)->{
+			if(checked)
+				context.asknotificationAccess();
+			});
+		}
+	LinearLayout soundRow=ClinicalUi.toggleRow(context,sound,
+			context.getString(R.string.sound_modern_sound_subtitle));
+	LinearLayout vibrationRow=ClinicalUi.toggleRow(context,vibration,
+			context.getString(R.string.sound_modern_vibration_subtitle));
+	LinearLayout flashRow=hasFlash?ClinicalUi.toggleRow(context,flashview,
+			context.getString(R.string.sound_modern_flash_subtitle)):null;
+	LinearLayout disturbRow=Build.VERSION.SDK_INT>=Build.VERSION_CODES.M
+			?ClinicalUi.toggleRow(context,disturb,
+			context.getString(R.string.sound_modern_disturb_subtitle)):null;
+	LinearLayout deliveryCard=ClinicalUi.card(context,soundRow,vibrationRow,flashRow,disturbRow);
+	content.addView(deliveryCard);
+	sound.setOnCheckedChangeListener((button,checked)->{
+		subEnableControls(toneCard,checked);
+		toneCard.setAlpha(checked?1f:.55f);
+		});
+	subEnableControls(toneCard,sound.isChecked());
+	toneCard.setAlpha(sound.isChecked()?1f:.55f);
+
+	TextView error=ClinicalUi.body(context,"");
+	error.setTextColor(ClinicalUi.danger(context));
+	error.setTextSize(TypedValue.COMPLEX_UNIT_SP,14);
+	error.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+	error.setPadding(ClinicalUi.dp(context,16),ClinicalUi.dp(context,13),
+			ClinicalUi.dp(context,16),ClinicalUi.dp(context,13));
+	error.setBackground(ClinicalUi.surface(context,false,false));
+	error.setVisibility(GONE);
+	LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+	errorParams.topMargin=ClinicalUi.dp(context,12);
+	content.addView(error,errorParams);
+
+	content.addView(ClinicalUi.sectionLabel(context,
+			context.getString(R.string.sound_modern_preview_section)));
+	Button preview=ClinicalUi.button(context,context.getString(R.string.sound_modern_preview),
+			ClinicalUi.ButtonRole.PRIMARY);
+	Button stop=ClinicalUi.button(context,context.getString(R.string.sound_modern_stop),
+			ClinicalUi.ButtonRole.SECONDARY);
+	LinearLayout previewRow=new LinearLayout(context);
+	previewRow.setOrientation(LinearLayout.HORIZONTAL);
+	previewRow.addView(preview,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1f));
+	LinearLayout.LayoutParams stopParams=new LinearLayout.LayoutParams(0,WRAP_CONTENT,1f);
+	stopParams.setMarginStart(ClinicalUi.dp(context,10));
+	previewRow.addView(stop,stopParams);
+	content.addView(previewRow);
+
+	Button save=ClinicalUi.button(context,context.getString(R.string.sound_modern_save),
+			ClinicalUi.ButtonRole.PRIMARY);
+	Button cancel=ClinicalUi.button(context,context.getString(R.string.cancel),
+			ClinicalUi.ButtonRole.SECONDARY);
+	LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+	saveParams.topMargin=ClinicalUi.dp(context,18);
+	content.addView(save,saveParams);
+	LinearLayout.LayoutParams cancelParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+	cancelParams.topMargin=ClinicalUi.dp(context,10);
+	content.addView(cancel,cancelParams);
+	Button helpButton=ClinicalUi.button(context,context.getString(R.string.helpname),
+			ClinicalUi.ButtonRole.SECONDARY);
+	LinearLayout.LayoutParams helpParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+	helpParams.topMargin=ClinicalUi.dp(context,10);
+	content.addView(helpButton,helpParams);
+
+	ScrollView screen=ClinicalUi.scrollScreen(context,content);
+	context.addMyContentView(screen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+	Runnable closeScreen=()->{
+		Notify.stopalarm();
+		if(parview!=null)
+			EnableControls(parview,true);
+		one=null;
+		hidekeyboard(context);
+		Settings.removeContentView(screen);
+		};
+	headerClose.setOnClickListener(v->context.doonback());
+	cancel.setOnClickListener(v->context.doonback());
+	stop.setOnClickListener(v->Notify.stopalarm());
+	helpButton.setOnClickListener(v->{
+		if(parview!=null&&parview.getX()>0)
+			helplight(R.string.ringtone,context);
+		else
+			help(R.string.ringtone,context);
+		});
+	preview.setOnClickListener(v->{
+		int validation=validateDurationInput(durationInput.getText().toString());
+		if(validation!=SOUND_INPUT_VALID) {
+			showPhoneSoundError(context,error,validation,false);
+			return;
+			}
+		showPhoneSoundError(context,error,SOUND_INPUT_VALID,false);
+		try {
+			hidekeyboard(context);
+			int previewDuration=Integer.parseInt(durationInput.getText().toString().trim());
+			Ringtone ringtone=Notify.mkrings(uri,kind);
+			Notify.playring(ringtone,previewDuration,sound.isChecked(),
+				hasFlash&&flashview.isChecked(),vibration.isChecked(),
+				Build.VERSION.SDK_INT<Build.VERSION_CODES.M||disturb.isChecked(),kind);
+			}
+		catch(Throwable ex) {
+			Log.stack(LOG_ID,"preview",ex);
+			error.setText(R.string.sound_modern_error_preview);
+			error.setVisibility(VISIBLE);
+			}
+		});
+	save.setOnClickListener(v->{
+		int durationValidation=validateDurationInput(durationInput.getText().toString());
+		if(durationValidation!=SOUND_INPUT_VALID) {
+			showPhoneSoundError(context,error,durationValidation,false);
+			return;
+			}
+		if(glucoseAlarm) {
+			int suspensionValidation=validateSuspensionInput(suspensionInput.getText().toString());
+			if(suspensionValidation!=SOUND_INPUT_VALID) {
+				showPhoneSoundError(context,error,suspensionValidation,true);
+				return;
+				}
+			}
+		Notify.stopalarm();
+		try {
+			int savedDuration=Integer.parseInt(durationInput.getText().toString().trim());
+			Natives.writealarmduration(kind,savedDuration);
+			if(glucoseAlarm) {
+				short savedSuspension=Short.parseShort(suspensionInput.getText().toString().trim());
+				SuperGattCallback.writealarmsuspension(kind,savedSuspension);
+				}
+			if(defaultTone.isChecked())
+				uri="";
+			if(!Natives.writering(kind,uri,sound.isChecked(),
+					hasFlash&&flashview.isChecked(),vibration.isChecked())) {
+				error.setText(R.string.sound_modern_error_save);
+				error.setVisibility(VISIBLE);
+				return;
+				}
+			if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.M)
+				Natives.setalarmdisturb(kind,disturb.isChecked());
+			}
+		catch(Throwable ex) {
+			Log.stack(LOG_ID,"save",ex);
+			error.setText(R.string.sound_modern_error_save);
+			error.setVisibility(VISIBLE);
+			return;
+			}
+		context.poponback();
+		closeScreen.run();
+		});
+	context.setonback(closeScreen);
+	}
+
+private static EditText makePhoneWholeNumberInput(MainActivity context,int value) {
+	EditText input=new EditText(context);
+	input.setSingleLine(true);
+	input.setImeOptions(editoptions);
+	input.setInputType(InputType.TYPE_CLASS_NUMBER);
+	input.setText(String.valueOf(value));
+	input.setTextColor(ClinicalUi.primaryText(context));
+	input.setHintTextColor(ClinicalUi.secondaryText(context));
+	input.setTextSize(TypedValue.COMPLEX_UNIT_SP,17);
+	input.setGravity(Gravity.CENTER);
+	input.setMinWidth(ClinicalUi.dp(context,112));
+	input.setMinimumHeight(ClinicalUi.dp(context,50));
+	input.setPadding(ClinicalUi.dp(context,12),0,ClinicalUi.dp(context,12),0);
+	input.setBackground(ClinicalUi.surface(context,false,true));
+	return input;
+	}
+
+private static void showPhoneSoundError(
+		MainActivity context,TextView error,int validation,boolean suspension) {
+	if(validation==SOUND_INPUT_VALID) {
+		error.setText("");
+		error.setVisibility(GONE);
+		return;
+		}
+	int message;
+	switch(validation) {
+		case SOUND_INPUT_EMPTY:
+			message=suspension?R.string.sound_modern_error_suspension_empty:
+					R.string.sound_modern_error_duration_empty;
+			break;
+		case SOUND_INPUT_NEGATIVE:
+			message=R.string.sound_modern_error_negative;
+			break;
+		case SOUND_INPUT_TOO_LARGE:
+			message=suspension?R.string.sound_modern_error_suspension_large:
+					R.string.sound_modern_error_duration_large;
+			break;
+		default:
+			message=R.string.sound_modern_error_number;
+			break;
+		}
+	error.setText(message);
+	error.setVisibility(VISIBLE);
+	error.announceForAccessibility(error.getText());
+	}
+
  public void mkviews(MainActivity context,String label,View parview) {
+		if(!isWearable) {
+			mkPhoneViews(context,label,parview);
+			return;
+			}
  		if(parview!=null) {
 //			parview.setVisibility(GONE);
 			EnableControls(parview,false);

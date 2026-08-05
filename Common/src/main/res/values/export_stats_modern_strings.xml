@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="export_modern_title">Export data</string>
+    <string name="export_modern_intro">Choose a period and the dataset you want to save. Android will ask where to create the file.</string>
+    <string name="export_modern_period_section">Period</string>
+    <string name="export_modern_period_label">Previous</string>
+    <string name="export_modern_days_unit">days</string>
+    <string name="export_modern_period_helper">Decimal values are supported. The period ends at the latest available reading.</string>
+    <string name="export_modern_calibrated_helper">Apply calibrated glucose values where this export format supports them.</string>
+    <string name="export_modern_type_section">Choose data type</string>
+    <string name="export_modern_amounts_helper">Logged insulin, carbohydrates, notes, and other entered values.</string>
+    <string name="export_modern_scans_helper">Glucose readings recorded by manual sensor scans.</string>
+    <string name="export_modern_stream_helper">Continuous glucose readings received from the sensor.</string>
+    <string name="export_modern_history_helper">Historical readings stored by the sensor.</string>
+    <string name="export_modern_meals_helper">Meal-related records in a browser-readable report.</string>
+    <string name="export_modern_libreview_helper">CSV formatted for compatible LibreView workflows.</string>
+    <string name="export_modern_card_description">Export %1$s as %2$s</string>
+    <string name="export_modern_error_empty">Enter how many previous days to export.</string>
+    <string name="export_modern_error_number">Enter a valid number of days.</string>
+    <string name="export_modern_error_positive">The export period must be greater than zero.</string>
+
+    <string name="stats_modern_title">Statistics</string>
+    <string name="stats_modern_controls_section">Period and source</string>
+    <string name="stats_modern_period_value">Previous %1$d days</string>
+    <string name="stats_modern_history_helper">Use sensor history instead of the live glucose stream.</string>
+    <string name="stats_modern_loading">Calculating statistics…</string>
+    <string name="stats_modern_ready">Statistics ready · target values use the green clinical range.</string>
+    <string name="stats_modern_no_stream_data">No stream readings are available for this period. Showing history instead.</string>
+    <string name="stats_modern_no_history_data">No history readings are available for this period. Showing stream data instead.</string>
+    <string name="stats_modern_no_period_data">No readings are available for that period. Try another period.</string>
+    <string name="stats_modern_report">Open report</string>
+    <string name="stats_modern_period_title">Statistics period</string>
+    <string name="stats_modern_period_intro">Choose how far back the statistics calculation should look.</string>
+    <string name="stats_modern_period_section">Analysis window</string>
+    <string name="stats_modern_period_label">Previous</string>
+    <string name="stats_modern_days_unit">days</string>
+    <string name="stats_modern_quick_period">%1$d d</string>
+    <string name="stats_modern_actions_section">Actions</string>
+    <string name="stats_modern_apply_period">Apply period</string>
+    <string name="stats_modern_error_empty">Enter the number of days to analyse.</string>
+    <string name="stats_modern_error_number">Use a whole number of days.</string>
+    <string name="stats_modern_error_positive">The period must be at least one day.</string>
+    <string name="stats_modern_error_large">The selected period is too large.</string>
+</resources>

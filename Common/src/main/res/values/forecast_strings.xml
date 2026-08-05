@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="forecast_dashboard_unavailable">AI forecast</string>
+    <string name="forecast_dashboard_loading">AI · checking</string>
+    <string name="forecast_dashboard_ready">AI · %1$d min</string>
+    <string name="forecast_dashboard_learning">AI · learning</string>
+    <string name="forecast_dashboard_preview">AI · preview</string>
+    <string name="forecast_dashboard_description">Forecast status: %1$s. Open forecast details.</string>
+
+    <string name="forecast_page_title">AI forecast</string>
+    <string name="forecast_page_subtitle">Personal 120-minute glucose outlook</string>
+    <string name="forecast_refresh">Refresh forecast</string>
+    <string name="forecast_refresh_loading">Refreshing forecast</string>
+    <string name="forecast_status_checking">Checking backend</string>
+    <string name="forecast_status_ready">Forecast ready</string>
+    <string name="forecast_status_learning">Personal model learning</string>
+    <string name="forecast_status_cold_start">More history needed</string>
+    <string name="forecast_status_no_data">Waiting for CGM data</string>
+    <string name="forecast_status_stale">Current reading is outdated</string>
+    <string name="forecast_status_low_confidence">Data confidence is too low</string>
+    <string name="forecast_status_unavailable">Forecast unavailable</string>
+    <string name="forecast_horizon_label">VISIBLE HORIZON</string>
+    <string name="forecast_confidence_label">CONFIDENCE</string>
+    <string name="forecast_horizon_minutes">%1$d min</string>
+    <string name="forecast_confidence_percent">%1$d%%</string>
+    <string name="forecast_value_unavailable">—</string>
+    <string name="forecast_not_generated">No forecast has been generated yet</string>
+    <string name="forecast_generated_at">Generated %1$s · based on reading at %2$s</string>
+    <string name="forecast_backend_error">Couldn’t reach the configured backend. Check connection settings and try again.</string>
+    <string name="forecast_default_notice">Experimental estimate. Future meals, insulin, activity, illness, and sensor variation can change the trajectory.</string>
+
+    <string name="forecast_factors_title">Active factors</string>
+    <string name="forecast_factors_empty">No recorded meal or insulin is active in this forecast</string>
+    <string name="forecast_factor_meal">Meal</string>
+    <string name="forecast_factor_rapid">NovoRapid</string>
+    <string name="forecast_factor_long">Tresiba</string>
+    <string name="forecast_factor_line">%1$s · peak %2$s · estimated end %3$s · %4$d%% confidence</string>
+    <string name="forecast_factor_meal_line">%1$s · estimated %2$s absorption · peak %3$s · end %4$s · %5$d%% confidence</string>
+    <string name="forecast_absorption_slow">slow</string>
+    <string name="forecast_absorption_balanced">balanced</string>
+    <string name="forecast_absorption_fast">fast</string>
+    <string name="forecast_absorption_unknown">unknown</string>
+    <string name="forecast_factor_carbs_amount">%1$s g carbs</string>
+    <string name="forecast_factor_insulin_amount">%1$s U</string>
+    <string name="forecast_factor_amount_unknown">Amount unavailable</string>
+    <string name="forecast_factor_timeline_estimated">Recorded %1$s · effective onset %2$s · peak %3$s–%4$s · end %5$s–%6$s</string>
+    <string name="forecast_factor_timeline">Start %1$s · peak %2$s · end %3$s</string>
+    <string name="forecast_factor_remaining_minutes">About %1$d min remaining</string>
+    <string name="forecast_factor_remaining_hours">About %1$d h %2$d min remaining</string>
+    <string name="forecast_factor_complete">Estimated effect complete</string>
+    <string name="forecast_factor_profile">Profile: %1$s · %2$d%% confidence</string>
+    <string name="forecast_factor_effective_action">Effective-action estimate: %1$s · attribution %2$d%% · identifiability %3$s</string>
+    <string name="forecast_action_model_population">population starting curve</string>
+    <string name="forecast_action_model_personalized">personalized action curve</string>
+    <string name="forecast_action_model_contextual">context-aware estimate</string>
+    <string name="forecast_action_model_basal">overlapping basal background</string>
+    <string name="forecast_identifiability_high">high</string>
+    <string name="forecast_identifiability_medium">medium</string>
+    <string name="forecast_identifiability_low">low</string>
+    <string name="forecast_identifiability_not_identifiable">not separable from overlapping effects</string>
+    <string name="forecast_identifiability_unknown">not reported</string>
+    <plurals name="forecast_factor_overlap">
+        <item quantity="one">Overlaps %1$d other record; curves remain separate.</item>
+        <item quantity="other">Overlaps %1$d other records; curves remain separate.</item>
+    </plurals>
+    <string name="forecast_profile_ai">AI food estimate</string>
+    <string name="forecast_profile_nutrient">nutrient estimate</string>
+    <string name="forecast_profile_personalized">learned personal profile</string>
+    <string name="forecast_profile_population">population starting profile</string>
+    <string name="forecast_profile_unknown">source unavailable</string>
+    <string name="forecast_factor_meal_explanation">Estimated %1$s absorption may raise glucose; the curve shows how that modeled contribution changes over time.</string>
+    <string name="forecast_factor_rapid_explanation">Estimated NovoRapid action may lower glucose. The displayed timing and strength are model estimates, not a measured physiological peak.</string>
+    <string name="forecast_factor_long_explanation">Tresiba is shown as an estimated overlapping basal background. A single injection peak usually cannot be separated reliably from CGM alone.</string>
+    <string name="forecast_factor_contribution">Largest modeled contribution: %1$s mg/dL</string>
+    <string name="forecast_factor_contribution_mmol">Largest modeled contribution: %1$s mmol/L</string>
+    <string name="forecast_factor_contribution_unknown">Contribution curve is still being estimated</string>
+    <string name="forecast_factor_chart_description">%1$s activity and glucose contribution chart. %2$s</string>
+
+    <string name="forecast_data_title">Personal data coverage</string>
+    <string name="forecast_data_empty">Waiting for enough confirmed history</string>
+    <string name="forecast_data_summary">%1$d readings · %2$.1f days\nMeals %3$d · NovoRapid %4$d · Tresiba %5$d</string>
+    <string name="forecast_last_reading">Last CGM reading %1$s</string>
+
+    <string name="forecast_accuracy_title">Observed accuracy</string>
+    <string name="forecast_accuracy_7d">7 days</string>
+    <string name="forecast_accuracy_30d">30 days</string>
+    <string name="forecast_accuracy_not_ready">%1$s · not enough scored outcomes</string>
+    <string name="forecast_accuracy_period">%1$s · MAE %2$s</string>
+    <string name="forecast_accuracy_window">%1$s · MAE 30 min %2$s · 60 min %3$s · 120 min %4$s</string>
+    <string name="forecast_accuracy_overall">All scored · MAE 30 min %1$s · 60 min %2$s · 120 min %3$s</string>
+    <string name="forecast_mae_value">%1$.1f mg/dL</string>
+    <string name="forecast_mae_value_mmol">%1$.1f mmol/L</string>
+
+    <string name="forecast_model_title">Model state</string>
+    <string name="forecast_model_waiting">Training has not started</string>
+    <string name="forecast_training_summary">%1$s · %2$d of %3$d samples</string>
+    <string name="forecast_training_state_unknown">Waiting</string>
+    <string name="forecast_training_not_started">Not started</string>
+    <string name="forecast_training_insufficient">Building history</string>
+    <string name="forecast_training_trained">Trained</string>
+    <string name="forecast_training_in_progress">Training</string>
+    <string name="forecast_last_trained">Last trained %1$s</string>
+    <string name="forecast_not_trained">Not trained yet</string>
+    <string name="forecast_model_version">Model %1$s</string>
+    <string name="forecast_model_version_unknown">Model version unavailable</string>
+</resources>

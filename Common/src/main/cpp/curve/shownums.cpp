@@ -21,6 +21,7 @@
 #ifndef WEAROS
 
 #include <array>
+#include <algorithm>
 #include <stdio.h>
 #include "numiter.hpp"
 #include "settings/settings.hpp"
@@ -35,6 +36,18 @@ struct geo_t {
  int width;
  int height;
 } numcontrol;
+
+float numlistcontenttop(const JCurve &curve) {
+	if(!curve.modernui)
+		return curve.statusbarheight;
+	const float toolbar=std::max(curve.density*72.0f,
+			static_cast<float>(numcontrol.height));
+	return curve.statusbarheight+toolbar;
+	}
+
+float numlistrowheight(const JCurve &curve) {
+	return curve.modernui?curve.density*76.0f:curve.textheight;
+	}
  float JCurve::second(geo_t&geo) const {
        return (dwidth-statusbarleft-statusbarright+geo.width)/2 +dleft+statusbarleft;	
  	};
@@ -44,29 +57,54 @@ float JCurve::colwidth(geo_t&geo) const {
 
 //extern int statusbarheight;
 template <typename F> void JCurve::columnfromabove(NVGcontext* vg,const F &show) {
-	float miny=dtop+textheight*.35+statusbarheight;
-	int nr=(dheight-statusbarheight)/textheight;
-	for(float y=miny;nr--&&show(y);y+=textheight) {
+	const float contenttop=numlistcontenttop(*this);
+	const float rowheight=numlistrowheight(*this);
+	float miny=dtop+contenttop;
+	int nr=(dheight-contenttop)/rowheight;
+	for(float y=miny;nr--&&show(y);y+=rowheight) {
 		}
 
 	}
 	
 template <typename F> void JCurve::columnfrombelow(NVGcontext* vg,int nr,const F &show) {
-	float miny=dtop+textheight*.35+statusbarheight;
-	float maxy= miny+(nr-1)*textheight;
+	const float contenttop=numlistcontenttop(*this);
+	const float rowheight=numlistrowheight(*this);
+	float miny=dtop+contenttop;
+	float maxy= miny+(nr-1)*rowheight;
 
-	for(float y=maxy;nr--&&show(y);y-=textheight) {
+	for(float y=maxy;nr--&&show(y);y-=rowheight) {
 		}
 
 	}
 
 
 void JCurve::initcolumns( NVGcontext* vg) {
-	nvgStrokeColor(vg, *getyellow());
+	nvgStrokeColor(vg, modernui?modernGraphGlucose:*getyellow());
 	nvgStrokeWidth(vg, hitStrokeWidth);
 	nvgFontFaceId(vg,font);
 	nvgFontSize(vg, menusize);
-	nvgFillColor(vg, *getblack()); 
+	nvgFillColor(vg, modernui?modernGraphText:*getblack());
+	}
+
+static void modernrecordbackground(NVGcontext *vg,const float left,
+		const float right,const float top,const float height,const float density,
+		const NVGcolor accent,const bool selected) {
+	const float inset=density*5.0f;
+	const float radius=density*18.0f;
+	nvgBeginPath(vg);
+	nvgRoundedRect(vg,left,top+inset,right-left,height-inset*2.0f,radius);
+	nvgFillColor(vg,selected?nvgRGBA(23,34,28,255):nvgRGBA(21,25,27,255));
+	nvgFill(vg);
+	nvgBeginPath(vg);
+	nvgRoundedRect(vg,left,top+inset,right-left,height-inset*2.0f,radius);
+	nvgStrokeWidth(vg,density*(selected?1.5f:1.0f));
+	nvgStrokeColor(vg,selected?nvgRGBA(90,203,133,210):
+			nvgRGBA(42,46,44,255));
+	nvgStroke(vg);
+	nvgBeginPath(vg);
+	nvgCircle(vg,left+density*18.0f,top+height*.5f,density*4.0f);
+	nvgFillColor(vg,accent);
+	nvgFill(vg);
 	}
 
 extern int nrcolumns; 
@@ -86,7 +124,8 @@ template <typename F> void JCurve::numscreen(NVGcontext* vg, const F & col)  {
 	}
 template <typename F> void JCurve::numscreenback(NVGcontext* vg, const F & col)  {
 	initcolumns(vg);
-	int nr=(dheight-statusbarheight)/textheight;
+	const float contenttop=numlistcontenttop(*this);
+	int nr=(dheight-contenttop)/numlistrowheight(*this);
 
    auto l=dleft+ statusbarleft;
    auto w=dwidth-statusbarright-statusbarleft;
@@ -118,6 +157,61 @@ template<typename T>   bool searchhit(const T *ptr);
 extern template   bool searchhit<Num>(const Num *ptr); 
 #endif
 void	JCurve::shower(NVGcontext* vg,const Num *num,const float xpos,const float xend,const float ypos) {
+	if(modernui) {
+		const float rowheight=numlistrowheight(*this);
+		const float left=xpos+density*6.0f;
+		const float right=xend-density*6.0f;
+		const bool selected=
+#ifdef JUGGLUCO_APP
+				searchhit(num);
+#else
+				false;
+#endif
+		const NVGcolor accent=num->type<settings->getlabelcount()
+				?*getcolor(num->type):nvgRGBA(125,133,129,255);
+		modernrecordbackground(vg,left,right,ypos,rowheight,density,accent,selected);
+		if(num->type>=settings->getlabelcount()) {
+			const char *deleted=usedtext->deleted.data();
+			const int dellen=usedtext->deleted.size();
+			nvgFontFaceId(vg,font);
+			nvgFontSize(vg,menusize*.72f);
+			nvgFillColor(vg,nvgRGBA(125,133,129,255));
+			nvgTextAlign(vg,NVG_ALIGN_LEFT|NVG_ALIGN_MIDDLE);
+			nvgText(vg,left+density*32.0f,ypos+rowheight*.5f,
+					deleted,deleted+dellen);
+			return;
+			}
+		char datebuf[48];
+		const int datelen=datestr2(num->time,datebuf);
+		decltype(auto) label=settings->getlabel(num->type);
+		nvgFontFaceId(vg,font);
+		nvgFontSize(vg,menusize*.72f);
+		nvgFillColor(vg,nvgRGBA(242,244,243,255));
+		nvgTextAlign(vg,NVG_ALIGN_LEFT|NVG_ALIGN_TOP);
+		nvgText(vg,left+density*32.0f,ypos+density*13.0f,
+				label.data(),label.data()+label.size());
+		nvgFontSize(vg,smallsize*.80f);
+		nvgFillColor(vg,nvgRGBA(142,150,146,255));
+		nvgText(vg,left+density*32.0f,ypos+rowheight*.61f,
+				datebuf,datebuf+datelen);
+		char valuebuf[32];
+		const int valuelen=snprintf(valuebuf,sizeof(valuebuf),"%.1f",num->value);
+		nvgFontSize(vg,menusize*.90f);
+		nvgFillColor(vg,accent);
+		nvgTextAlign(vg,NVG_ALIGN_RIGHT|NVG_ALIGN_MIDDLE);
+		nvgText(vg,right-density*27.0f,ypos+rowheight*.5f,
+				valuebuf,valuebuf+valuelen);
+		const float arrowx=right-density*13.0f;
+		const float arrowy=ypos+rowheight*.5f;
+		nvgBeginPath(vg);
+		nvgMoveTo(vg,arrowx-density*2.5f,arrowy-density*4.0f);
+		nvgLineTo(vg,arrowx+density*1.5f,arrowy);
+		nvgLineTo(vg,arrowx-density*2.5f,arrowy+density*4.0f);
+		nvgStrokeWidth(vg,density*1.5f);
+		nvgStrokeColor(vg,nvgRGBA(119,127,123,220));
+		nvgStroke(vg);
+		return;
+		}
 	if(num->type>=settings->getlabelcount()) {
 //		constexpr char const deleted[]="Deleted";
         const char *deleted=usedtext->deleted.data();
@@ -186,6 +280,8 @@ extern float listitemlen;
 extern void numiterinit() ;
 extern int numlist;
 int getcolumns(jint width) {
+	if(appcurve.modernui)
+		return appcurve.dwidth<appcurve.density*680.0f?1:2;
 	return ((appcurve.listitemlen*2+width)>appcurve.dwidth)?1:2;
 	}
 extern "C" JNIEXPORT jint JNICALL fromjava(getcolumns)(JNIEnv *env, jclass thiz,jint width) {

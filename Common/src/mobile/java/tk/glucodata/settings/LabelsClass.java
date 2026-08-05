@@ -49,6 +49,8 @@ import android.widget.AdapterView;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -60,6 +62,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import java.util.ArrayList;
 
 import tk.glucodata.Applic;
+import tk.glucodata.ClinicalUi;
 import tk.glucodata.GlucoseCurve;
 import tk.glucodata.LabelAdapter;
 import tk.glucodata.Layout;
@@ -85,56 +88,71 @@ Button delete=null;
 LabelListAdapter    adapt;
 void mkchangelabel(MainActivity context,Runnable onsave,View parent) {
         EnableControls(parent,false);
-        TextView labeltext = new TextView(context);
-        labeltext.setText(R.string.numlabel);
         label = new EditText(context);
         label.setInputType(InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-
         label.setImeOptions(editoptions);
-        label.setMinEms(7);
-    View[] precview=null;
+        label.setMinEms(10);
+        label.setLayoutParams(new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+
         if(garminwatch) {
-            TextView prectext = new TextView(context);
-            prectext.setText(R.string.roundto);
             labelprec = new EditText(context);
             labelprec.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
             labelprec.setMinEms(3);
-         labelprec.setImeOptions(editoptions);
-         precview=new View[]{prectext,labelprec};
+            labelprec.setImeOptions(editoptions);
+            labelprec.setLayoutParams(new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
             }
-        TextView weighttext = new TextView(context);
-        weighttext.setText(R.string.weight);
         labelweight = new EditText(context);
         labelweight.setInputType( InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         labelweight.setMinEms(3);
         labelweight.setImeOptions(editoptions);
-        Button help=new Button(context);
-        help.setText(R.string.helpname);
-        help.setOnClickListener(v->{help(R.string.newlabelhelp,(MainActivity)(v.getContext()));});
-        Button cancel=new Button(context);
-        cancel.setText(R.string.cancel);
-        cancel.setOnClickListener(v->{
-        context.doonback();
-        });
-        Button save=new Button(context);
-    View [][] views= garminwatch?(new View[][]{new View[]{labeltext,label}, precview,  new View[]{weighttext, labelweight} ,new View[]{help,cancel,save}}):(new View[][]{new View[]{labeltext,label},  new View[]{weighttext, labelweight} ,new View[]{help,cancel,save}});
+        labelweight.setLayoutParams(new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
 
-        var editlabel = new Layout(context,
-                (l, w, h) -> {
-            hideSystemUI();
-            /*
-            var width=getscreenwidth(context);
-            if(width>w)
-                  l.setX(( width- w) *.6f);
-          l.setY(MainActivity.systembarTop);
-          */
-            return new int[] {w,h};
-                }, views);
+        Button cancel=ClinicalUi.button(context,context.getString(R.string.cancel),
+                ClinicalUi.ButtonRole.SECONDARY);
+        Button save=ClinicalUi.button(context,context.getString(R.string.save),
+                ClinicalUi.ButtonRole.PRIMARY);
+        Button help=ClinicalUi.button(context,context.getString(R.string.helpname),
+                ClinicalUi.ButtonRole.SECONDARY);
+        help.setOnClickListener(v->{help(R.string.newlabelhelp,(MainActivity)(v.getContext()));});
+
+        LinearLayout content=ClinicalUi.verticalContent(context);
+        content.setPadding(
+                MainActivity.systembarLeft+ClinicalUi.dp(context,20),
+                MainActivity.systembarTop+ClinicalUi.dp(context,8),
+                MainActivity.systembarRight+ClinicalUi.dp(context,20),
+                MainActivity.systembarBottom+ClinicalUi.dp(context,28));
+        content.addView(ClinicalUi.header(context,
+                context.getString(R.string.numlabel),cancel));
+        content.addView(ClinicalUi.sectionLabel(context,
+                context.getString(R.string.numlabel)));
+        java.util.ArrayList<View> fields=new java.util.ArrayList<>();
+        fields.add(ClinicalUi.fieldRow(context,
+                context.getString(R.string.numlabel),label));
+        if(garminwatch)
+            fields.add(ClinicalUi.fieldRow(context,
+                    context.getString(R.string.roundto),labelprec));
+        fields.add(ClinicalUi.fieldRow(context,
+                context.getString(R.string.weight),labelweight));
+        content.addView(ClinicalUi.card(context,fields.toArray(new View[0])));
+
+        LinearLayout actions=new LinearLayout(context);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams half=new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f);
+        half.setMarginEnd(ClinicalUi.dp(context,6));
+        actions.addView(help,half);
+        LinearLayout.LayoutParams primary=new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.35f);
+        primary.setMarginStart(ClinicalUi.dp(context,6));
+        actions.addView(save,primary);
+        content.addView(ClinicalUi.sectionLabel(context,
+                context.getString(R.string.helpname)));
+        content.addView(actions);
+
+        ScrollView editlabel=ClinicalUi.scrollScreen(context,content);
+        cancel.setOnClickListener(v->context.doonback());
     if(Natives.staticnum()) {
-        save.setVisibility(INVISIBLE);
+        save.setVisibility(GONE);
         }
     else {
-        save.setText(R.string.save);
         save.setOnClickListener(v-> {
             float pr=garminwatch?edit2float(labelprec):0;
             float wei=edit2float(labelweight);
@@ -159,27 +177,22 @@ void mkchangelabel(MainActivity context,Runnable onsave,View parent) {
                 }
             tk.glucodata.help.hidekeyboard(activity) ;
 
-            editlabel.setVisibility(GONE);
+            removeContentView(editlabel);
             adapt.notifyDataSetChanged();
             EnableControls(parent,true);
             onsave.run();
             context.poponback();
             } );
         }
-          editlabel.setBackgroundResource(R.drawable.dialogbackground);
-       int pad=(int)(tk.glucodata.GlucoseCurve.metrics.density*5.0);
-       editlabel.setPadding(pad,0,pad,0);
-        var params= new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER_HORIZONTAL);
-        params.topMargin=MainActivity.systembarTop;
-        context.addMyContentView(editlabel, params);
+        context.addMyContentView(editlabel,new ViewGroup.LayoutParams(
+                MATCH_PARENT,MATCH_PARENT));
 
 
 
     context.setonback(() -> {
         tk.glucodata.help.hidekeyboard(activity) ;
-        editlabel.setVisibility(GONE);
         EnableControls(parent,true);
-        if(editlabel!=null) removeContentView(editlabel) ;
+        removeContentView(editlabel) ;
         });
 }
 
@@ -218,14 +231,16 @@ void    mklabellayout(View parent ) {
     parent.setVisibility(INVISIBLE);
     labels=Applic.app.getlabels();
     MainActivity context = activity;
-//    if(labellayout==null) {
-    Button ok = new Button(context);
-    ok.setText(R.string.ok);
+    Button ok=ClinicalUi.button(context,context.getString(R.string.closename),
+            ClinicalUi.ButtonRole.SECONDARY);
     RecyclerView recycle = new RecyclerView(context);
     recycle.setHasFixedSize(true);
     LinearLayoutManager lin = new LinearLayoutManager(context);
     recycle.setLayoutManager(lin);
-    Button addnew = new Button(context);
+    recycle.setClipToPadding(false);
+    recycle.setPadding(0,ClinicalUi.dp(context,8),0,ClinicalUi.dp(context,12));
+    Button addnew=ClinicalUi.button(context,context.getString(R.string.newname),
+            ClinicalUi.ButtonRole.PRIMARY);
 
     Spinner spinner=new Spinner(context);
     final int minheight= GlucoseCurve.dpToPx(48);
@@ -250,24 +265,50 @@ void    mklabellayout(View parent ) {
                     addnew.setVisibility(INVISIBLE);
                 };
 
-    delete = new Button(context);
+    delete=ClinicalUi.button(context,context.getString(R.string.deletelast),
+            ClinicalUi.ButtonRole.DANGER);
     TextView menulabel=getlabel(context,context.getString(R.string.meal));
 //    spinner.clearAnimation();
     spinner.setSelection(Natives.getmealvar());
     Layout.getMargins(spinner).setMarginEnd((int)(tk.glucodata.GlucoseCurve.metrics.density*8.0));
-    Button help=new Button(context);
+    Button help=ClinicalUi.button(context,context.getString(R.string.helpname),
+            ClinicalUi.ButtonRole.SECONDARY);
     help.setOnClickListener(v->{help(R.string.labelhelp,context); });
-    help.setText(R.string.helpname);
-    Layout butlay=new Layout(context,new View[]{menulabel,spinner},new View[] {delete},new View[]{help},new View[]{addnew},new View[]{ok});
-    butlay.setLayoutParams(new ViewGroup.LayoutParams(   ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        recycle.setLayoutParams(new ViewGroup.LayoutParams(   ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-    butlay.setPaddingRelative(0,MainActivity.systembarTop/2,MainActivity.systembarEnd,MainActivity.systembarBottom);
-    recycle.setPaddingRelative(MainActivity.systembarStart+(int)(tk.glucodata.GlucoseCurve.metrics.density*8.0),MainActivity.systembarTop,0,MainActivity.systembarBottom);
-    final ViewGroup  labellayout=new Layout(context,(x,w,h)->{
-                hideSystemUI();
-            return new int[] {w,h};
-    },new View[] {recycle,butlay});
+    LinearLayout labellayout=new LinearLayout(context);
+    labellayout.setOrientation(LinearLayout.VERTICAL);
+    labellayout.setBackgroundColor(ClinicalUi.window(context));
+    labellayout.setPadding(
+            MainActivity.systembarLeft+ClinicalUi.dp(context,20),
+            MainActivity.systembarTop+ClinicalUi.dp(context,8),
+            MainActivity.systembarRight+ClinicalUi.dp(context,20),
+            MainActivity.systembarBottom+ClinicalUi.dp(context,16));
+    labellayout.addView(ClinicalUi.header(context,
+            context.getString(R.string.numberlabels),ok));
+    labellayout.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.meal)));
+    labellayout.addView(ClinicalUi.card(context,
+            ClinicalUi.fieldRow(context,context.getString(R.string.meal),spinner)));
+    labellayout.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.numberlabels)));
+    labellayout.addView(recycle,new LinearLayout.LayoutParams(
+            MATCH_PARENT,0,1.0f));
+
+    LinearLayout secondaryActions=new LinearLayout(context);
+    secondaryActions.setOrientation(LinearLayout.HORIZONTAL);
+    LinearLayout.LayoutParams actionLeft=new LinearLayout.LayoutParams(
+            0,WRAP_CONTENT,1.0f);
+    actionLeft.setMarginEnd(ClinicalUi.dp(context,6));
+    secondaryActions.addView(help,actionLeft);
+    LinearLayout.LayoutParams actionRight=new LinearLayout.LayoutParams(
+            0,WRAP_CONTENT,1.0f);
+    actionRight.setMarginStart(ClinicalUi.dp(context,6));
+    secondaryActions.addView(delete,actionRight);
+    labellayout.addView(secondaryActions);
+    LinearLayout.LayoutParams addParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    addParams.topMargin=ClinicalUi.dp(context,12);
+    labellayout.addView(addnew,addParams);
 
     adapt = new LabelListAdapter(labels, this,onsave,labellayout); //USE
     recycle.setAdapter(adapt);
@@ -281,10 +322,6 @@ void    mklabellayout(View parent ) {
             label.setText("");
             labelpos = -1;
         });
-        addnew.setText(R.string.newname);
-        delete.setText(R.string.deletelast);
-
-
         if((labels.size()-1)>=40)
             addnew.setVisibility(INVISIBLE);
 
@@ -324,7 +361,6 @@ void    mklabellayout(View parent ) {
         closerun.run();
     });
 
-        labellayout.setBackgroundColor(Applic.backgroundcolor);
         context.addMyContentView(labellayout, new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT));
    /* }
     else {
@@ -347,13 +383,22 @@ static public class LabelListAdapter extends RecyclerView.Adapter<LabelListHolde
     @NonNull
     @Override
     public LabelListHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-        Button view=new Button( parent.getContext());
-
-    view.setTransformationMethod(null);
-   //     view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f);
-   if(!isWearable)
-           view.setTextSize(TypedValue.COMPLEX_UNIT_PX,Applic.largefontsize);
-    view.setLayoutParams(new ViewGroup.LayoutParams(  ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        Button view = ClinicalUi.button(parent.getContext(), "", ClinicalUi.ButtonRole.SECONDARY);
+        view.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        view.setSingleLine(false);
+        view.setMinHeight(ClinicalUi.dp(parent.getContext(), 58));
+        view.setPaddingRelative(
+                ClinicalUi.dp(parent.getContext(), 16),
+                ClinicalUi.dp(parent.getContext(), 10),
+                ClinicalUi.dp(parent.getContext(), 16),
+                ClinicalUi.dp(parent.getContext(), 10));
+        view.setBackground(ClinicalUi.surface(parent.getContext(), false, true));
+        RecyclerView.LayoutParams params = new RecyclerView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.bottomMargin = ClinicalUi.dp(parent.getContext(), 8);
+        view.setLayoutParams(params);
 
         return new LabelListHolder(view,settings,onsave,this.parlayout);
 

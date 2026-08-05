@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="hardware_scan_transmitter">Сканировать передатчик</string>
+    <string name="hardware_sensor_setup">Настройка сенсора</string>
+    <string name="hardware_reset_helper">Сбросить сохранённое имя передатчика перед сканированием нового кода.</string>
+    <string name="hardware_continue_setup">Продолжить</string>
+    <string name="hardware_sensor_model_title">Выберите модель сенсора</string>
+    <string name="hardware_sensor_model_intro">Выберите точную модель, указанную на упаковке. От неё зависит способ активации и протокол Bluetooth.</string>
+    <string name="hardware_sensor_model_section">Доступные модели</string>
+
+    <string name="hardware_account_id">ID аккаунта</string>
+    <string name="hardware_account_section">Аккаунт</string>
+    <string name="hardware_manual_account_title">Введите ID аккаунта</string>
+    <string name="hardware_manual_account_intro">Введите числовой ID аккаунта, выданный SIBIONICS.</string>
+    <string name="hardware_account_error_positive">Введите ID аккаунта больше нуля.</string>
+    <string name="hardware_account_error_empty">Укажите ID аккаунта.</string>
+    <string name="hardware_account_error_format">ID аккаунта должен содержать только цифры.</string>
+    <string name="hardware_server_account_title">Получить ID аккаунта</string>
+    <string name="hardware_server_account_intro">Войдите, чтобы получить ID аккаунта, необходимый этому сенсору. Данные используются только для этого запроса.</string>
+    <string name="hardware_credentials_section">Данные SIBIONICS</string>
+    <string name="hardware_show_password">Показать пароль</string>
+    <string name="hardware_password_helper">Временно показать пароль во время ввода.</string>
+    <string name="hardware_not_retrieved">Ещё не получен</string>
+    <string name="hardware_credentials_error">Проверьте адрес почты и требования к паролю.</string>
+    <string name="hardware_account_setup_title">Аккаунт SIBIONICS</string>
+    <string name="hardware_current_account_section">Текущий ID аккаунта</string>
+    <string name="hardware_account_method_section">Способ настройки</string>
+
+    <string name="hardware_novopen_title">Импорт доз NovoPen</string>
+    <string name="hardware_import_window_section">Период импорта</string>
+    <string name="hardware_import_after_date">После даты</string>
+    <string name="hardware_import_after_time">После времени</string>
+    <string name="hardware_record_type_section">Тип записи</string>
+</resources>

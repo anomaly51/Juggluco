@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dashboard_today">Сегодня</string>
+    <string name="dashboard_graph_title">График глюкозы</string>
+    <string name="dashboard_state_in_target">В целевом диапазоне</string>
+    <string name="dashboard_state_low">Ниже диапазона</string>
+    <string name="dashboard_state_high">Выше диапазона</string>
+    <string name="dashboard_state_unknown">Диапазон недоступен</string>
+    <string name="dashboard_state_waiting">Ожидание сенсора</string>
+    <string name="dashboard_target_range">Цель %1$s–%2$s %3$s</string>
+    <string name="dashboard_target_unavailable">Целевой диапазон</string>
+    <string name="dashboard_preview_short">Предпросмотр — не данные сенсора</string>
+    <string name="dashboard_backend_checking">Backend · проверка</string>
+    <string name="dashboard_backend_connected">Backend · подключён</string>
+    <string name="dashboard_backend_offline">Backend · нет связи</string>
+    <string name="dashboard_backend_settings">Статус backend. Открыть настройки соединения.</string>
+    <string name="dashboard_backend_open_settings">%1$s. Открыть настройки backend.</string>
+</resources>

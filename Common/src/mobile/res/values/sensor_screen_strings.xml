@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sensor_screen_subtitle">Connection and data flow</string>
+    <string name="sensor_screen_active_sensor">Active sensor</string>
+    <string name="sensor_screen_choose_sensor">Selected device</string>
+    <string name="sensor_screen_device_address">Device address</string>
+    <string name="sensor_screen_diagnostics">Diagnostics</string>
+    <string name="sensor_screen_diagnostics_hint">Recent connection events and sensor exchanges</string>
+    <string name="sensor_screen_started">Sensor started</string>
+    <string name="sensor_screen_connection_settings">Connection settings</string>
+    <string name="sensor_screen_alarm_clock">Sensor alarm clock</string>
+    <string name="sensor_screen_high_priority">High-priority Bluetooth connection</string>
+    <string name="sensor_screen_android_autoconnect">Android Bluetooth auto-connect</string>
+</resources>

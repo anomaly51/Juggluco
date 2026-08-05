@@ -41,10 +41,11 @@ import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
-import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.ArrayList;
@@ -68,13 +69,16 @@ static public class InsulinTypeAdapter extends RecyclerView.Adapter<InsulinTypeH
     @NonNull
     @Override
     public InsulinTypeHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-        Button view=new Button( act);
-
-        view.setTransformationMethod(null);
-   //     view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f);
-       if(!isWearable)
-               view.setTextSize(TypedValue.COMPLEX_UNIT_PX,Applic.largefontsize);
-        view.setLayoutParams(new ViewGroup.LayoutParams(  ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        Button view=ClinicalUi.button(act,"",ClinicalUi.ButtonRole.SECONDARY);
+        view.setGravity(android.view.Gravity.START|android.view.Gravity.CENTER_VERTICAL);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP,16f);
+        view.setSingleLine(false);
+        view.setMinHeight(ClinicalUi.dp(act,58));
+        view.setBackground(ClinicalUi.surface(act,false,true));
+        RecyclerView.LayoutParams params=new RecyclerView.LayoutParams(MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.bottomMargin=ClinicalUi.dp(act,8);
+        view.setLayoutParams(params);
 
         return new InsulinTypeHolder(view,act,this,labels);
     }
@@ -96,26 +100,36 @@ static public class InsulinTypeAdapter extends RecyclerView.Adapter<InsulinTypeH
 
 public static void mkview(MainActivity act) {
     RecyclerView recycle = new RecyclerView(act);
-    recycle.setHasFixedSize(true);
-    GridLayoutManager lin=new GridLayoutManager(act,3);
+    recycle.setHasFixedSize(false);
+    LinearLayoutManager lin=new LinearLayoutManager(act);
     recycle.setLayoutManager(lin);
-    recycle.setLayoutParams(new ViewGroup.LayoutParams(   ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     var adapt = new InsulinTypeAdapter(act);
     recycle.setAdapter(adapt);
     var iob=getcheckbox(act,"IOB",Natives.getIOB());
-    var help=getbutton(act, R.string.helpname);
+    var help=ClinicalUi.button(act,act.getString(R.string.helpname),
+            ClinicalUi.ButtonRole.SECONDARY);
    help.setOnClickListener(v-> help(R.string.IOBhelp,act));
-    var ok=getbutton(act, R.string.ok);
-   var lay=new Layout(act,(x,w,h)->{
-         return new int[] {w,h};
-           },new View[]{recycle},new View[]{help,iob,ok});
-   lay.setBackgroundColor(Applic.backgroundcolor);
-   final var density= tk.glucodata.GlucoseCurve.metrics.density;
-   var hormarg=(int)(0.15f*GlucoseCurve.getwidth());
-
-   getMargins(help).setMarginStart(hormarg);
-   getMargins(ok).setMarginEnd(hormarg);   
-   lay.setPadding(MainActivity.systembarLeft+(int)(density*10.0f),MainActivity.systembarTop,MainActivity.systembarRight+(int)(density*10.0f),MainActivity.systembarBottom);
+    var close=ClinicalUi.button(act,act.getString(R.string.closename),
+            ClinicalUi.ButtonRole.SECONDARY);
+    LinearLayout lay=ClinicalUi.verticalContent(act);
+    lay.setPaddingRelative(MainActivity.systembarLeft+ClinicalUi.dp(act,20),
+            MainActivity.systembarTop+ClinicalUi.dp(act,8),
+            MainActivity.systembarRight+ClinicalUi.dp(act,20),
+            MainActivity.systembarBottom+ClinicalUi.dp(act,20));
+    lay.setLayoutParams(new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    lay.addView(ClinicalUi.header(act,act.getString(R.string.clinical_iob_title),close));
+    TextView intro=ClinicalUi.body(act,act.getString(R.string.clinical_iob_intro));
+    intro.setPaddingRelative(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),
+            ClinicalUi.dp(act,6));
+    lay.addView(intro);
+    lay.addView(ClinicalUi.sectionLabel(act,act.getString(R.string.clinical_iob_status_section)));
+    lay.addView(ClinicalUi.card(act,ClinicalUi.toggleRow(act,iob,
+            act.getString(R.string.clinical_iob_toggle_hint))));
+    lay.addView(ClinicalUi.sectionLabel(act,act.getString(R.string.clinical_iob_labels_section)));
+    recycle.setClipToPadding(false);
+    recycle.setPadding(0,0,0,ClinicalUi.dp(act,8));
+    lay.addView(recycle,new LinearLayout.LayoutParams(MATCH_PARENT,0,1f));
+    lay.addView(help,new LinearLayout.LayoutParams(MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT));
     iob.setOnCheckedChangeListener( (buttonView,  isChecked) -> {
             if(!Natives.setIOB(isChecked)) {
                 iob.setChecked(false);
@@ -125,7 +139,7 @@ public static void mkview(MainActivity act) {
             }
         ); 
     act.addMyContentView(lay, new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT));
-   ok.setOnClickListener(v-> {
+   close.setOnClickListener(v-> {
         MainActivity.doonback();
         });
     MainActivity.setonback(()-> removeContentView(lay));

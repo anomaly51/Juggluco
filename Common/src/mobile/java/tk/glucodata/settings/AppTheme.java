@@ -7,7 +7,8 @@ import tk.glucodata.R;
 
 public enum AppTheme {
     // DARK THEMES
-    DEFAULT("Default", R.style.AppTheme_AndroidDefault, true),
+    // Keep DEFAULT first: its ordinal is persisted by the native settings layer.
+    DEFAULT("Clinical Dark", R.style.AppTheme_ClinicalDark, true),
     DARK("Dark", R.style.AppTheme_Dark, true),
     OCEANIC("Oceanic Dark", R.style.AppTheme_OceanicDark, true),
     SUNSET("Sunset Elegance", R.style.AppTheme_SunsetElegance, true),

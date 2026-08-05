@@ -39,6 +39,7 @@ import static tk.glucodata.util.getlabel;
 import static tk.glucodata.MainActivity.screenheight;
 
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.text.InputType;
 import android.view.KeyEvent;
@@ -46,6 +47,9 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 
 import android.widget.CompoundButton;
 import android.widget.EditText;
@@ -76,232 +80,194 @@ static public int    getcolor() {
 
 
 
+private static GradientDrawable swatch(MainActivity context,int color) {
+    GradientDrawable shape=new GradientDrawable();
+    shape.setShape(GradientDrawable.RECTANGLE);
+    shape.setColor(color);
+    shape.setStroke(ClinicalUi.dp(context,1),
+            ClinicalUi.blend(ClinicalUi.primaryText(context),ClinicalUi.window(context),.24f));
+    shape.setCornerRadius(ClinicalUi.dp(context,12));
+    return shape;
+    }
+
+private static LinearLayout colorRow(MainActivity context,CharSequence title,int color) {
+    LinearLayout row=ClinicalUi.actionRow(context,title,
+            String.format(usedlocale,"#%08X",color));
+    View sample=new View(context);
+    sample.setBackground(swatch(context,color));
+    sample.setContentDescription(title);
+    LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(
+            ClinicalUi.dp(context,40),ClinicalUi.dp(context,40));
+    params.setMarginStart(ClinicalUi.dp(context,8));
+    params.setMarginEnd(ClinicalUi.dp(context,6));
+    row.addView(sample,1,params);
+    return row;
+    }
+
+private static void openColorPicker(MainActivity act,View parent,int initialColor,
+        AmbilWarnaDialog.IntConsumer consumer) {
+    parent.setVisibility(INVISIBLE);
+    FrameLayout screen=new FrameLayout(act);
+    screen.setBackgroundColor(ClinicalUi.window(act));
+    screen.setPadding(MainActivity.systembarLeft+ClinicalUi.dp(act,18),
+            MainActivity.systembarTop+ClinicalUi.dp(act,18),
+            MainActivity.systembarRight+ClinicalUi.dp(act,18),
+            MainActivity.systembarBottom+ClinicalUi.dp(act,18));
+    AmbilWarnaDialog picker=new AmbilWarnaDialog(act,initialColor,color->{
+        consumer.accept(color);
+        Floating.invalidatefloat();
+        },view->{});
+    View pickerView=picker.getview();
+    pickerView.setBackground(ClinicalUi.surface(act,true,false));
+    pickerView.setPadding(ClinicalUi.dp(act,18),ClinicalUi.dp(act,18),
+            ClinicalUi.dp(act,18),ClinicalUi.dp(act,18));
+    FrameLayout.LayoutParams pickerParams=new FrameLayout.LayoutParams(WRAP_CONTENT,
+            WRAP_CONTENT,android.view.Gravity.CENTER);
+    screen.addView(pickerView,pickerParams);
+    act.addMyContentView(screen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    Button done=pickerView.findViewById(R.id.closeambi);
+    Button pickerHelp=pickerView.findViewById(R.id.helpambi);
+    if(done!=null) {
+        done.setText(R.string.save);
+        done.setOnClickListener(view->MainActivity.doonback());
+        }
+    if(pickerHelp!=null)
+        pickerHelp.setOnClickListener(view->help.helplight(R.string.colorhelp,act));
+    act.setonback(()->{
+        removeContentView(screen);
+        parent.setVisibility(VISIBLE);
+        });
+    }
+
 static public void show(MainActivity act,View parent) {
     parent.setVisibility(INVISIBLE);
-    int initialColor= getcolor();
-
-
     int height=GlucoseCurve.getheight();
     int width=GlucoseCurve.getwidth();
-    AmbilWarnaDialog dialog = new AmbilWarnaDialog(act, initialColor,c-> {
-    {if(doLog) {Log.i(LOG_ID,String.format(usedlocale,"col=%x",c));};};
-        setcolor(c);
-        //rewritefloating(act);
-        Floating.invalidatefloat();
-    }, v-> {
-        }
-    );
-    View view=dialog.getview();
-   final String fontstring=act.getString(R.string.fontsize)+ " ";
-    var  sizelabel=getlabel(act,fontstring);
-
-
-   final int maxfont=height*7/10;
-
+    int maxfont=Math.max(32,height*7/10);
     int currentfont=Natives.getfloatingFontsize();
-     if(currentfont<5||currentfont>(int)(screenheight*.8)) {
-                currentfont=(int)Notify.glucosesize; 
-                }
+    if(currentfont<5||currentfont>(int)(screenheight*.8))
+        currentfont=(int)Notify.glucosesize;
 
-   SeekBar fontsizeview=new SeekBar(act);
-     Applic.ifRTLseekbar(fontsizeview);
-      fontsizeview.setMax((int)((maxfont-5)*100.0));
-      fontsizeview.setProgress((int)((currentfont-5)*100.0));
-//      var fwidth=(int)(width*0.8f);
-      fontsizeview.setMinimumWidth((int)(width*.5));
-//      final int minimumvalue=500;
-/*    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        fontsizeview.setMin(minimumvalue);
-    }*/
-    fontsizeview.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-        @Override
-        public  void onProgressChanged (SeekBar seekBar, int progress, boolean fromUser) {
-//         int newprogress=progress+minimumvalue; 
-            var siz=(int)Math.round(progress/100.0)+5;
-//         if(doLog) sizelabel.setText(fontstring+siz);
-         Natives.setfloatingFontsize(siz);
-          rewritefloating(act);
-            }
-        @Override
-        public void onStartTrackingTouch(SeekBar seekBar) {
-            {if(doLog) {Log.i(LOG_ID,"onStartTrackingTouch");};};
-            }
-        @Override
-        public void onStopTrackingTouch(SeekBar seekBar) {
-            }
-        });
+    Button close=ClinicalUi.button(act,act.getString(R.string.closename),
+            ClinicalUi.ButtonRole.SECONDARY);
+    Button helpButton=ClinicalUi.button(act,act.getString(R.string.helpname),
+            ClinicalUi.ButtonRole.SECONDARY);
+    CheckDirectionBox floatglucose=getcheckbox(act,R.string.active,Natives.getfloatglucose());
+    CheckDirectionBox timeshow=getcheckbox(act,R.string.time,Floating.showtime);
+    CheckDirectionBox touchable=getcheckbox(act,R.string.touchable,Natives.getfloatingTouchable());
+    CheckDirectionBox transparent=getcheckbox(act,R.string.transparent,
+            Color.alpha(Natives.getfloatingbackground())!=0xFF);
+    boolean[] hidden={Natives.gethidefloatinJuggluco()};
+    CheckDirectionBox showInside=getcheckbox(act,R.string.floatjuggluco,!hidden[0]);
 
-
-
-/*
-    var  sizeview= new EditText(act);
-              sizeview.setImeOptions(editoptions);
-                sizeview.setMinEms(4);
-                sizeview.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-
-    int fontsize=Natives.getfloatingFontsize();
-    sizeview.setText(fontsize+"");
-        TextView.OnEditorActionListener  actlist= new TextView.OnEditorActionListener() {
-                    @Override
-                    public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
-                    if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER || actionId == EditorInfo.IME_ACTION_DONE) {
-                                 {if(doLog) {Log.i(LOG_ID,"onEditorAction");};};
-                 try {
-                    var siz=Integer.parseInt(String.valueOf(v.getText()));
-                    int maxfont=height*7/10;
-                    if(siz>maxfont) {
-                        Applic.argToaster(act, act.getString(R.string.fonttoolarge)+maxfont, Toast.LENGTH_SHORT);
-                        return true;
-                        }
-                    else  {
-                        Natives.setfloatingFontsize(siz);
-                         rewritefloating(act);
-                        //Floating.invalidatefloat();
-                         }
-                    }
-                catch(Throwable th) {
-                    Log.stack(LOG_ID,"parseInt",th);
-                    }
-//                                return true;
-                           }
-                    return false;
-                    }};
-    sizeview.setOnEditorActionListener(actlist);
-   */
-
-
-
-    var color=Natives.getfloatingbackground();
-    boolean transp= Color.alpha(color)!=0xFF;
-    var transparant=getcheckbox(act,R.string.transparent,transp);
-    var touch=Natives.getfloatingTouchable();
-    var touchable=getcheckbox(act,R.string.touchable,touch);
-    if(!background)
-            transparant.setVisibility(INVISIBLE);
-    else {
-        if (transp)
-            view.setVisibility(INVISIBLE);
-        }
-    var close=getbutton(act,R.string.closename);
-//    CompoundButton foregroundswitch;
-
-    Layout layout;
-    CheckDirectionBox floatglucose=new CheckDirectionBox(act);
-    floatglucose.setText(R.string.active);
-    floatglucose.setChecked(Natives.getfloatglucose());
-    floatglucose.setOnCheckedChangeListener( (buttonView,  isChecked) -> Floating.setfloatglucose(act,isChecked) ) ;
-    var Help=getbutton(act,R.string.helpname);
-    Help.setOnClickListener(v-> help.help(R.string.floatingconfig,act));
-
-
-    var    foregroundbutton = new CheckDirectionRadio(act);
-      var   backgroundbutton = new CheckDirectionRadio(act);
-        foregroundbutton.setText(R.string.foreground);
-        backgroundbutton.setText(R.string.background);
-    foregroundbutton.setChecked(!background);
-    backgroundbutton.setChecked(background);
-    backgroundbutton.setTextColor(util.getColorFromTheme(act, android.R.attr.textColorPrimary));
-    foregroundbutton.setTextColor(util.getColorFromTheme(act, android.R.attr.textColorPrimary));
-
-
-
-    var timeshow=getcheckbox(act,R.string.time,Floating.showtime);
-    timeshow.setOnCheckedChangeListener( (buttonView,  isChecked) -> {
-        Floating.showtime=isChecked;
-        Natives.setfloattime(isChecked);
+    floatglucose.setOnCheckedChangeListener((button,checked)->
+            Floating.setfloatglucose(act,checked));
+    timeshow.setOnCheckedChangeListener((button,checked)->{
+        Floating.showtime=checked;
+        Natives.setfloattime(checked);
         rewritefloating(act);
         });
-    boolean[] hidden={Natives.gethidefloatinJuggluco()};
-    var hide=getcheckbox(act,R.string.floatjuggluco, !hidden[0]);
-    if(hidden[0]) {
-        Floating.makefloat();
-        }
-    hide.setOnCheckedChangeListener( (buttonView,  isChecked) -> {
-        hidden[0]=!isChecked;
-        Natives.sethidefloatinJuggluco(!isChecked);
-        });
-
-
-
-    var leftlayout=new Layout(act,new View[]{sizelabel},new View[]{fontsizeview},new View[]{foregroundbutton,touchable}, new View[]{backgroundbutton,transparant},new View[]{hide,timeshow,floatglucose},new View[]{Help,close});
-    leftlayout.setLayoutParams( new ViewGroup.LayoutParams(WRAP_CONTENT,MATCH_PARENT));
-    view.setLayoutParams( new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
-   final var density= tk.glucodata.GlucoseCurve.metrics.density;
-   view.setPadding(0,MainActivity.systembarTop+ (int)(density*10) ,0,0);
-   getMargins(close).setMarginEnd((int)(GlucoseCurve.metrics.density*20.0f));
-   leftlayout.setPaddingRelative(0,MainActivity.systembarTop/2+ (int)(density*5) ,0,0);
-    layout=new Layout(act, new Object[]{new View[]{view,leftlayout}});
-    int addright,addleft;
-    if(MainActivity.rtl&&Applic.supportsRtl) {
-        addright=10;
-        addleft=12;
-        
-        } 
-    else {
-        addright=12;
-        addleft=10;
-        }
-
-    layout.setPadding(MainActivity.systembarLeft+(int)(density*addleft),0,MainActivity.systembarRight+(int)(density*addright),MainActivity.systembarBottom+(int)(density*5));
-    layout.setBackgroundColor(Applic.backgroundcolor);
-    transparant.setOnCheckedChangeListener( (buttonView,  isChecked) -> {
-        Floating.setbackgroundalpha(isChecked?0:0xff);
+    touchable.setOnCheckedChangeListener((button,checked)->Floating.setTouchable(checked));
+    transparent.setOnCheckedChangeListener((button,checked)->{
+        Floating.setbackgroundalpha(checked?0:0xff);
         Floating.invalidatefloat();
-        removeContentView(layout);
-        act.poponback();
-        show(act,parent);
-    });
-    touchable.setOnCheckedChangeListener( (buttonView,  isChecked) -> {
-        Floating.setTouchable(isChecked);
         });
-/*
-    foregroundswitch.setOnCheckedChangeListener( (buttonView,  isChecked) -> {
-        background=isChecked;
-        removeContentView(layout);
-        act.poponback();
-        show(act,parent);
+    showInside.setOnCheckedChangeListener((button,checked)->{
+        hidden[0]=!checked;
+        Natives.sethidefloatinJuggluco(!checked);
+        });
 
-    });*/
-
-
-        foregroundbutton.setOnCheckedChangeListener( (buttonView,  isChecked) -> {
-            {if(doLog) {Log.i(LOG_ID,"foregroundbutton "+isChecked);};};
-            backgroundbutton.setChecked(!isChecked);
-            background=!isChecked;
-            removeContentView(layout);
-            act.poponback();
-            show(act,parent);
-            });
-
-        backgroundbutton.setOnCheckedChangeListener( (buttonView,  isChecked) -> {
-            {if(doLog) {Log.i(LOG_ID,"backgroundbutton "+isChecked);};};
-            foregroundbutton.setChecked(!isChecked);
-            });
-
-
-
-
-
-           act.addMyContentView(layout, new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
-    Button noclose= act.findViewById(R.id.closeambi);
-     if(noclose!=null) {
-        noclose.setVisibility(GONE);
-        noclose.setText("");
-        Button nohelp= act.findViewById(R.id.helpambi);
-        nohelp.setText("");
-        nohelp.setVisibility(GONE);
-      }
-    act.setonback(()-> { 
-        parent.setVisibility(VISIBLE);
-        removeContentView(layout); 
-        if(hidden[0]) {
-            Floating.removeFloating();
+    TextView fontValue=ClinicalUi.body(act,
+            act.getString(R.string.clinical_floating_font_value,currentfont));
+    fontValue.setTextColor(ClinicalUi.primaryText(act));
+    SeekBar fontSize=new SeekBar(act);
+    Applic.ifRTLseekbar(fontSize);
+    fontSize.setMax((maxfont-5)*100);
+    fontSize.setProgress((currentfont-5)*100);
+    fontSize.setMinimumWidth(Math.max(ClinicalUi.dp(act,220),(int)(width*.55f)));
+    fontSize.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+        @Override public void onProgressChanged(SeekBar seekBar,int progress,boolean fromUser) {
+            int size=Math.round(progress/100f)+5;
+            fontValue.setText(act.getString(R.string.clinical_floating_font_value,size));
+            Natives.setfloatingFontsize(size);
+            rewritefloating(act);
             }
-
+        @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+        @Override public void onStopTrackingTouch(SeekBar seekBar) {}
         });
-    close.setOnClickListener(v->{
-        act.doonback();
-    });
+    LinearLayout fontCard=new LinearLayout(act);
+    fontCard.setOrientation(LinearLayout.VERTICAL);
+    fontCard.setPadding(ClinicalUi.dp(act,16),ClinicalUi.dp(act,14),
+            ClinicalUi.dp(act,16),ClinicalUi.dp(act,12));
+    fontCard.addView(fontValue);
+    fontCard.addView(fontSize,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    fontCard.setBackground(ClinicalUi.surface(act,false,false));
+
+    LinearLayout foreground=colorRow(act,act.getString(R.string.foreground),
+            Natives.getfloatingforeground());
+    LinearLayout backgroundColor=colorRow(act,act.getString(R.string.background),
+            Natives.getfloatingbackground());
+    foreground.setOnClickListener(view->openColorPicker(act,view,
+            Natives.getfloatingforeground(),color->{
+                Floating.setforegroundcolor(color);
+                rewritefloating(act);
+                }));
+    backgroundColor.setOnClickListener(view->openColorPicker(act,view,
+            Natives.getfloatingbackground(),color->{
+                Floating.setbackgroundcolor(color);
+                rewritefloating(act);
+                }));
+    helpButton.setOnClickListener(view->help.help(R.string.floatingconfig,act));
+
+    LinearLayout content=ClinicalUi.verticalContent(act);
+    content.setPaddingRelative(MainActivity.systembarLeft+ClinicalUi.dp(act,20),
+            MainActivity.systembarTop+ClinicalUi.dp(act,8),
+            MainActivity.systembarRight+ClinicalUi.dp(act,20),
+            MainActivity.systembarBottom+ClinicalUi.dp(act,24));
+    content.addView(ClinicalUi.header(act,
+            act.getString(R.string.clinical_floating_title),close));
+    TextView intro=ClinicalUi.body(act,act.getString(R.string.clinical_floating_intro));
+    intro.setPaddingRelative(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),
+            ClinicalUi.dp(act,6));
+    content.addView(intro);
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.clinical_floating_status_section)));
+    content.addView(ClinicalUi.card(act,
+            ClinicalUi.toggleRow(act,floatglucose,
+                    act.getString(R.string.clinical_floating_active_hint)),
+            ClinicalUi.toggleRow(act,showInside,
+                    act.getString(R.string.clinical_floating_inside_hint))));
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.clinical_floating_appearance_section)));
+    content.addView(fontCard);
+    LinearLayout.LayoutParams colorGap=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    colorGap.topMargin=ClinicalUi.dp(act,10);
+    foreground.setLayoutParams(colorGap);
+    content.addView(foreground);
+    LinearLayout.LayoutParams colorGap2=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    colorGap2.topMargin=ClinicalUi.dp(act,10);
+    backgroundColor.setLayoutParams(colorGap2);
+    content.addView(backgroundColor);
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.clinical_floating_behavior_section)));
+    content.addView(ClinicalUi.card(act,
+            ClinicalUi.toggleRow(act,timeshow,
+                    act.getString(R.string.clinical_floating_time_hint)),
+            ClinicalUi.toggleRow(act,touchable,
+                    act.getString(R.string.clinical_floating_touch_hint)),
+            ClinicalUi.toggleRow(act,transparent,
+                    act.getString(R.string.clinical_floating_transparency_hint))));
+    LinearLayout.LayoutParams helpParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    helpParams.topMargin=ClinicalUi.dp(act,22);
+    content.addView(helpButton,helpParams);
+    ScrollView screen=ClinicalUi.scrollScreen(act,content);
+    act.addMyContentView(screen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    act.setonback(()->{
+        parent.setVisibility(VISIBLE);
+        removeContentView(screen);
+        if(hidden[0]) Floating.removeFloating();
+        });
+    close.setOnClickListener(view->act.doonback());
 }
 
 }

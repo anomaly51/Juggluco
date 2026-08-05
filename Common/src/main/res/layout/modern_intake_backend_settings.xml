@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/intake_backend_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/modern_secondary_background"
+    android:clickable="true"
+    android:focusable="true">
+
+    <LinearLayout
+        android:id="@+id/intake_backend_page"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="68dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp">
+
+            <ImageButton
+                android:id="@+id/intake_backend_close"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@drawable/intake_button_secondary"
+                android:contentDescription="@string/intake_close"
+                android:padding="12dp"
+                android:src="@drawable/intake_close" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif-medium"
+                    android:text="@string/intake_backend_settings_title"
+                    android:textColor="@color/modern_secondary_text_primary"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/intake_backend_settings_summary"
+                    android:textColor="@color/modern_secondary_text_muted"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fillViewport="true"
+            android:overScrollMode="never"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/intake_surface"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginBottom="6dp"
+                    android:text="@string/intake_backend_url"
+                    android:textColor="@color/modern_secondary_text_secondary"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/intake_backend_url"
+                    android:layout_width="match_parent"
+                    android:layout_height="58dp"
+                    android:background="@drawable/intake_field"
+                    android:hint="@string/intake_backend_url_hint"
+                    android:inputType="textUri"
+                    android:maxLines="1"
+                    android:singleLine="true"
+                    android:textColor="@color/modern_secondary_text_primary"
+                    android:textColorHint="@color/modern_secondary_text_muted"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginTop="14dp"
+                    android:layout_marginBottom="6dp"
+                    android:text="@string/intake_backend_token"
+                    android:textColor="@color/modern_secondary_text_secondary"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/intake_backend_token"
+                    android:layout_width="match_parent"
+                    android:layout_height="58dp"
+                    android:background="@drawable/intake_field"
+                    android:hint="@string/intake_backend_token_hint"
+                    android:inputType="textPassword"
+                    android:maxLength="256"
+                    android:maxLines="1"
+                    android:singleLine="true"
+                    android:textColor="@color/modern_secondary_text_primary"
+                    android:textColorHint="@color/modern_secondary_text_muted"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/intake_backend_test_status"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:background="@drawable/intake_chip"
+                    android:gravity="center_vertical"
+                    android:minHeight="46dp"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="@string/intake_backend_checking"
+                    android:textColor="@color/modern_secondary_text_secondary"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
+
+                <Button
+                    android:id="@+id/intake_backend_test"
+                    android:layout_width="match_parent"
+                    android:layout_height="54dp"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/intake_button_secondary"
+                    android:stateListAnimator="@null"
+                    android:text="@string/intake_backend_test"
+                    android:textAllCaps="false"
+                    android:textColor="@color/modern_secondary_accent"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:lineSpacingExtra="2dp"
+                    android:text="@string/intake_backend_local_help"
+                    android:textColor="@color/modern_secondary_text_muted"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </ScrollView>
+
+        <Button
+            android:id="@+id/intake_backend_save"
+            android:layout_width="match_parent"
+            android:layout_height="58dp"
+            android:layout_marginStart="16dp"
+            android:layout_marginTop="10dp"
+            android:layout_marginEnd="16dp"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/intake_button_primary"
+            android:stateListAnimator="@null"
+            android:text="@string/intake_backend_save"
+            android:textAllCaps="false"
+            android:textColor="@color/modern_secondary_on_accent"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+</FrameLayout>

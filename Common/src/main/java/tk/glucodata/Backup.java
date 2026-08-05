@@ -21,9 +21,7 @@
 
 package tk.glucodata;
 
-import androidx.appcompat.app.AlertDialog;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.content.res.TypedArray;
 import android.graphics.BlendMode;
 import android.graphics.BlendModeColorFilter;
@@ -45,6 +43,7 @@ import android.widget.CompoundButton;
 import android.widget.EditText;
 //import android.widget.HorizontalScrollView;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.widget.ScrollView;
 import android.widget.Space;
@@ -196,7 +195,7 @@ public class Backup {
       private EditText portedit=null;
       private ScrollView hostview=null;
       private CheckDirectionBox Password;
-      private Button reset=null;
+      private Button reset=null,deleteHost=null;
         private CheckDirectionBox testip,haslabel;
       private   EditText label;
    private CheckDirectionRadio[] sendfrom;
@@ -249,38 +248,27 @@ public class Backup {
          }
       }
    private void deleteconfirmation(MainActivity act) {
-           AlertDialog.Builder builder = new AlertDialog.Builder(act);
-   //     setMessage(mess).
       String title=null;
       try {
-         title = label.getText().toString();
-         if (title == null || title.isEmpty()) {
-            if (editIPs[0] != null) {
-               title = editIPs[0].getText().toString();
-            }
+         title=label.getText().toString();
+         if((title==null||title.isEmpty())&&editIPs[0]!=null)
+            title=editIPs[0].getText().toString();
          }
-      } catch(Throwable th) {
-         Log.stack(LOG_ID,"title",th)    ;
-      }
-         if(title==null|| title.isEmpty())
-            title="  ";
-           builder.setTitle(title).setMessage(R.string.deleteconnection).
-   //     setMessage(mess).
-              setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
-                       public void onClick(DialogInterface dialog, int id) {
-            if(hostindex>=0) {
-               Natives.deletebackuphost(hostindex);
-               hostadapt.notifyItemRemoved(hostindex);
-               }
-   //            hostview.setVisibility(GONE);
-   //            hidekeyboard(act); 
-            act.doonback();
-            act.doonback();
-                       }
-                   }) .setNegativeButton(R.string.cancel, new DialogInterface.OnClickListener() {
-               public void onClick(DialogInterface dialog, int id) {
-               }
-           }).show().setCanceledOnTouchOutside(false);
+      catch(Throwable th) {
+         Log.stack(LOG_ID,"title",th);
+         }
+      if(title==null||title.isEmpty())
+         title=act.getString(R.string.connection_mirror_delete_title);
+      ConnectionUi.confirmSheet(act,hostview,title,
+            act.getString(R.string.connection_mirror_delete_message),
+            act.getString(R.string.delete),ClinicalUi.ButtonRole.DANGER,()-> {
+               if(hostindex>=0) {
+                  Natives.deletebackuphost(hostindex);
+                  hostadapt.notifyItemRemoved(hostindex);
+                  }
+               act.doonback();
+               act.doonback();
+               });
       }
 
 
@@ -298,18 +286,13 @@ static public String changehostError(MainActivity act,int pos) {
             }
 
    private void resentconfirmation(MainActivity act,int hostindex) {
-           AlertDialog.Builder builder = new AlertDialog.Builder(act);
-           builder.setTitle(act.getString(R.string.resenddata)+"?").
-       setMessage(R.string.resendwarning).
-              setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
-                       public void onClick(DialogInterface dialog, int id) {
-            Natives.resetbackuphost(hostindex);
-            configchanged=true;
-                       }
-                   }) .setNegativeButton(R.string.cancel, new DialogInterface.OnClickListener() {
-               public void onClick(DialogInterface dialog, int id) {
-               }
-           }).show().setCanceledOnTouchOutside(false);
+      ConnectionUi.confirmSheet(act,hostview,
+            act.getString(R.string.connection_mirror_resend_title),
+            act.getString(R.string.connection_mirror_resend_message),
+            act.getString(R.string.resenddata),ClinicalUi.ButtonRole.DANGER,()-> {
+               Natives.resetbackuphost(hostindex);
+               configchanged=true;
+               });
       }
 
 
@@ -328,6 +311,73 @@ boolean makeQR(MainActivity act,int pos) {
          }
 
 void makeAutoQR(MainActivity act,View parent) {
+      if(isWearable) {
+         legacyMakeAutoQR(act,parent);
+         return;
+         }
+      EnableControls(parent,false);
+      Button cancel=ConnectionUi.headerButton(act,R.string.cancel);
+      LinearLayout homeSender=ClinicalUi.actionRow(act,
+            act.getString(R.string.connection_home_network_title),
+            act.getString(R.string.connection_home_network_hint));
+      LinearLayout internetSender=ClinicalUi.actionRow(act,
+            act.getString(R.string.connection_internet_title),
+            act.getString(R.string.connection_internet_hint));
+      LinearLayout homeReceiver=ClinicalUi.actionRow(act,
+            act.getString(R.string.connection_home_network_title),
+            act.getString(R.string.connection_home_network_hint));
+      LinearLayout internetReceiver=ClinicalUi.actionRow(act,
+            act.getString(R.string.connection_internet_title),
+            act.getString(R.string.connection_internet_hint));
+      LinearLayout helpRow=ClinicalUi.actionRow(act,act.getString(R.string.helpname),
+            act.getString(R.string.connection_auto_qr_hint));
+
+      LinearLayout content=ConnectionUi.content(act);
+      content.addView(ClinicalUi.header(act,
+            act.getString(R.string.connection_auto_qr_title),cancel));
+      content.addView(ConnectionUi.intro(act,R.string.connection_auto_qr_intro));
+      content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.connection_auto_qr_send_section)));
+      content.addView(ClinicalUi.card(act,homeSender,internetSender));
+      content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.connection_auto_qr_receive_section)));
+      content.addView(ClinicalUi.card(act,homeReceiver,internetReceiver));
+      content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.connection_support_section)));
+      content.addView(ClinicalUi.card(act,helpRow));
+      ScrollView screen=ConnectionUi.screen(act,content);
+      ConnectionUi.fullScreen(act,screen);
+
+      Runnable close=()-> {
+         removeContentView(screen);
+         EnableControls(parent,true);
+         };
+      MainActivity.setonback(close);
+      cancel.setOnClickListener(view->MainActivity.doonback());
+      helpRow.setOnClickListener(view->help(R.string.autoqrmessage,act));
+      homeSender.setOnClickListener(view-> {
+         MainActivity.poponback();
+         makeQR(act,Natives.makeHomeSender());
+         close.run();
+         });
+      internetSender.setOnClickListener(view-> {
+         MainActivity.poponback();
+         makeQR(act,Natives.makeICESender());
+         close.run();
+         });
+      homeReceiver.setOnClickListener(view->dowhenasked(act,false,false,false,()-> {
+         MainActivity.poponback();
+         makeQR(act,Natives.makeHomeReceiver());
+         close.run();
+         }));
+      internetReceiver.setOnClickListener(view->dowhenasked(act,false,false,false,()-> {
+         MainActivity.poponback();
+         makeQR(act,Natives.makeICEReceiver());
+         close.run();
+         }));
+      }
+
+private void legacyMakeAutoQR(MainActivity act,View parent) {
       EnableControls(parent,false);
       var cancel=getbutton(act,R.string.cancel);
      // var title=getlabel(act, R.string.autoqr);
@@ -537,7 +587,7 @@ CheckDirectionBox ICE;
       Button Help=getbutton(act,R.string.helpname);
       Help.setOnClickListener(v-> help(R.string.addconnection,act));
 
-      Button delete=getbutton(act,act.getString(R.string.delete));
+      deleteHost=getbutton(act,act.getString(R.string.delete));
       Button Close=getbutton(act,R.string.cancel);
           Password = new CheckDirectionBox(act); Password.setText(R.string.password);
          Password.setChecked(true);
@@ -547,6 +597,8 @@ CheckDirectionBox ICE;
       editpass.setTransformationMethod(new PasswordTransformationMethod());
            editpass.setMinEms(6);
           visible = new CheckDirectionBox(act);// visible.setText(R.string.visible);
+          if(!isWearable)
+             visible.setText(R.string.connection_show_password);
           visible.setButtonDrawable(R.drawable.password_visible);
 //          visible.setButtonDrawable(R.drawable.visibility_toggle);
    //      visible.setMinimumWidth(0); visible.setMinWidth(0);
@@ -627,7 +679,7 @@ CheckDirectionBox ICE;
             }        
          configchanged=true;
          if(pos==hostnr)  {
-            delete.setVisibility(VISIBLE);
+            deleteHost.setVisibility(VISIBLE);
             hostadapt.notifyItemInserted(pos);
             }
          else
@@ -638,7 +690,7 @@ CheckDirectionBox ICE;
            if(saver.getAsInt()>=0)
               act.doonback();
         }); 
-      delete.setOnClickListener(v->{ 
+      deleteHost.setOnClickListener(v->{
          deleteconfirmation(act) ;
          //alarms.setEnabled( Natives.isreceiving( ));
          });
@@ -671,7 +723,7 @@ CheckDirectionBox ICE;
    Stream.setPaddingRelative(0,0,(int)(GlucoseCurve.metrics.density*5.0),0);
     var firstrow=new View[]{Portlabel, portedit, checkhostname,IPslabel, detect};
     var directions=new View[]{passiveonly, activeonly, both};
-      Layout layout;
+      ViewGroup layout;
       if(isWearable) {
          getMargins(save).topMargin=(int)(GlucoseCurve.metrics.density*5.0);
          layout=new Layout(act, (l, w, h) -> {
@@ -680,27 +732,91 @@ CheckDirectionBox ICE;
             return ret;
 
          }, new View[]{ICE},new View[]{ Portlabel},new View[] {portedit},new View[]{checkhostname},new View[]{new Space(act),IPslabel,detect,new Space(act)},new View[]{ICElabellabel},new View[]{ICElabel},sides, new View[]{editIPs[0]},new View[]{editIPs[1]},editIPs.length>=3?new View[]{editIPs[2]}:null,editIPs.length>=4?new View[]{editIPs[3]}:null ,new View[] {testip},new View[] {haslabel},new View[]{label},
-               new View[]{passiveonly},new View[]{activeonly},new View[]{both},new View[] {receive},new View[] {Sendlabel,Stream},new View[]{Scans,Amounts},new View[]{startlabel},new View[]{alldata,fromnow},new View[]{screenpos} ,new View[]{Password },new View[]{editpass,visible},new View[]{delete,Close},new View[] {reset},new View[]{save});
+               new View[]{passiveonly},new View[]{activeonly},new View[]{both},new View[] {receive},new View[] {Sendlabel,Stream},new View[]{Scans,Amounts},new View[]{startlabel},new View[]{alldata,fromnow},new View[]{screenpos} ,new View[]{Password },new View[]{editpass,visible},new View[]{deleteHost,Close},new View[] {reset},new View[]{save});
 
       layout.setPaddingRelative((int)(GlucoseCurve.metrics.density*4.0),0,(int)(GlucoseCurve.metrics.density*10.0),(int)(GlucoseCurve.metrics.density*4));
          }
       else {
-        var hormargin=(int)(GlucoseCurve.metrics.density*20.0f);
-
-         getMargins(delete).setMarginStart(hormargin);
-         getMargins(save).setMarginEnd(hormargin);;
-        var withqr=BuildConfig.minSDK>=20?new View[]{Password, editpass, visible}:new View[]{Password, editpass, visible};
-         layout = new Layout(act, (l, w, h) -> {
-            hideSystemUI(act);
-            final int[] ret = {w, h};
-            return ret;
-
-         }, firstrow,new View[]{ICE,ICElabellabel,ICElabel,zero,one},editIPs, new View[]{testip, haslabel, label},
-               directions, new View[]{receive, Sendlabel, Amounts, Scans, Stream, restore}, fromrow, withqr, new View[]{delete, Close, reset, Help, save});
-
-         var sidepad=(int)(GlucoseCurve.metrics.density*8.0);
-         layout.setPadding(MainActivity.systembarLeft+sidepad,MainActivity.systembarTop/2,sidepad+MainActivity.systembarRight,MainActivity.systembarBottom);
-
+         ConnectionUi.styleButton(act,Close,ClinicalUi.ButtonRole.SECONDARY);
+         ConnectionUi.styleButton(act,save,ClinicalUi.ButtonRole.PRIMARY);
+         ConnectionUi.styleButton(act,deleteHost,ClinicalUi.ButtonRole.DANGER);
+         ConnectionUi.styleButton(act,reset,ClinicalUi.ButtonRole.DANGER);
+         ConnectionUi.styleButton(act,Help,ClinicalUi.ButtonRole.SECONDARY);
+         ConnectionUi.styleInput(portedit);
+         ConnectionUi.styleInput(ICElabel);
+         ConnectionUi.styleInput(label);
+         ConnectionUi.styleInput(editpass);
+         ICElabel.setHint(R.string.icelabel);
+         label.setHint(R.string.testlabel);
+         editpass.setHint(R.string.password);
+         for(int index=0;index<editIPs.length;index++) {
+            ConnectionUi.styleInput(editIPs[index]);
+            editIPs[index].setHint(act.getString(R.string.connection_address_number,index+1));
+            }
+         for(CheckDirectionRadio choice:new CheckDirectionRadio[]{zero,one,
+               passiveonly,activeonly,both,alldata,fromnow,screenpos})
+            ConnectionUi.choice(act,choice);
+         LinearLayout content=ConnectionUi.content(act);
+         content.addView(ClinicalUi.header(act,
+               act.getString(R.string.connection_mirror_editor_title),Close));
+         content.addView(ConnectionUi.intro(act,R.string.connection_mirror_editor_intro));
+         content.addView(ClinicalUi.sectionLabel(act,
+               act.getString(R.string.connection_transport_section)));
+         content.addView(ClinicalUi.card(act,
+               ConnectionUi.directToggle(act,ICE),ICElabel,zero,one));
+         content.addView(ClinicalUi.sectionLabel(act,
+               act.getString(R.string.connection_endpoint_section)));
+         LinearLayout endpointCard=new LinearLayout(act);
+         endpointCard.setOrientation(LinearLayout.VERTICAL);
+         endpointCard.setBackground(ClinicalUi.surface(act,false,false));
+         endpointCard.setPadding(ClinicalUi.dp(act,6),ClinicalUi.dp(act,6),
+               ClinicalUi.dp(act,6),ClinicalUi.dp(act,6));
+         endpointCard.addView(ClinicalUi.fieldRow(act,act.getString(R.string.port),portedit));
+         endpointCard.addView(ConnectionUi.directToggle(act,checkhostname));
+         endpointCard.addView(ConnectionUi.directToggle(act,detect));
+         for(EditText address:editIPs)
+            endpointCard.addView(address,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+         endpointCard.addView(ConnectionUi.directToggle(act,testip));
+         endpointCard.addView(ConnectionUi.directToggle(act,haslabel));
+         endpointCard.addView(label,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+         content.addView(endpointCard);
+         content.addView(ClinicalUi.sectionLabel(act,
+               act.getString(R.string.connection_direction_section)));
+         content.addView(ClinicalUi.card(act,passiveonly,activeonly,both));
+         content.addView(ClinicalUi.sectionLabel(act,
+               act.getString(R.string.connection_data_flow_section)));
+         content.addView(ClinicalUi.card(act,
+               ConnectionUi.directToggle(act,receive),
+               ConnectionUi.directToggle(act,Amounts),
+               ConnectionUi.directToggle(act,Scans),
+               ConnectionUi.directToggle(act,Stream),
+               ConnectionUi.directToggle(act,restore)));
+         TextView fromHint=ClinicalUi.body(act,act.getString(R.string.connection_send_from_hint));
+         fromHint.setPaddingRelative(ClinicalUi.dp(act,4),ClinicalUi.dp(act,12),
+               ClinicalUi.dp(act,4),ClinicalUi.dp(act,6));
+         content.addView(fromHint);
+         content.addView(ClinicalUi.card(act,alldata,fromnow,screenpos));
+         content.addView(ClinicalUi.sectionLabel(act,
+               act.getString(R.string.connection_security_section)));
+         content.addView(ClinicalUi.card(act,
+               ConnectionUi.directToggle(act,Password),editpass,
+               ConnectionUi.directToggle(act,visible)));
+         content.addView(ClinicalUi.sectionLabel(act,
+               act.getString(R.string.connection_support_section)));
+         content.addView(ClinicalUi.card(act,Help));
+         LinearLayout destructive=new LinearLayout(act);
+         destructive.setOrientation(LinearLayout.HORIZONTAL);
+         destructive.setPadding(0,ClinicalUi.dp(act,18),0,0);
+         destructive.addView(deleteHost,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+         View destructiveGap=new View(act);
+         destructive.addView(destructiveGap,new LinearLayout.LayoutParams(ClinicalUi.dp(act,12),1));
+         destructive.addView(reset,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+         content.addView(destructive);
+         LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+         saveParams.topMargin=ClinicalUi.dp(act,12);
+         save.setLayoutParams(saveParams);
+         content.addView(save);
+         layout=content;
          }
       Close.setOnClickListener(v-> act.doonback());
       hostview.addView(layout);
@@ -753,6 +869,7 @@ CheckDirectionBox ICE;
       boolean hasICE=ICElabelstr!=null;
 
       boolean isnew=names==null&&!hasICE;
+      deleteHost.setVisibility(isnew?GONE:VISIBLE);
       String labelstr=null;
       if(!isnew) {
          stream=Natives.getbackuphoststream(index);
@@ -860,7 +977,63 @@ CheckDirectionBox ICE;
       changehostview(act,index,names,Natives.detectIP(index),port,pass, parent) ;
       }
 
+   private void clinicalHostInfo(MainActivity act,View parent,int position) {
+      EnableControls(parent,false);
+      Button close=ConnectionUi.headerButton(act,R.string.closename);
+      LinearLayout modify=ClinicalUi.actionRow(act,act.getString(R.string.modify),
+            act.getString(R.string.connection_modify_mirror_hint));
+      LinearLayout qr=BuildConfig.minSDK>=20?ClinicalUi.actionRow(act,"QR",
+            act.getString(R.string.connection_mirror_qr_hint)):null;
+      CheckDirectionBox disabled=getcheckbox(act,R.string.off,
+            Natives.getHostDeactivated(position));
+      disabled.setOnCheckedChangeListener((button,checked)-> {
+         Natives.setHostDeactivated(position,checked);
+         hostadapt.notifyItemChanged(position);
+         });
+      TextView info=new TextView(act);
+      sethtml(info,mirrorStatus(position));
+      info.setTextColor(ClinicalUi.primaryText(act));
+      info.setTextSize(TypedValue.COMPLEX_UNIT_SP,15.0f);
+      info.setLineSpacing(0.0f,1.18f);
+      info.setPadding(ClinicalUi.dp(act,16),ClinicalUi.dp(act,14),
+            ClinicalUi.dp(act,16),ClinicalUi.dp(act,14));
+      info.setBackground(ClinicalUi.surface(act,false,false));
+      LinearLayout content=ConnectionUi.content(act);
+      content.addView(ClinicalUi.header(act,
+            act.getString(R.string.connection_mirror_details_title),close));
+      content.addView(ConnectionUi.intro(act,R.string.connection_mirror_details_intro));
+      content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.connection_status_section)));
+      content.addView(info);
+      content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.connection_options_section)));
+      if(qr!=null)
+         content.addView(ClinicalUi.card(act,
+               ConnectionUi.directToggle(act,disabled),modify,qr));
+      else
+         content.addView(ClinicalUi.card(act,
+               ConnectionUi.directToggle(act,disabled),modify));
+      ScrollView screen=ConnectionUi.screen(act,content);
+      ConnectionUi.fullScreen(act,screen);
+      Runnable closeRun=()-> {
+         removeContentView(screen);
+         EnableControls(parent,true);
+         };
+      act.setonback(closeRun);
+      close.setOnClickListener(view->{
+         act.poponback();
+         closeRun.run();
+         });
+      modify.setOnClickListener(view->changehostview(act,position,screen));
+      if(qr!=null)
+         qr.setOnClickListener(view->QRmake.show(act,getbackJson(position)));
+      }
+
    void        showhostinfo(final MainActivity act,final View parview,int pos) {
+   if(!isWearable) {
+      clinicalHostInfo(act,parview,pos);
+      return;
+      }
    if(!isWearable)
          EnableControls(parview,false);
       var close=getbutton(act,R.string.closename);
@@ -976,7 +1149,178 @@ ViewGroup.LayoutParams params;
          realmkbackupview(act,true);
    //    Applic.app.getHandler().postDelayed( ()-> realmkbackupview(act),1); //for what was it needed?
       }
+
+   static boolean validMirrorPort(int port,int sslPort) {
+      return port>=1024&&port<=65535&&port!=17580&&port!=sslPort;
+      }
+
+   private void clinicalBackupView(MainActivity act,boolean lightback) {
+      configchanged=false;
+      String[] hostNames=gethostnames();
+      if(hostNames[3]!=null)
+         Natives.networkpresent();
+      EditText receivePort=getnumedit(act,Natives.getreceiveport());
+      ConnectionUi.styleInput(receivePort);
+      Button close=ConnectionUi.headerButton(act,R.string.closename);
+      Button savePort=ClinicalUi.button(act,act.getString(R.string.save),
+            ClinicalUi.ButtonRole.PRIMARY);
+      Button addConnection=ClinicalUi.button(act,act.getString(R.string.addconnectionbutton),
+            ClinicalUi.ButtonRole.PRIMARY);
+      LinearLayout turn=ClinicalUi.actionRow(act,act.getString(R.string.turnserver),
+            act.getString(R.string.connection_turn_action_hint));
+      LinearLayout sync=ClinicalUi.actionRow(act,act.getString(R.string.sync),
+            act.getString(R.string.connection_sync_hint));
+      LinearLayout reinitialize=ClinicalUi.actionRow(act,act.getString(R.string.reinit),
+            act.getString(R.string.connection_reinit_hint));
+      LinearLayout autoQr=BuildConfig.minSDK>=20?ClinicalUi.actionRow(act,
+            act.getString(R.string.autoqr),act.getString(R.string.connection_auto_qr_hint)):null;
+      LinearLayout battery=android.os.Build.VERSION.SDK_INT>=android.os.Build.VERSION_CODES.M?
+            ClinicalUi.actionRow(act,act.getString(R.string.dozemode),
+                  act.getString(R.string.connection_battery_hint)):null;
+      LinearLayout mirrorHelp=ClinicalUi.actionRow(act,act.getString(R.string.helpname),
+            act.getString(R.string.connection_mirror_help_hint));
+      CheckDirectionBox staticNumbers=new CheckDirectionBox(act);
+      staticNumbers.setText(R.string.dontchangeamounts);
+      staticNumbers.setChecked(Natives.staticnum());
+      staticNumbers.setOnCheckedChangeListener((button,checked)-> {
+         Natives.setstaticnum(checked);
+         if(checked)
+            BluetoothGlucoseMeter.stopDevices();
+         else
+            BluetoothGlucoseMeter.startDevices();
+         });
+
+      LinearLayout content=ConnectionUi.content(act);
+      content.setLayoutParams(new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+      content.addView(ClinicalUi.header(act,
+            act.getString(R.string.connection_mirror_title),close));
+      content.addView(ConnectionUi.intro(act,R.string.connection_mirror_intro));
+      content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.connection_this_device_section)));
+      TextView addresses=ConnectionUi.status(act,act.getString(R.string.connection_addresses,
+            hostNames[1]==null?"—":hostNames[1],hostNames[0]==null?"—":hostNames[0],
+            hostNames[2]==null?"—":hostNames[2]),false);
+      content.addView(addresses);
+      LinearLayout portCard=ClinicalUi.card(act,
+            ClinicalUi.fieldRow(act,act.getString(R.string.connection_receive_port),receivePort));
+      LinearLayout.LayoutParams portParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+      portParams.topMargin=ClinicalUi.dp(act,10);
+      portCard.setLayoutParams(portParams);
+      content.addView(portCard);
+
+      TextView formError=ConnectionUi.status(act,Natives.serverError(),true);
+      LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+      errorParams.topMargin=ClinicalUi.dp(act,10);
+      formError.setLayoutParams(errorParams);
+      content.addView(formError);
+      content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.connection_mirrors_section)));
+      RecyclerView hosts=new RecyclerView(act);
+      hosts.setLayoutManager(new LinearLayoutManager(act));
+      // The whole Mirror page owns vertical scrolling.  Let this embedded list
+      // expand to its content so it cannot trap swipes or consume the only
+      // scrollable region on shorter phone screens.
+      hosts.setNestedScrollingEnabled(false);
+      hosts.setFocusable(false);
+      hosts.setClipToPadding(false);
+      hosts.setPadding(0,0,0,ClinicalUi.dp(act,8));
+      content.addView(hosts,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+      LinearLayout.LayoutParams addParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+      addParams.topMargin=ClinicalUi.dp(act,8);
+      addConnection.setLayoutParams(addParams);
+      content.addView(addConnection);
+      content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.connection_options_section)));
+      if(autoQr!=null&&battery!=null)
+         content.addView(ClinicalUi.card(act,turn,sync,reinitialize,autoQr,battery,
+               ConnectionUi.directToggle(act,staticNumbers)));
+      else if(autoQr!=null)
+         content.addView(ClinicalUi.card(act,turn,sync,reinitialize,autoQr,
+               ConnectionUi.directToggle(act,staticNumbers)));
+      else if(battery!=null)
+         content.addView(ClinicalUi.card(act,turn,sync,reinitialize,battery,
+               ConnectionUi.directToggle(act,staticNumbers)));
+      else
+         content.addView(ClinicalUi.card(act,turn,sync,reinitialize,
+               ConnectionUi.directToggle(act,staticNumbers)));
+      content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.connection_support_section)));
+      content.addView(ClinicalUi.card(act,mirrorHelp));
+      LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+      saveParams.topMargin=ClinicalUi.dp(act,14);
+      savePort.setLayoutParams(saveParams);
+      content.addView(savePort);
+
+      hostadapt=new HostViewAdapter(content);
+      hosts.setAdapter(hostadapt);
+      addConnection.setOnClickListener(view->addhostview(act,content));
+      turn.setOnClickListener(view->TurnServer.show(act,content));
+      sync.setOnClickListener(view->Applic.switchSync());
+      reinitialize.setOnClickListener(view->MessageSender.reinit());
+      if(autoQr!=null)
+         autoQr.setOnClickListener(view->makeAutoQR(act,content));
+      if(battery!=null)
+         battery.setOnClickListener(view->Battery.batteryscreen(act,content));
+      mirrorHelp.setOnClickListener(view->help(R.string.connectionoverview,act));
+      savePort.setOnClickListener(view->{
+         int parsed;
+         try {
+            parsed=Integer.parseInt(receivePort.getText().toString().trim());
+            }
+         catch(Throwable error) {
+            formError.setText(R.string.connection_invalid_port);
+            formError.setVisibility(VISIBLE);
+            return;
+            }
+         if(!validMirrorPort(parsed,Natives.getsslport())) {
+            formError.setText(R.string.connection_mirror_port_error);
+            formError.setVisibility(VISIBLE);
+            return;
+            }
+         Natives.setreceiveport(String.valueOf(parsed));
+         formError.setText(Natives.serverError());
+         formError.setVisibility(formError.length()==0?GONE:VISIBLE);
+         hidekeyboard(act);
+         Applic.argToaster(act,R.string.saved,Toast.LENGTH_SHORT);
+         });
+      ScrollView screen=ConnectionUi.screen(act,content);
+      Runnable closeRun=()-> {
+         if(lightback) {
+            act.lightBars(!getInvertColors());
+            }
+         if(hostview!=null)
+            removeContentView(hostview);
+         hidekeyboard(act);
+         removeContentView(screen);
+         if(configchanged) {
+            Natives.resetnetwork();
+            Applic.wakemirrors();
+         }
+         Applic.updateservice(act,Natives.getusebluetooth());
+         // A standalone route opened from More owns the system-UI/menu
+         // restoration.  A nested Settings route must simply reveal its
+         // existing parent and leave that parent's back stack and bars intact.
+         if(lightback) {
+            act.showui=false;
+            Applic.app.getHandler().postDelayed(act::hideSystemUI,1);
+            if(Menus.on)
+               Menus.show(act);
+            }
+         };
+      act.setonback(closeRun);
+      close.setOnClickListener(view->{
+         act.poponback();
+         closeRun.run();
+         });
+      content.setBackgroundColor(ClinicalUi.window(act));
+      ConnectionUi.fullScreen(act,screen);
+      }
+
    public  void realmkbackupview(MainActivity act,boolean lightback) {
+   if(!isWearable) {
+      clinicalBackupView(act,lightback);
+      return;
+      }
    configchanged=false;
     // activity=act;
     String[] thishost=gethostnames();
@@ -1204,14 +1548,22 @@ private int getMirrorListColor(MainActivity act) {
              view.setGravity(Gravity.CENTER);
              view.setPadding(0,0,0,af);
              }
-         else {
-            final var af=(int)(GlucoseCurve.metrics.density*7.5);
-//            view.setTextSize(TypedValue.COMPLEX_UNIT_PX,isWearable?Applic.mediumfontsize:Applic.largefontsize);
-            view.setTextSize(TypedValue.COMPLEX_UNIT_PX,Applic.largefontsize);
-             view.setGravity(Gravity.LEFT);
-             view.setPaddingRelative((int)(GlucoseCurve.metrics.density*10.0),0,0,af);
+          else {
+             view.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
+             view.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+             view.setMinHeight(ClinicalUi.dp(parent.getContext(),72));
+             view.setPaddingRelative(ClinicalUi.dp(parent.getContext(),16),
+                   ClinicalUi.dp(parent.getContext(),10),ClinicalUi.dp(parent.getContext(),16),
+                   ClinicalUi.dp(parent.getContext(),10));
+             view.setLineSpacing(0.0f,1.12f);
+             view.setBackground(ClinicalUi.surface(parent.getContext(),false,true));
+             RecyclerView.LayoutParams params=new RecyclerView.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+             params.topMargin=ClinicalUi.dp(parent.getContext(),5);
+             params.bottomMargin=ClinicalUi.dp(parent.getContext(),5);
+             view.setLayoutParams(params);
              }
-           view.setTextColor(getMirrorListColor((MainActivity)view.getContext()));
+           view.setTextColor(isWearable?getMirrorListColor((MainActivity)view.getContext()):
+                 ClinicalUi.primaryText(view.getContext()));
            return new HostViewHolder(view,pview);
 
        }
@@ -1233,6 +1585,52 @@ private int getMirrorListColor(MainActivity act) {
          boolean off=Natives.getHostDeactivated(pos);
          boolean doreceive= (recnum&2)!=0;
          String ICElabelstr=Natives.getICElabel(pos);
+      if(!isWearable) {
+         if(off)
+            text.setPaintFlags(text.getPaintFlags()|Paint.STRIKE_THRU_TEXT_FLAG);
+         else
+            text.setPaintFlags(text.getPaintFlags()&~Paint.STRIKE_THRU_TEXT_FLAG);
+         String endpoint=ICElabelstr!=null?"ICE":
+               ((names!=null&&names.length>0)?names[0]:
+                     (Natives.detectIP(pos)?text.getContext().getString(
+                           R.string.connection_mirror_detect):"—"));
+         String title=(label==null||label.isEmpty())?endpoint:label;
+         StringBuilder details=new StringBuilder();
+         if(label!=null&&!label.isEmpty()&&!endpoint.equals(label))
+            details.append(endpoint);
+         if(!passive&&ICElabelstr==null&&port!=null&&!port.isEmpty()) {
+            if(details.length()>0) details.append("  •  ");
+            details.append(port);
+            }
+         StringBuilder data=new StringBuilder();
+         if(stream) data.append(text.getContext().getString(R.string.streamname));
+         if(scans) {
+            if(data.length()>0) data.append(", ");
+            data.append(text.getContext().getString(R.string.scansname));
+            }
+         if(amounts) {
+            if(data.length()>0) data.append(", ");
+            data.append(text.getContext().getString(R.string.amountsname));
+            }
+         if(data.length()>0) {
+            if(details.length()>0) details.append("\n");
+            details.append(data);
+            }
+         if(doreceive) {
+            if(details.length()>0) details.append("  •  ");
+            details.append(text.getContext().getString(R.string.connection_mirror_receive));
+            }
+         if(date!=0L) {
+            if(details.length()>0) details.append("\n");
+            details.append(text.getContext().getString(R.string.connection_mirror_last_sync,
+                  bluediag.datestr(date)));
+            }
+         String rendered=(off?text.getContext().getString(R.string.connection_mirror_disabled)+" · ":"")
+               +title+(details.length()>0?"\n"+details:"");
+         text.setText(rendered);
+         text.setContentDescription(rendered);
+         return;
+         }
       if(ICElabelstr!=null&&ICElabelstr.length()<16) {
            text.setText(R.string.ICElabeltooshort);
            }

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_display_title">Graph display</string>
+    <string name="settings_display_intro">Choose which clinical data appears on the graph, then tune its ranges and behaviour. Changes are saved when you leave this screen.</string>
+    <string name="settings_graph_readings_section">Glucose readings</string>
+    <string name="settings_graph_records_section">Recorded events</string>
+    <string name="settings_graph_presentation_section">App presentation</string>
+    <string name="settings_graph_scans_hint">Show glucose values read by a manual scan</string>
+    <string name="settings_graph_calibrated_scans_hint">Show the calibrated scan series</string>
+    <string name="settings_graph_stream_hint">Show live sensor glucose values</string>
+    <string name="settings_graph_calibrated_stream_hint">Show the calibrated live series</string>
+    <string name="settings_graph_history_hint">Show glucose history read from the sensor</string>
+    <string name="settings_graph_calibrated_history_hint">Show the calibrated history series</string>
+    <string name="settings_graph_amounts_hint">Show insulin, carbohydrate and other saved records</string>
+    <string name="settings_graph_meals_hint">Show saved meal markers</string>
+    <string name="settings_graph_floating_hint">Keep current glucose in the floating overlay</string>
+    <string name="settings_graph_dark_hint">Use the dark app appearance</string>
+    <string name="settings_graph_system_ui_hint">Show Android status and navigation controls</string>
+    <string name="settings_ranges_section">Glucose ranges</string>
+    <string name="settings_chart_section">Chart behaviour</string>
+    <string name="settings_appearance_section">Appearance and language</string>
+    <string name="settings_support_section">Help</string>
+    <string name="settings_manual_time_hint">Allow manual movement along the time axis</string>
+    <string name="settings_manual_glucose_hint">Allow manual scaling along the glucose axis</string>
+    <string name="settings_colors_hint">Choose the clinical chart colours</string>
+    <string name="settings_theme_hint">Choose the app appearance</string>
+    <string name="settings_iob_hint">Configure insulin-on-board calculation</string>
+    <string name="settings_display_help_hint">Explanation of chart and display options</string>
+
+    <string name="settings_alarm_title">Glucose alerts</string>
+    <string name="settings_alarm_intro">Set the alerts that need your attention. Each enabled alert has its own threshold and sound.</string>
+    <string name="settings_profile_section">Active profile</string>
+    <string name="settings_primary_alerts_section">Glucose limits</string>
+    <string name="settings_signal_section">Signal and new readings</string>
+    <string name="settings_delivery_section">Alert delivery</string>
+    <string name="settings_more_alerts_section">More alert controls</string>
+    <string name="settings_threshold_value">Threshold</string>
+    <string name="settings_signal_wait">Notify after</string>
+    <string name="settings_sound_mode">Play glucose alerts as</string>
+    <string name="settings_low_alarm_hint">Warn when glucose falls below this value</string>
+    <string name="settings_high_alarm_hint">Warn when glucose rises above this value</string>
+    <string name="settings_value_alarm_hint">Notify when a new glucose reading becomes available</string>
+    <string name="settings_signal_alarm_hint">Notify when readings stop arriving</string>
+
+    <string name="settings_advanced_alarm_title">Advanced alerts</string>
+    <string name="settings_advanced_alarm_intro">Add early warnings and urgent limits without changing the main low and high alerts.</string>
+    <string name="settings_schedule_section">Automation</string>
+    <string name="settings_schedules_hint">Change the active alert profile by time of day</string>
+    <string name="settings_urgent_alerts_section">Urgent limits</string>
+    <string name="settings_early_alerts_section">Early warnings</string>
+    <string name="settings_alarm_level_hint">Enable this level and set its threshold</string>
+    <string name="settings_advanced_help_hint">How advanced alerts and profiles work</string>
+
+    <string name="settings_schedules_title">Alert schedules</string>
+    <string name="settings_schedules_count">%1$d schedules configured</string>
+    <string name="settings_add_schedule">Add schedule</string>
+    <string name="settings_schedule_help_hint">How timed profile changes are applied</string>
+    <string name="settings_schedule_new_title">New schedule</string>
+    <string name="settings_schedule_edit_title">Edit schedule</string>
+    <string name="settings_schedule_editor_intro">Choose when another glucose alert profile becomes active.</string>
+    <string name="settings_schedule_details_section">Schedule details</string>
+    <string name="settings_time">Time</string>
+
+    <string name="settings_exchange_title">Connections and data</string>
+    <string name="settings_exchange_intro">Control which apps receive glucose updates and where your data is stored or exported.</string>
+    <string name="settings_broadcasts_section">Connected apps</string>
+    <string name="settings_services_section">Services</string>
+    <string name="settings_data_section">Data tools</string>
+    <string name="settings_juggluco_broadcast">Juggluco broadcast</string>
+    <string name="settings_webserver_hint">Share readings through the local Nightscout-compatible server</string>
+    <string name="settings_uploader_hint">Configure secure Nightscout uploads</string>
+    <string name="settings_health_connect_hint">Write supported glucose data to Android Health Connect</string>
+    <string name="settings_export_hint">Create a file from your glucose and treatment history</string>
+    <string name="settings_mirror_hint">Synchronise data with another Juggluco device</string>
+    <string name="settings_meters_hint">Manage connected blood glucose meters</string>
+    <string name="settings_exchange_help_hint">Connection, broadcast and privacy guidance</string>
+
+    <string name="settings_section_connections">Connections</string>
+    <string name="settings_section_technical">Technical</string>
+    <string name="settings_legacy_title">Legacy</string>
+    <string name="settings_legacy_intro">Older and specialist tools are kept here so the main settings stay focused on daily glucose use.</string>
+    <string name="settings_legacy_records_section">Records and reports</string>
+    <string name="settings_legacy_utilities_section">Device and utilities</string>
+    <string name="settings_legacy_list_hint">Open the existing list of saved treatment records</string>
+    <string name="settings_legacy_statistics_hint">View the existing glucose statistics report</string>
+    <string name="settings_legacy_last_scan_hint">Return to the most recent manual sensor scan</string>
+    <string name="settings_legacy_export_hint">Create a file from glucose and treatment history</string>
+    <string name="settings_legacy_watch_hint">Configure watches and external glucose displays</string>
+    <string name="settings_legacy_talk_hint">Configure spoken readings and voice behaviour</string>
+    <string name="settings_legacy_floating_hint">Configure the floating glucose overlay</string>
+    <string name="settings_legacy_reminders_hint">Manage existing treatment reminders</string>
+    <string name="settings_legacy_labels_hint">Manage labels used by saved treatment records</string>
+</resources>

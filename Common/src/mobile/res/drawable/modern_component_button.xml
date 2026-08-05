@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetLeft="4dp"
+    android:insetTop="4dp"
+    android:insetRight="4dp"
+    android:insetBottom="4dp">
+
+    <ripple android:color="?attr/colorControlHighlight">
+        <item>
+            <selector
+                android:enterFadeDuration="120"
+                android:exitFadeDuration="120">
+                <item android:state_enabled="false">
+                    <shape android:shape="rectangle">
+                        <solid android:color="?attr/colorButtonBackground" />
+                        <stroke
+                            android:width="?attr/buttonStrokeWidth"
+                            android:color="?android:attr/textColorHint" />
+                        <corners android:radius="?attr/buttonCornerRadius" />
+                    </shape>
+                </item>
+                <item android:state_focused="true">
+                    <shape android:shape="rectangle">
+                        <solid android:color="?attr/colorButtonBackground" />
+                        <stroke
+                            android:width="2dp"
+                            android:color="?attr/colorControlActivated" />
+                        <corners android:radius="?attr/buttonCornerRadius" />
+                    </shape>
+                </item>
+                <item android:state_pressed="true">
+                    <shape android:shape="rectangle">
+                        <solid android:color="?attr/colorButtonBackground" />
+                        <stroke
+                            android:width="2dp"
+                            android:color="?attr/colorControlActivated" />
+                        <corners android:radius="?attr/buttonCornerRadius" />
+                    </shape>
+                </item>
+                <item android:state_activated="true">
+                    <shape android:shape="rectangle">
+                        <solid android:color="?attr/colorButtonBackground" />
+                        <stroke
+                            android:width="2dp"
+                            android:color="?attr/colorControlActivated" />
+                        <corners android:radius="?attr/buttonCornerRadius" />
+                    </shape>
+                </item>
+                <item>
+                    <shape android:shape="rectangle">
+                        <solid android:color="?attr/colorButtonBackground" />
+                        <stroke
+                            android:width="?attr/buttonStrokeWidth"
+                            android:color="?attr/colorButtonStroke" />
+                        <corners android:radius="?attr/buttonCornerRadius" />
+                    </shape>
+                </item>
+            </selector>
+        </item>
+
+        <item android:id="@android:id/mask">
+            <shape android:shape="rectangle">
+                <solid android:color="#FFFFFFFF" />
+                <corners android:radius="?attr/buttonCornerRadius" />
+            </shape>
+        </item>
+    </ripple>
+</inset>

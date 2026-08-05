@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
 
     <style name="AppTheme.Base" parent="Theme.AppCompat.NoActionBar">
         <item name="windowActionBar">false</item>
@@ -7,29 +7,56 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowContentOverlay">@null</item>
         <item name="android:windowSwipeToDismiss">false</item>
+        <item name="android:windowBackground">#0B1216</item>
+        <item name="android:colorBackground">#0B1216</item>
+        <item name="android:statusBarColor">#081014</item>
+        <item name="android:navigationBarColor">#081014</item>
+
+        <!-- Quiet clinical defaults. Every legacy theme can still override its palette. -->
+        <item name="colorPrimary">#68C8C1</item>
+        <item name="colorPrimaryDark">#081014</item>
+        <item name="colorAccent">#76D5CC</item>
+        <item name="android:colorAccent">#76D5CC</item>
+        <item name="colorControlActivated">#76D5CC</item>
+        <item name="android:colorControlActivated">#76D5CC</item>
+        <item name="colorControlNormal">#82979E</item>
+        <item name="android:colorControlNormal">#82979E</item>
+        <item name="colorButtonNormal">#14242A</item>
+        <item name="android:colorButtonNormal">#14242A</item>
+        <item name="android:textColorPrimary">#E7F0F2</item>
+        <item name="android:textColorSecondary">#A9BBC0</item>
+        <item name="android:textColorHint">#80949A</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:disabledAlpha">0.38</item>
 
         <item name="android:textViewStyle">@style/MyTextViewStyle</item>
         <item name="android:textAppearanceButton">@style/textAppearanceButton</item>
-        <item name="android:spinnerStyle">@android:style/Widget.Holo.Spinner</item>
-
+        <item name="android:imageButtonStyle">@style/ModernImageButtonStyle</item>
+        <item name="android:editTextStyle">@style/ModernEditTextStyle</item>
+        <item name="editTextStyle">@style/ModernEditTextStyle</item>
+        <item name="android:spinnerStyle">@style/ModernSpinnerStyle</item>
+        <item name="spinnerStyle">@style/ModernSpinnerStyle</item>
         <item name="android:spinnerDropDownItemStyle">@style/MySpinnerDropDownItemStyle</item>
         <item name="android:checkboxStyle">@style/MyCheckBoxStyle</item>
-
+        <item name="checkboxStyle">@style/MyCheckBoxStyle</item>
         <item name="android:radioButtonStyle">@style/MyRadioButtonStyle</item>
+        <item name="radioButtonStyle">@style/MyRadioButtonStyle</item>
 
         <item name="alertDialogTheme">@style/MyDarkAlertDialogTheme</item>
         <item name="android:alertDialogTheme">@style/MyDarkAlertDialogTheme</item>
 
-        <item name="themedButtonBackground">@drawable/button_rectangle</item>
-        <item name="colorButtonBackground">#1E1E1E</item>
-        <item name="buttonCornerRadius">10dp</item>
-        <item name="colorButtonText">?android:attr/textColorPrimary</item>
-        <item name="colorSpinnerDropdownText">#E0E0E0</item>
-        <item name="colorControlHighlight">#33000000</item>
+        <item name="themedButtonBackground">@drawable/modern_component_button</item>
+        <item name="colorButtonBackground">#14242A</item>
+        <item name="colorButtonStroke">?attr/colorControlActivated</item>
+        <item name="buttonCornerRadius">14dp</item>
+        <item name="buttonStrokeWidth">1dp</item>
+        <item name="colorButtonText">#EAF7F5</item>
+        <item name="colorSpinnerDropdownText">#E7F0F2</item>
+        <item name="colorControlHighlight">#3376D5CC</item>
         <item name="colorDialogBackground">?android:attr/windowBackground</item>
-        <item name="colorDialogBorder">#ecf018</item>
+        <item name="colorDialogBorder">#467876</item>
         <item name="colorHelpBackground">?android:attr/windowBackground</item>
-        <item name="colorHelpBorder">#4c34eb</item>
+        <item name="colorHelpBorder">#68C8C1</item>
         <item name="colorMirrorConnection">@color/yellow</item>
 
     </style>
@@ -38,6 +65,13 @@
     <style name="AppTheme.Base.Light" parent="AppTheme.Base">
         <item name="android:buttonStyle">@style/mybuttonstyle</item>
         <item name="isAppLightTheme">true</item>
+        <item name="android:colorBackground">?android:attr/windowBackground</item>
+        <item name="android:statusBarColor">?android:attr/windowBackground</item>
+        <item name="android:navigationBarColor">?android:attr/windowBackground</item>
+        <item name="android:textColorSecondary">#526269</item>
+        <item name="android:textColorHint">#718087</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">true</item>
         <item name="alertDialogTheme">@style/MyLightAlertDialogTheme</item>
         <item name="android:alertDialogTheme">@style/MyLightAlertDialogTheme</item>
 
@@ -48,63 +82,137 @@
     <style name="AppTheme.Base.Dark" parent="AppTheme.Base">
         <item name="android:buttonStyle">@style/mybuttonstyle</item>
         <item name="isAppLightTheme">false</item>
+        <item name="android:colorBackground">?android:attr/windowBackground</item>
     </style>
 
     <style name="MySpinnerDropDownItemStyle" parent="android:Widget.DropDownItem.Spinner">
-        <item name="android:gravity">left|center_vertical</item>
+        <item name="android:gravity">start|center_vertical</item>
         <item name="android:textAlignment">gravity</item>
-        <item name="android:paddingLeft">16dp</item>
-        <item name="android:paddingRight">20dp</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">20dp</item>
+        <item name="android:paddingTop">10dp</item>
+        <item name="android:paddingBottom">10dp</item>
+        <item name="android:textSize">16sp</item>
         <item name="android:textColor">?attr/colorSpinnerDropdownText</item>
     </style>
 
     <style name="textAppearanceButton" parent="@android:style/TextAppearance.Material.Widget.Button">
         <item name="android:textAllCaps">false</item>
         <item name="android:textColor">?attr/colorButtonText</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:letterSpacing">0.01</item>
     </style>
 
     <style name="textAppearanceButtonDark" parent="@android:style/TextAppearance.Material.Widget.Button">
         <item name="android:textAllCaps">false</item>
         <item name="android:textColor">#07120A</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:letterSpacing">0.01</item>
     </style>
 
     <style name="MyTextViewStyle" parent="android:Widget.TextView">
-        <item name="android:paddingRight">20dp</item>
         <item name="android:textColor">?android:attr/textColorPrimary</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:lineSpacingExtra">2dp</item>
     </style>
 
-    <style name="MyCheckBoxStyle" parent="android:Widget.CompoundButton.CheckBox">
+    <style name="MyCheckBoxStyle" parent="@android:style/Widget.Material.CompoundButton.CheckBox">
         <item name="android:textColor">?android:attr/textColorPrimary</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:minWidth">48dp</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">12dp</item>
     </style>
 
-    <style name="MyRadioButtonStyle" parent="android:Widget.CompoundButton.RadioButton">
+    <style name="MyRadioButtonStyle" parent="@android:style/Widget.Material.CompoundButton.RadioButton">
         <item name="android:textColor">?android:attr/textColorPrimary</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:minWidth">48dp</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">12dp</item>
     </style>
 
     <style name="mybuttonstyle" parent="@android:style/Widget.Button">
-
         <item name="android:background">?attr/themedButtonBackground</item>
-
+        <item name="android:backgroundTint">@null</item>
         <item name="android:textColor">?attr/colorButtonText</item>
         <item name="android:textAllCaps">false</item>
-        <item name="android:paddingTop">8dp</item>
-        <item name="android:paddingLeft">16dp</item>
-        <item name="android:paddingRight">16dp</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:letterSpacing">0.01</item>
+        <item name="android:gravity">center</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:paddingStart">20dp</item>
+        <item name="android:paddingEnd">20dp</item>
+        <item name="android:paddingTop">10dp</item>
         <item name="android:paddingBottom">10dp</item>
-        <item name="android:minWidth">88dp</item>
+        <item name="android:minWidth">64dp</item>
         <item name="android:minHeight">48dp</item>
     </style>
 
+    <style name="ModernEditTextStyle" parent="@android:style/Widget.Material.EditText">
+        <item name="android:background">@drawable/modern_component_text_field</item>
+        <item name="android:backgroundTint">@null</item>
+        <item name="android:textColor">?android:attr/textColorPrimary</item>
+        <item name="android:textColorHint">?android:attr/textColorHint</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
+        <item name="android:paddingTop">8dp</item>
+        <item name="android:paddingBottom">8dp</item>
+    </style>
+
+    <style name="ModernSpinnerStyle" parent="@android:style/Widget.Material.Spinner.Underlined">
+        <item name="android:background">@drawable/modern_component_spinner</item>
+        <item name="android:backgroundTint">@null</item>
+        <item name="android:popupBackground">?android:attr/windowBackground</item>
+        <item name="android:gravity">start|center_vertical</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">44dp</item>
+        <item name="android:paddingTop">8dp</item>
+        <item name="android:paddingBottom">8dp</item>
+    </style>
+
+    <style name="ModernImageButtonStyle" parent="@android:style/Widget.Material.ImageButton">
+        <item name="android:background">?android:attr/selectableItemBackgroundBorderless</item>
+        <item name="android:minWidth">48dp</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:padding">12dp</item>
+    </style>
+
     <style name="MyDarkAlertDialogTheme" parent="Theme.AppCompat.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/clinical_dialog_window</item>
+        <item name="android:windowElevation">18dp</item>
+        <item name="android:windowMinWidthMajor">88%</item>
+        <item name="android:windowMinWidthMinor">88%</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.72</item>
+        <item name="android:colorAccent">#5ACB85</item>
+        <item name="colorAccent">#5ACB85</item>
         <item name="android:textViewStyle">@style/MyDialogTextViewStyle</item>
-        <item name="android:buttonStyle">@style/Widget.AppCompat.Button.ButtonBar.AlertDialog</item>
-        <item name="android:textAppearanceButton">@style/TextAppearance.AppCompat.Button</item>
+        <item name="android:buttonStyle">@style/mybuttonstyle</item>
+        <item name="buttonBarButtonStyle">@style/mybuttonstyle</item>
+        <item name="android:textAppearanceButton">@style/textAppearanceButton</item>
     </style>
 
     <style name="MyLightAlertDialogTheme" parent="Theme.AppCompat.Light.Dialog.Alert">
         <item name="android:textViewStyle">@style/MyDialogTextViewStyle</item>
-        <item name="android:buttonStyle">@style/Widget.AppCompat.Button.ButtonBar.AlertDialog</item>
-        <item name="android:textAppearanceButton">@style/TextAppearance.AppCompat.Button</item>
+        <item name="android:buttonStyle">@style/mybuttonstyle</item>
+        <item name="buttonBarButtonStyle">@style/mybuttonstyle</item>
+        <item name="android:textAppearanceButton">@style/textAppearanceButton</item>
     </style>
 
     <style name="MyDialogTextViewStyle" parent="android:Widget.TextView">
@@ -113,6 +221,9 @@
         <item name="android:paddingTop">0dp</item>
         <item name="android:paddingBottom">0dp</item>
         <item name="android:textColor">?android:attr/textColorPrimary</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:lineSpacingExtra">2dp</item>
     </style>
 
     <!-- ========================================= -->
@@ -603,7 +714,40 @@
     <!-- ========================================= -->
     <!-- DEFAULT/SYSTEM THEMES                     -->
     <!-- ========================================= -->
+<style name="AppTheme.ClinicalDark" parent="AppTheme.Base.Dark">
+    <item name="android:windowBackground">#0B0D0E</item>
+    <item name="android:colorBackground">#0B0D0E</item>
+    <item name="android:statusBarColor">#0B0D0E</item>
+    <item name="android:navigationBarColor">#0B0D0E</item>
+    <item name="android:textColorPrimary">#F2F4F3</item>
+    <item name="android:textColor">#F2F4F3</item>
+    <item name="android:textColorSecondary">#9BA19F</item>
+    <item name="android:textColorHint">#767D79</item>
+    <item name="colorPrimary">#5ACB85</item>
+    <item name="colorPrimaryDark">#0B0D0E</item>
+    <item name="colorAccent">#5ACB85</item>
+    <item name="android:colorAccent">#5ACB85</item>
+    <item name="colorControlActivated">#5ACB85</item>
+    <item name="android:colorControlActivated">#5ACB85</item>
+    <item name="colorControlNormal">#8D9691</item>
+    <item name="android:colorControlNormal">#8D9691</item>
+    <item name="colorButtonNormal">#171A1B</item>
+    <item name="android:colorButtonNormal">#171A1B</item>
+    <item name="colorButtonBackground">#171A1B</item>
+    <item name="colorButtonStroke">#303638</item>
+    <item name="colorButtonText">#F2F4F3</item>
+    <item name="buttonCornerRadius">14dp</item>
+    <item name="buttonStrokeWidth">1dp</item>
+    <item name="colorControlHighlight">#335ACB85</item>
+    <item name="colorSpinnerDropdownText">#F2F4F3</item>
+    <item name="colorDialogBorder">#303638</item>
+    <item name="colorHelpBorder">#5ACB85</item>
+</style>
+
+<!-- Retained for source/resource compatibility; DEFAULT now uses ClinicalDark. -->
 <style name="AppTheme.AndroidDefault" parent="AppTheme.Base.Dark">
+    <item name="android:windowBackground">#121212</item>
+    <item name="android:colorBackground">#121212</item>
     <item name="colorMirrorConnection">@color/yellow</item>
     <item name="android:buttonStyle">@android:style/Widget.DeviceDefault.Button</item>
     <item name="android:textAppearanceButton">@style/textAppearanceButtonAndroidDefault</item>
@@ -613,10 +757,10 @@
 </style>    
 
     <style name="ShapeOverride_Oval">
-        <item name="themedButtonBackground">@drawable/button_oval</item>
+        <item name="themedButtonBackground">@drawable/modern_component_button_oval</item>
     </style>
     <style name="ShapeOverride_Rectangle">
-        <item name="themedButtonBackground">@drawable/button_rectangle</item>
+        <item name="themedButtonBackground">@drawable/modern_component_button</item>
     </style>
 
 <style name="textAppearanceButtonAndroidDefault"

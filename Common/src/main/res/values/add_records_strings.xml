@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="add_record_category">Category</string>
+    <string name="add_record_amount">Amount</string>
+    <string name="add_record_details">Details</string>
+    <string name="add_record_keypad">Amount keypad</string>
+    <string name="add_record_backspace">Delete last digit</string>
+    <string name="add_record_decimal">Decimal point</string>
+    <string name="record_editor_new_title">New record</string>
+    <string name="record_editor_edit_title">Edit record</string>
+    <string name="record_editor_new_subtitle">Capture what happened. You can adjust the details later.</string>
+    <string name="record_editor_edit_subtitle">Review the details, then save your changes.</string>
+    <string name="record_editor_what">What happened</string>
+    <string name="record_editor_when">When</string>
+    <string name="record_editor_keypad">Amount keypad</string>
+    <string name="record_editor_source_local">Saved on this device</string>
+    <string name="record_editor_source_synced">Synced from another device</string>
+    <string name="record_editor_delete">Delete record</string>
+    <string name="record_editor_delete_title">Delete this record?</string>
+    <string name="record_editor_keep_editing">Keep editing</string>
+    <string name="record_editor_delete_confirm">Delete permanently</string>
+    <string name="records_subtitle">Meals, insulin, activity and notes</string>
+    <string name="records_add">New</string>
+    <string name="records_add_description">Add a new record</string>
+    <string name="records_search_description">Search records</string>
+    <string name="records_first">First</string>
+    <string name="records_first_description">Go to the oldest records</string>
+    <string name="records_previous">Back</string>
+    <string name="records_previous_description">Show the previous page</string>
+    <string name="records_next">Next</string>
+    <string name="records_next_description">Show the next page</string>
+    <string name="records_latest">Latest</string>
+    <string name="records_latest_description">Go to the latest records</string>
+</resources>

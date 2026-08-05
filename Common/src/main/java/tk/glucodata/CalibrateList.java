@@ -51,7 +51,6 @@ import android.widget.RadioGroup;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
-import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -99,6 +98,16 @@ static class CalView extends LinearLayout {
                 */ 
 
                 addView(delete);
+                if(!isWearable) {
+                    setGravity(Gravity.START);
+                    int padding=ClinicalUi.dp(context,16);
+                    setPadding(padding,padding,padding,padding);
+                    setBackground(ClinicalUi.surface(context,false,true));
+                    RecyclerView.LayoutParams params=new RecyclerView.LayoutParams(
+                          MATCH_PARENT,WRAP_CONTENT);
+                    params.bottomMargin=ClinicalUi.dp(context,10);
+                    setLayoutParams(params);
+                    }
                 }
         static CalView getCalView(Context context) {
                 TextView time=new TextView(context);
@@ -129,8 +138,22 @@ static class CalView extends LinearLayout {
                 delete.setLayoutParams(btnParams);
 //            delete.setMinWidth(0); delete.setMinimumWidth(0); delete.setPadding(dpToPx(16), delete.getPaddingTop(), dpToPx(16), delete.getPaddingBottom()); 
                  delete.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-                delete.setTextDirection(View.TEXT_DIRECTION_RTL);
-                delete.setGravity(Gravity.CENTER);
+                 delete.setTextDirection(View.TEXT_DIRECTION_RTL);
+                 delete.setGravity(Gravity.CENTER);
+                if(!isWearable) {
+                    time.setTextDirection(View.TEXT_DIRECTION_LOCALE);
+                    time.setGravity(Gravity.START);
+                    time.setTextColor(ClinicalUi.secondaryText(context));
+                    time.setTextSize(13);
+                    cali.setTextDirection(View.TEXT_DIRECTION_LOCALE);
+                    cali.setGravity(Gravity.START);
+                    cali.setTextColor(ClinicalUi.primaryText(context));
+                    cali.setTextSize(18);
+                    ConnectionUi.styleButton((MainActivity)context,delete,
+                          ClinicalUi.ButtonRole.DANGER);
+                    delete.setLayoutParams(new LinearLayout.LayoutParams(
+                          MATCH_PARENT,WRAP_CONTENT));
+                    }
                // delete.setLayoutParams(new ViewGroup.LayoutParams(  ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
                 //delete.setLayoutParams(params);
                 return new CalView(context,time,cali,delete);
@@ -242,12 +265,22 @@ private void fillItem(CaliListViewHolder  holder, int pos) {
                 cali.delete.setOnClickListener( v -> { 
                     var context= cali.getContext();
                      var title=context.getString(R.string.delete_calibration);
-                    Confirm.ask(context,title,timestr+(isWearable?"\n":"\n\n")+calistr , ()-> {
-                        if(Natives.removeCalibrator( sensorptr,which, pos)) {
-                           // notifyItemRemoved(pos); //position changes
-                            notifyDataSetChanged();
-                            render[0]=true;
-                            }});
+                     if(isWearable)
+                         Confirm.ask(context,title,timestr+"\n"+calistr,()-> {
+                            if(Natives.removeCalibrator(sensorptr,which,pos)) {
+                               notifyDataSetChanged();
+                               render[0]=true;
+                               }
+                            });
+                     else
+                         ConnectionUi.confirmSheet((MainActivity)context,cali,title,
+                               timestr+"\n\n"+calistr,context.getString(R.string.delete),
+                               ClinicalUi.ButtonRole.DANGER,()-> {
+                                  if(Natives.removeCalibrator(sensorptr,which,pos)) {
+                                     notifyDataSetChanged();
+                                     render[0]=true;
+                                     }
+                                  });
                     });
                 cali.setOnClickListener( v -> { 
                        Natives.setStartTime(para.time-5*60000);
@@ -331,7 +364,7 @@ static void show(MainActivity act, long sensorptr,View parent) {
       RecyclerView recycle = new RecyclerView(act);
       recycle.setHasFixedSize(true);
       recycle.setLayoutParams(new ViewGroup.LayoutParams(   ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-      var lin=isWearable?new LinearLayoutManager(act):new GridLayoutManager(act,4);
+      var lin=new LinearLayoutManager(act);
       recycle.setLayoutManager(lin);
       boolean[] render={false};
       var caliadapt = new CaliListViewAdapter(sensorptr,render,0);
@@ -348,7 +381,7 @@ static void show(MainActivity act, long sensorptr,View parent) {
           layout=recycle;
           }
      else {
-      var close=getbutton(act,R.string.closename);
+      var close=ConnectionUi.headerButton(act,R.string.closename);
      var   stream=getradiobutton(act,R.string.streamname);
      stream.setChecked(true);
      var   history=getradiobutton(act,R.string.historyname);
@@ -369,25 +402,40 @@ static void show(MainActivity act, long sensorptr,View parent) {
                 });
               }
        else {
-        history.setVisibility(INVISIBLE);
+        history.setVisibility(GONE);
           }
-      close.setOnClickListener( v -> { 
-            MainActivity.doonback();
-            });
-       var help=getbutton(act,R.string.helpname);
-       var settings=getbutton(act,R.string.settings);
-        View[] firstrow=new View[]{help,settings,stream, history,close};
-      layout=new Layout(act,(x,w,h)->{
-             return new int[] {w,h};
-               },firstrow,new View[]{recycle}); 
-        settings.setOnClickListener( v -> { 
-            tk.glucodata.settings.Calibration.show(act,layout);
-            });
-        help.setOnClickListener(v-> tk.glucodata.help.help(R.string.calibrationslist,act));
-        }
-       layout.setBackgroundColor(backgroundcolor);
-        float density=GlucoseCurve.metrics.density;
-    layout.setPaddingRelative((int)(density*5.0)+MainActivity.systembarStart,MainActivity.systembarTop,MainActivity.systembarEnd+(int)(density*8.0),MainActivity.systembarBottom);
+      ConnectionUi.choice(act,stream);
+      ConnectionUi.choice(act,history);
+      LinearLayout help=ClinicalUi.actionRow(act,act.getString(R.string.helpname),
+            act.getString(R.string.clinical_calibration_help_hint));
+      LinearLayout settings=ClinicalUi.actionRow(act,act.getString(R.string.settings),
+            act.getString(R.string.clinical_calibration_settings_hint));
+      LinearLayout content=ConnectionUi.content(act);
+      content.setLayoutParams(new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+      content.addView(ClinicalUi.header(act,
+            act.getString(R.string.clinical_calibration_history_title),close));
+      content.addView(ConnectionUi.intro(act,R.string.clinical_calibration_history_intro));
+      content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.clinical_calibration_source_section)));
+      content.addView(ClinicalUi.card(act,stream,history));
+      content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.clinical_calibration_entries_section)));
+      recycle.setPadding(0,0,0,ClinicalUi.dp(act,10));
+      recycle.setClipToPadding(false);
+      content.addView(recycle,new LinearLayout.LayoutParams(MATCH_PARENT,0,1f));
+      content.addView(ClinicalUi.card(act,settings,help));
+      layout=content;
+      close.setOnClickListener(view->MainActivity.doonback());
+      settings.setOnClickListener(view->tk.glucodata.settings.Calibration.show(act,layout));
+      help.setOnClickListener(view->tk.glucodata.help.help(R.string.calibrationslist,act));
+         }
+       if(isWearable) {
+          layout.setBackgroundColor(backgroundcolor);
+          float density=GlucoseCurve.metrics.density;
+          layout.setPaddingRelative((int)(density*5.0)+MainActivity.systembarStart,
+                MainActivity.systembarTop,MainActivity.systembarEnd+(int)(density*8.0),
+                MainActivity.systembarBottom);
+          }
 
      act.addMyContentView(layout, new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT));
 //      act.addMyContentView(layout, new ViewGroup.LayoutParams( WRAP_CONTENT, WRAP_CONTENT));
@@ -397,7 +445,8 @@ static void show(MainActivity act, long sensorptr,View parent) {
            if(render[0]) {
               act.requestRender();
               }
-        parent.setVisibility(VISIBLE);
+        if(parent!=null)
+           parent.setVisibility(VISIBLE);
 
         });
       }

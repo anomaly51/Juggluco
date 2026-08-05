@@ -42,6 +42,7 @@
 #include <cstdint>
 #include <cinttypes>
 #include <charconv>
+#include <mutex>
 #include <string>
 #include <new>
 using namespace std::literals;
@@ -57,6 +58,10 @@ using namespace std::literals;
 
 
 #include "curve.hpp"
+#include "graphpoints.hpp"
+#include "forecastgraph.hpp"
+#include "intakemarkers.hpp"
+#include "intakeevents.hpp"
 #include "scriptFonts.hpp"
 #include "config.h"
 //#define FILEDIR "/sdcard/libre2/"
@@ -76,6 +81,157 @@ using namespace std::literals;
 #include "misc.hpp"
 #include "calibrate/Calibrator.hpp"
 #include "calibrate/Calibrate.hpp"
+
+namespace {
+struct IntakeTimelineHit {
+    std::vector<std::int32_t> keys;
+    float left;
+    float top;
+    float right;
+    float bottom;
+};
+
+std::mutex intakeTimelineMutex;
+std::vector<IntakeTimelineEvent> intakeTimelineEvents;
+std::vector<IntakeTimelineHit> intakeTimelineHits;
+std::uint64_t intakeTimelineRevision=0U;
+
+std::mutex forecastGraphMutex;
+std::vector<forecastgraph::Point> forecastGraphPoints;
+std::vector<forecastgraph::Activity> forecastActivities;
+float forecastGraphConfidence=0.0f;
+}
+
+void replaceForecastGraph(std::vector<forecastgraph::Point> points,
+                          const float confidence) {
+    std::stable_sort(points.begin(),points.end(),[](const auto &left,
+                                                    const auto &right) {
+        return left.time<right.time;
+    });
+    std::vector<forecastgraph::Point> unique;
+    unique.reserve(points.size());
+    for(const auto &point:points) {
+        if(!unique.empty()&&unique.back().time==point.time)
+            unique.back()=point;
+        else
+            unique.push_back(point);
+    }
+    std::lock_guard<std::mutex> guard(forecastGraphMutex);
+    forecastGraphPoints=std::move(unique);
+    forecastGraphConfidence=forecastgraph::clamp01(confidence);
+}
+
+void replaceForecastActivities(
+        std::vector<forecastgraph::Activity> activities) {
+    for(auto &activity:activities) {
+        if(activity.onset<activity.start||activity.onset>activity.peak)
+            activity.onset=0U;
+        if(activity.peakLow||activity.peakHigh) {
+            const uint32_t actionStart=activity.onset?activity.onset:
+                                                       activity.start;
+            const uint32_t rawLow=activity.peakLow?activity.peakLow:
+                                                    activity.peakHigh;
+            const uint32_t rawHigh=activity.peakHigh?activity.peakHigh:
+                                                      activity.peakLow;
+            activity.peakLow=std::clamp(std::min(rawLow,rawHigh),
+                                        actionStart,activity.end);
+            activity.peakHigh=std::clamp(std::max(rawLow,rawHigh),
+                                         activity.peakLow,activity.end);
+            activity.peakLow=std::min(activity.peakLow,activity.peak);
+            activity.peakHigh=std::max(activity.peakHigh,activity.peak);
+        }
+        if(activity.endLow||activity.endHigh) {
+            const uint32_t rawLow=activity.endLow?activity.endLow:
+                                                  activity.endHigh;
+            const uint32_t rawHigh=activity.endHigh?activity.endHigh:
+                                                    activity.endLow;
+            const uint32_t latestPeak=activity.peakHigh?
+                    activity.peakHigh:activity.peak;
+            activity.endLow=std::max(latestPeak,
+                                     std::min(rawLow,rawHigh));
+            activity.endHigh=std::max(activity.endLow,
+                                      std::max(rawLow,rawHigh));
+            activity.endLow=std::min(activity.endLow,activity.end);
+            activity.endHigh=std::max(activity.endHigh,activity.end);
+        }
+        activity.overlapCount=std::clamp(activity.overlapCount,0,999);
+        if(!std::isfinite(activity.attributionConfidence))
+            activity.attributionConfidence=-1.0f;
+        else if(activity.attributionConfidence>=0.0f)
+            activity.attributionConfidence=forecastgraph::clamp01(
+                    activity.attributionConfidence);
+        auto &samples=activity.samples;
+        samples.erase(std::remove_if(samples.begin(),samples.end(),
+                [](const forecastgraph::ActivitySample &sample) {
+                    return !sample.time||!std::isfinite(sample.level);
+                }),samples.end());
+        std::stable_sort(samples.begin(),samples.end(),[](const auto &left,
+                                                          const auto &right) {
+            return left.time<right.time;
+        });
+        std::vector<forecastgraph::ActivitySample> unique;
+        unique.reserve(samples.size());
+        for(auto sample:samples) {
+            sample.level=forecastgraph::clamp01(sample.level);
+            if(!unique.empty()&&unique.back().time==sample.time)
+                unique.back()=sample;
+            else
+                unique.push_back(sample);
+        }
+        samples=std::move(unique);
+    }
+    std::stable_sort(activities.begin(),activities.end(),
+            [](const auto &left,const auto &right) {
+                if(left.start!=right.start)
+                    return left.start<right.start;
+                if(left.end!=right.end)
+                    return left.end<right.end;
+                return left.identity<right.identity;
+            });
+    std::lock_guard<std::mutex> guard(forecastGraphMutex);
+    forecastActivities=std::move(activities);
+}
+
+forecastgraph::Snapshot forecastGraphSnapshot() {
+    std::lock_guard<std::mutex> guard(forecastGraphMutex);
+    return {forecastGraphPoints,forecastActivities,forecastGraphConfidence};
+}
+
+std::uint32_t forecastGraphEndTime() {
+    std::lock_guard<std::mutex> guard(forecastGraphMutex);
+    return forecastGraphPoints.empty()?0U:forecastGraphPoints.back().time;
+}
+
+void replaceIntakeTimelineEvents(std::vector<IntakeTimelineEvent> events) {
+    std::stable_sort(events.begin(),events.end(),[](const auto &left,
+                                                    const auto &right) {
+        if(left.time!=right.time)
+            return left.time<right.time;
+        return left.key<right.key;
+    });
+    std::lock_guard<std::mutex> guard(intakeTimelineMutex);
+    intakeTimelineEvents=std::move(events);
+    intakeTimelineHits.clear();
+    ++intakeTimelineRevision;
+}
+
+int intakeTimelineEventAt(float x,float y) {
+    std::lock_guard<std::mutex> guard(intakeTimelineMutex);
+    for(auto it=intakeTimelineHits.rbegin();it!=intakeTimelineHits.rend();++it) {
+        if(x>=it->left&&x<=it->right&&y>=it->top&&y<=it->bottom)
+            return it->keys.empty()?0:it->keys.front();
+    }
+    return 0;
+}
+
+std::vector<std::int32_t> intakeTimelineEventsAt(float x,float y) {
+    std::lock_guard<std::mutex> guard(intakeTimelineMutex);
+    for(auto it=intakeTimelineHits.rbegin();it!=intakeTimelineHits.rend();++it) {
+        if(x>=it->left&&x<=it->right&&y>=it->top&&y<=it->bottom)
+            return it->keys;
+    }
+    return {};
+}
 static bool getLevelLeft() {
 #ifdef NOLEFT
     return false;
@@ -776,6 +932,1040 @@ pair<const ScanData*,const ScanData*> getScanRangeRuim(const ScanData *scan,cons
         }
 
 
+void JCurve::drawforecastactivities(NVGcontext* avg,const uint32_t now,
+                                    const uint32_t visibleStart,
+                                    const uint32_t visibleEnd,
+                                    const std::vector<forecastgraph::Activity>
+                                            &activities) {
+    if(!modernnormal||activities.empty()||visibleEnd<=visibleStart)
+        return;
+
+    const auto [transx,unusedTransy]=gettrans(visibleStart,visibleEnd);
+    (void)unusedTransy;
+    const float plotTop=dtop+density*3.0f;
+    const float plotBottom=dtop+dheight-smallfontlineheight*1.60f;
+    const float plotHeight=plotBottom-plotTop;
+    if(!(plotHeight>density*8.0f))
+        return;
+    const auto alphaColor=[](NVGcolor color,const float alpha) {
+        color.a=forecastgraph::clamp01(alpha);
+        return color;
+    };
+    const std::array<float,3> curveHeightFractions{.31f,.38f,.25f};
+
+    // Reuse the lowest free lane for non-overlapping records. Simultaneous
+    // NovoRapid/Tresiba entries therefore remain individually traceable even
+    // when their timestamps and central action curves are identical.
+    std::vector<int> activityLanes(activities.size(),0);
+    std::array<std::vector<uint32_t>,3> laneEnds;
+    for(std::size_t index=0;index<activities.size();++index) {
+        const auto &activity=activities[index];
+        const auto rawKind=static_cast<std::int32_t>(activity.kind);
+        if(!forecastgraph::valid_kind(rawKind))
+            continue;
+        auto &ends=laneEnds[rawKind-1];
+        const uint32_t visualEnd=activity.endHigh?
+                std::max(activity.end,activity.endHigh):activity.end;
+        std::size_t lane=0U;
+        while(lane<ends.size()&&ends[lane]>activity.start)
+            ++lane;
+        if(lane==ends.size())
+            ends.push_back(visualEnd);
+        else
+            ends[lane]=visualEnd;
+        activityLanes[index]=static_cast<int>(lane);
+    }
+
+    nvgSave(avg);
+    nvgScissor(avg,dleft,plotTop,dwidth,plotHeight);
+    nvgLineCap(avg,NVG_ROUND);
+    nvgLineJoin(avg,NVG_ROUND);
+    std::array<std::vector<std::pair<float,int>>,3> peakGlyphXs;
+    for(std::size_t activityIndex=0;activityIndex<activities.size();
+            ++activityIndex) {
+        const auto &activity=activities[activityIndex];
+        const auto rawKind=static_cast<std::int32_t>(activity.kind);
+        const uint32_t visualEnd=activity.endHigh?
+                std::max(activity.end,activity.endHigh):activity.end;
+        if(!forecastgraph::valid_kind(rawKind)||
+           visualEnd<=visibleStart||activity.start>=visibleEnd||
+           activity.end<=activity.start||activity.end-activity.start<=1U)
+            continue;
+        const int kindIndex=rawKind-1;
+        const int lane=activityLanes[activityIndex];
+        const NVGcolor base=activity.kind==forecastgraph::ActivityKind::Meal?
+                            hexcolor(0xF2A93B):
+                            (activity.kind==forecastgraph::ActivityKind::RapidInsulin?
+                             hexcolor(0x55C8F2):hexcolor(0xB69AF5));
+        const float confidence=std::isfinite(activity.confidence)?
+                forecastgraph::clamp01(activity.confidence):0.0f;
+        const float strength=std::isfinite(activity.strength)?
+                forecastgraph::visual_strength(activity.strength):0.0f;
+        const float weight=(.42f+.58f*strength)*(.42f+.58f*confidence);
+        const uint32_t peak=forecastgraph::activity_peak(
+                activity.start,activity.peak,activity.end);
+        const uint32_t clippedStart=std::max(activity.start,visibleStart);
+        const uint32_t clippedEnd=std::min(activity.end,visibleEnd);
+        if(clippedEnd<=clippedStart)
+            continue;
+        const float clippedLeft=transx(clippedStart);
+        const float clippedRight=transx(clippedEnd);
+        if(!(clippedRight>clippedLeft))
+            continue;
+
+        const auto drawRangeBand=[&](const uint32_t rawStart,
+                                     const uint32_t rawEnd,
+                                     const float alpha) {
+            if(!rawStart&&!rawEnd)
+                return;
+            const uint32_t first=rawStart?rawStart:rawEnd;
+            const uint32_t last=rawEnd?rawEnd:rawStart;
+            const uint32_t rangeStart=std::max(visibleStart,
+                                               std::min(first,last));
+            const uint32_t rangeEnd=std::min(visibleEnd,
+                                             std::max(first,last));
+            if(rangeEnd<rangeStart)
+                return;
+            float left=transx(rangeStart),right=transx(rangeEnd);
+            const float minimum=std::max(density*1.7f,1.2f);
+            if(right-left<minimum) {
+                const float center=(left+right)*.5f;
+                left=center-minimum*.5f;
+                right=center+minimum*.5f;
+            }
+            nvgBeginPath(avg);
+            nvgRect(avg,left,plotTop,right-left,plotHeight);
+            nvgFillColor(avg,alphaColor(base,alpha));
+            nvgFill(avg);
+        };
+        drawRangeBand(activity.peakLow,activity.peakHigh,
+                      .035f+.035f*weight);
+        drawRangeBand(activity.endLow,activity.endHigh,
+                      .016f+.018f*weight);
+
+        // The per-event scissor is intentionally anchored to start time. It
+        // also clips NanoVG antialiasing, so neither a wide glow nor a rounded
+        // stroke can suggest insulin/meal activity to the left of injection.
+        nvgSave(avg);
+        nvgIntersectScissor(avg,clippedLeft,plotTop,
+                            clippedRight-clippedLeft,plotHeight);
+
+        std::vector<uint32_t> sampleTimes;
+        constexpr uint32_t sampleSegments=32U;
+        sampleTimes.reserve(sampleSegments+4U);
+        const uint64_t span=static_cast<uint64_t>(clippedEnd)-clippedStart;
+        for(uint32_t part=0U;part<=sampleSegments;++part) {
+            sampleTimes.push_back(clippedStart+static_cast<uint32_t>(
+                    span*part/sampleSegments));
+        }
+        if(peak>clippedStart&&peak<clippedEnd)
+            sampleTimes.push_back(peak);
+        if(now>clippedStart&&now<clippedEnd)
+            sampleTimes.push_back(now);
+        for(const auto &sample:activity.samples) {
+            if(sample.time>=clippedStart&&sample.time<=clippedEnd)
+                sampleTimes.push_back(sample.time);
+        }
+        std::sort(sampleTimes.begin(),sampleTimes.end());
+        sampleTimes.erase(std::unique(sampleTimes.begin(),sampleTimes.end()),
+                          sampleTimes.end());
+
+        const float curveFloor=plotBottom-density*(
+                5.0f+kindIndex*2.25f+std::min(lane,8)*3.25f);
+        const float curveHeight=plotHeight*curveHeightFractions[kindIndex]*
+                (.72f+.28f*strength);
+        const float corePeakAlpha=.50f+.38f*weight;
+        const auto curveY=[&](const float level) {
+            return curveFloor-curveHeight*forecastgraph::clamp01(level);
+        };
+
+        for(std::size_t index=1;index<sampleTimes.size();++index) {
+            const uint32_t leftTime=sampleTimes[index-1];
+            const uint32_t rightTime=sampleTimes[index];
+            if(rightTime<=leftTime)
+                continue;
+            const float leftLevel=forecastgraph::activity_level(activity,
+                                                                 leftTime);
+            const float rightLevel=forecastgraph::activity_level(activity,
+                                                                  rightTime);
+            if(leftLevel<=0.0f&&rightLevel<=0.0f)
+                continue;
+            const bool past=forecastgraph::historical_activity_segment(
+                    rightTime,now);
+            const float timeEmphasis=past?.28f:1.0f;
+            const float x1=transx(leftTime),x2=transx(rightTime);
+            const float y1=curveY(leftLevel),y2=curveY(rightLevel);
+            // A soft halo plus crisp core remains readable when several
+            // activity windows overlap at the same time.
+            const NVGpaint halo=nvgLinearGradient(avg,x1,0,x2,0,
+                    alphaColor(base,.10f*timeEmphasis*leftLevel),
+                    alphaColor(base,.10f*timeEmphasis*rightLevel));
+            nvgBeginPath(avg);
+            nvgMoveTo(avg,x1,y1);
+            nvgLineTo(avg,x2,y2);
+            nvgStrokeWidth(avg,std::max(density*4.2f,2.4f));
+            nvgStrokePaint(avg,halo);
+            nvgStroke(avg);
+
+            const NVGpaint core=nvgLinearGradient(avg,x1,0,x2,0,
+                    alphaColor(base,corePeakAlpha*timeEmphasis*leftLevel),
+                    alphaColor(base,corePeakAlpha*timeEmphasis*rightLevel));
+            nvgBeginPath(avg);
+            nvgMoveTo(avg,x1,y1);
+            nvgLineTo(avg,x2,y2);
+            nvgStrokeWidth(avg,std::max(density*1.15f,1.05f));
+            nvgStrokePaint(avg,core);
+            nvgStroke(avg);
+        }
+
+        if(activity.start>=visibleStart&&activity.start<visibleEnd) {
+            const float startX=transx(activity.start);
+            const float markerRadius=std::max(density*3.0f,2.2f);
+            nvgBeginPath(avg);
+            nvgMoveTo(avg,startX,curveFloor-markerRadius);
+            nvgLineTo(avg,startX+markerRadius*1.75f,curveFloor);
+            nvgLineTo(avg,startX,curveFloor+markerRadius);
+            nvgClosePath(avg);
+            nvgFillColor(avg,alphaColor(base,.64f+.28f*weight));
+            nvgFill(avg);
+            nvgBeginPath(avg);
+            nvgMoveTo(avg,startX,plotTop);
+            nvgLineTo(avg,startX,plotBottom);
+            nvgStrokeWidth(avg,std::max(density*.65f,.7f));
+            nvgStrokeColor(avg,alphaColor(base,.07f+.06f*weight));
+            nvgStroke(avg);
+        }
+
+        if(activity.onset>activity.start&&activity.onset<=activity.peak&&
+           activity.onset>=visibleStart&&activity.onset<visibleEnd) {
+            const float onsetX=transx(activity.onset);
+            nvgBeginPath(avg);
+            nvgMoveTo(avg,onsetX,curveFloor-density*5.0f);
+            nvgLineTo(avg,onsetX,curveFloor+density*1.0f);
+            nvgStrokeWidth(avg,std::max(density*.9f,.8f));
+            nvgStrokeColor(avg,alphaColor(base,.34f+.25f*weight));
+            nvgStroke(avg);
+        }
+
+        if(peak>=visibleStart&&peak<=visibleEnd) {
+            const float peakX=transx(peak);
+            const float peakY=curveY(forecastgraph::activity_level(activity,
+                                                                    peak));
+            const float pastEmphasis=peak<now?.42f:1.0f;
+            nvgBeginPath(avg);
+            nvgMoveTo(avg,peakX,peakY+density*4.0f);
+            nvgLineTo(avg,peakX,curveFloor);
+            nvgStrokeWidth(avg,std::max(density*.65f,.7f));
+            nvgStrokeColor(avg,alphaColor(base,
+                    (.12f+.10f*weight)*pastEmphasis));
+            nvgStroke(avg);
+            nvgBeginPath(avg);
+            nvgCircle(avg,peakX,peakY,std::max(density*3.1f,2.4f));
+            nvgFillColor(avg,alphaColor(base,.14f*pastEmphasis));
+            nvgFill(avg);
+            nvgBeginPath(avg);
+            nvgCircle(avg,peakX,peakY,std::max(density*1.55f,1.25f));
+            nvgFillColor(avg,alphaColor(base,
+                    (.68f+.25f*weight)*pastEmphasis));
+            nvgFill(avg);
+
+            auto &glyphs=peakGlyphXs[kindIndex];
+            const bool hasSpace=std::none_of(glyphs.begin(),glyphs.end(),
+                    [&](const auto &other) {
+                        return other.second==lane&&
+                               std::fabs(other.first-peakX)<density*15.0f;
+                    });
+            if(hasSpace) {
+                glyphs.emplace_back(peakX,lane);
+                if(activity.kind!=forecastgraph::ActivityKind::Meal) {
+                    char glyph[12];
+                    const char prefix=activity.kind==
+                            forecastgraph::ActivityKind::RapidInsulin?'N':'T';
+                    const int glyphLength=(activity.overlapCount>0||lane>0)?
+                            std::snprintf(glyph,sizeof(glyph),"%c%d",prefix,
+                                          lane+1):
+                            std::snprintf(glyph,sizeof(glyph),"%c",prefix);
+                    nvgFontSize(avg,std::max(smallsize*.52f,density*7.0f));
+                    nvgTextAlign(avg,NVG_ALIGN_CENTER|NVG_ALIGN_BOTTOM);
+                    nvgFillColor(avg,alphaColor(base,
+                            (.54f+.32f*weight)*pastEmphasis));
+                    nvgText(avg,peakX,peakY-density*4.2f,glyph,
+                            glyph+std::max(0,glyphLength));
+                }
+            }
+        }
+
+        if(now>=clippedStart&&now<clippedEnd) {
+            const float currentLevel=forecastgraph::activity_level(activity,
+                                                                    now);
+            if(currentLevel>0.0f) {
+                const float currentX=transx(now);
+                const float currentY=curveY(currentLevel);
+                nvgBeginPath(avg);
+                nvgCircle(avg,currentX,currentY,
+                          std::max(density*2.35f,1.8f));
+                nvgFillColor(avg,alphaColor(base,.20f+.18f*weight));
+                nvgFill(avg);
+                nvgBeginPath(avg);
+                nvgCircle(avg,currentX,currentY,
+                          std::max(density*.92f,.85f));
+                nvgFillColor(avg,alphaColor(base,.86f));
+                nvgFill(avg);
+            }
+        }
+        nvgRestore(avg);
+    }
+    nvgRestore(avg);
+}
+
+void JCurve::drawforecast(NVGcontext* avg,const uint32_t now,
+                          const uint32_t visibleStart,
+                          const uint32_t visibleEnd,
+                          const std::vector<forecastgraph::Point> &source,
+                          const float confidenceIn,
+                          const forecastgraph::Point *actualAnchor) {
+    if(!modernnormal||source.empty()||visibleEnd<=visibleStart)
+        return;
+    const uint32_t clipStart=std::max(now,visibleStart);
+    if(clipStart>=visibleEnd)
+        return;
+
+    std::vector<forecastgraph::Point> timeline=source;
+    if(actualAnchor&&actualAnchor->time<=now&&
+       now-actualAnchor->time<=15U*60U) {
+        const auto position=std::lower_bound(timeline.begin(),timeline.end(),
+                actualAnchor->time,
+                [](const forecastgraph::Point &point,const uint32_t value) {
+                    return point.time<value;
+                });
+        if(position!=timeline.end()&&position->time==actualAnchor->time)
+            *position=*actualAnchor;
+        else
+            timeline.insert(position,*actualAnchor);
+        }
+    if(timeline.size()<2)
+        return;
+
+    const auto interpolate=[](const forecastgraph::Point &left,
+                              const forecastgraph::Point &right,
+                              const uint32_t time) {
+        if(right.time<=left.time)
+            return left;
+        const float ratio=static_cast<float>(time-left.time)/
+                          static_cast<float>(right.time-left.time);
+        return forecastgraph::Point{
+                time,
+                left.medianMgDl+(right.medianMgDl-left.medianMgDl)*ratio,
+                left.lowMgDl+(right.lowMgDl-left.lowMgDl)*ratio,
+                left.highMgDl+(right.highMgDl-left.highMgDl)*ratio};
+    };
+    const auto sampleAt=[&](const uint32_t time,
+                            forecastgraph::Point &result) {
+        const auto after=std::lower_bound(timeline.begin(),timeline.end(),time,
+                [](const forecastgraph::Point &point,const uint32_t value) {
+                    return point.time<value;
+                });
+        if(after!=timeline.end()&&after->time==time) {
+            result=*after;
+            return true;
+            }
+        if(after==timeline.begin()||after==timeline.end())
+            return false;
+        result=interpolate(*std::prev(after),*after,time);
+        return true;
+    };
+
+    std::vector<forecastgraph::Point> points;
+    points.reserve(timeline.size()+2U);
+    forecastgraph::Point boundary{};
+    if(sampleAt(clipStart,boundary))
+        points.push_back(boundary);
+    for(const auto &point:timeline) {
+        if(point.time>=clipStart&&point.time<=visibleEnd&&
+           (points.empty()||points.back().time!=point.time))
+            points.push_back(point);
+        }
+    if(sampleAt(visibleEnd,boundary)&&
+       (points.empty()||points.back().time!=boundary.time))
+        points.push_back(boundary);
+    if(points.size()<2)
+        return;
+
+    const auto [transx,transy]=gettrans(visibleStart,visibleEnd);
+    const auto yFor=[&](const float mgdl) {
+        const float safe=std::clamp(mgdl,20.0f,600.0f);
+        return static_cast<float>(transy(static_cast<uint32_t>(
+                std::lround(safe*10.0f))));
+    };
+    const float targetLow=settings->targetlow()/10.0f;
+    const float targetHigh=settings->targethigh()/10.0f;
+    const auto stateColor=[&](const float mgdl) {
+        return mgdl<targetLow?modernGraphLow:
+               (mgdl>targetHigh?modernGraphHigh:modernGraphGlucose);
+    };
+    const auto alphaColor=[](NVGcolor color,const float alpha) {
+        color.a=forecastgraph::clamp01(alpha);
+        return color;
+    };
+    const float confidence=forecastgraph::clamp01(confidenceIn);
+    const uint32_t firstTime=points.front().time;
+    const uint32_t lastTime=points.back().time;
+    const float horizon=std::max(1.0f,static_cast<float>(lastTime-firstTime));
+
+    nvgSave(avg);
+    nvgScissor(avg,dleft,dtop,dwidth,dheight-smallfontlineheight*1.60f);
+    nvgLineCap(avg,NVG_ROUND);
+    nvgLineJoin(avg,NVG_ROUND);
+
+    // Join a recent measured endpoint to the exact Now boundary. This avoids
+    // a misleading visual gap when backend horizons begin at +5 minutes, yet
+    // keeps uncertainty shading strictly on the future side of Now.
+    if(actualAnchor&&actualAnchor->time<clipStart&&
+       actualAnchor->time>=visibleStart&&
+       clipStart-actualAnchor->time<=15U*60U&&
+       points.front().time==clipStart) {
+        const NVGcolor connector=stateColor(
+                (actualAnchor->medianMgDl+points.front().medianMgDl)*.5f);
+        nvgBeginPath(avg);
+        nvgMoveTo(avg,transx(actualAnchor->time),
+                      yFor(actualAnchor->medianMgDl));
+        nvgLineTo(avg,transx(points.front().time),
+                      yFor(points.front().medianMgDl));
+        nvgStrokeWidth(avg,std::max(density*1.35f,1.1f));
+        nvgStrokeColor(avg,alphaColor(connector,.38f+.34f*confidence));
+        nvgStroke(avg);
+        }
+
+    // Segment paints keep the uncertainty surface continuous while fading it
+    // gently with horizon. The bound helpers prevent one uncertain outlier
+    // from flattening both the forecast and the measured glucose trace.
+    for(size_t index=1;index<points.size();++index) {
+        const auto &left=points[index-1],&right=points[index];
+        const float progressLeft=(left.time-firstTime)/horizon;
+        const float progressRight=(right.time-firstTime)/horizon;
+        const float alphaBase=.055f+.115f*confidence;
+        const float alphaLeft=alphaBase*(1.0f-.48f*progressLeft);
+        const float alphaRight=alphaBase*(1.0f-.48f*progressRight);
+        const float middle=(left.medianMgDl+right.medianMgDl)*.5f;
+        const NVGcolor base=stateColor(middle);
+        const float xLeft=transx(left.time),xRight=transx(right.time);
+        const float upperLeft=yFor(forecastgraph::bounded_high(left));
+        const float upperRight=yFor(forecastgraph::bounded_high(right));
+        const float lowerLeft=yFor(forecastgraph::bounded_low(left));
+        const float lowerRight=yFor(forecastgraph::bounded_low(right));
+        nvgBeginPath(avg);
+        nvgMoveTo(avg,xLeft,upperLeft);
+        nvgLineTo(avg,xRight,upperRight);
+        nvgLineTo(avg,xRight,lowerRight);
+        nvgLineTo(avg,xLeft,lowerLeft);
+        nvgClosePath(avg);
+        const NVGpaint band=nvgLinearGradient(avg,xLeft,0,xRight,0,
+                alphaColor(base,alphaLeft),alphaColor(base,alphaRight));
+        nvgFillPaint(avg,band);
+        nvgFill(avg);
+        }
+
+    // A soft continuous trajectory supports shape perception; the crisp
+    // dashed core makes future values unmistakable beside solid CGM history.
+    for(size_t index=1;index<points.size();++index) {
+        const auto &left=points[index-1],&right=points[index];
+        const NVGcolor base=stateColor(
+                (left.medianMgDl+right.medianMgDl)*.5f);
+        nvgBeginPath(avg);
+        nvgMoveTo(avg,transx(left.time),yFor(left.medianMgDl));
+        nvgLineTo(avg,transx(right.time),yFor(right.medianMgDl));
+        nvgStrokeWidth(avg,pollCurveStrokeWidth+density*2.6f);
+        nvgStrokeColor(avg,alphaColor(base,.08f+.10f*confidence));
+        nvgStroke(avg);
+        }
+
+    const float dashLength=std::max(density*5.0f,3.0f);
+    const float gapLength=std::max(density*3.5f,2.0f);
+    const float pattern=dashLength+gapLength;
+    float travelled=0.0f;
+    nvgStrokeWidth(avg,std::max(density*1.65f,1.35f));
+    for(size_t index=1;index<points.size();++index) {
+        const auto &left=points[index-1],&right=points[index];
+        const float x1=transx(left.time),y1=yFor(left.medianMgDl);
+        const float x2=transx(right.time),y2=yFor(right.medianMgDl);
+        const float dx=x2-x1,dy=y2-y1;
+        const float length=std::hypot(dx,dy);
+        if(length<=0.01f)
+            continue;
+        const NVGcolor base=stateColor(
+                (left.medianMgDl+right.medianMgDl)*.5f);
+        nvgStrokeColor(avg,alphaColor(base,.58f+.34f*confidence));
+        float position=0.0f;
+        while(position<length) {
+            const float inPattern=std::fmod(travelled+position,pattern);
+            const bool dash=inPattern<dashLength;
+            const float remaining=dash?(dashLength-inPattern):
+                                           (pattern-inPattern);
+            const float next=std::min(length,position+remaining);
+            if(dash&&next>position) {
+                nvgBeginPath(avg);
+                nvgMoveTo(avg,x1+dx*(position/length),
+                              y1+dy*(position/length));
+                nvgLineTo(avg,x1+dx*(next/length),y1+dy*(next/length));
+                nvgStroke(avg);
+                }
+            position=next;
+            }
+        travelled+=length;
+        }
+
+    const auto &last=points.back();
+    const NVGcolor endpoint=stateColor(last.medianMgDl);
+    nvgBeginPath(avg);
+    nvgCircle(avg,transx(last.time),yFor(last.medianMgDl),
+              std::max(density*2.2f,1.8f));
+    nvgFillColor(avg,alphaColor(endpoint,.72f+.24f*confidence));
+    nvgFill(avg);
+    nvgRestore(avg);
+}
+
+
+void JCurve::drawintakeevents(NVGcontext* avg,uint32_t visibleStart,
+                              uint32_t visibleEnd,
+                              const std::vector<intakemarkers::GlucosePoint>
+                                      &glucosePoints) {
+    std::vector<IntakeTimelineEvent> events;
+    std::uint64_t renderRevision=0U;
+    {
+        std::lock_guard<std::mutex> guard(intakeTimelineMutex);
+        events=intakeTimelineEvents;
+        renderRevision=intakeTimelineRevision;
+    }
+    std::vector<IntakeTimelineHit> hits;
+    std::vector<IntakeTimelineHit> broadHits;
+    if(!modernnormal||events.empty()||visibleEnd<=visibleStart) {
+        std::lock_guard<std::mutex> guard(intakeTimelineMutex);
+        if(renderRevision==intakeTimelineRevision)
+            intakeTimelineHits.clear();
+        return;
+    }
+
+    const NVGcolor mealFill=hexcolor(0x2A2114);
+    const NVGcolor mealBorder=hexcolor(0xF2A93B);
+    const NVGcolor mealText=hexcolor(0xFFD28C);
+    const NVGcolor rapidFill=hexcolor(0x122A34);
+    const NVGcolor rapidBorder=hexcolor(0x55C8F2);
+    const NVGcolor rapidText=hexcolor(0xC9F1FF);
+    const NVGcolor longFill=hexcolor(0x251D35);
+    const NVGcolor longBorder=hexcolor(0xB69AF5);
+    const NVGcolor longText=hexcolor(0xE8DCFF);
+    const NVGcolor otherInsulinFill=hexcolor(0x1A222A);
+    const NVGcolor otherInsulinBorder=hexcolor(0x91A5B8);
+    const NVGcolor otherInsulinText=hexcolor(0xD8E2EB);
+    const float chipHeight=std::max(density*21.0f,smallfontlineheight*.80f);
+    const float chipGap=density*3.0f;
+    const float horizontalPadding=density*7.0f;
+    const float chipTapPadding=density*5.0f;
+    const float markerTapRadius=density*21.0f;
+    const float textSize=std::max(density*9.2f,smallsize*.58f);
+    const float plotTop=dtop+density*5.0f;
+    const float plotBottom=dtop+dheight-smallfontlineheight*1.62f;
+
+    nvgSave(avg);
+    nvgScissor(avg,dleft,dtop,dwidth,dheight);
+    nvgFontFaceId(avg,font);
+    nvgFontSize(avg,textSize);
+    nvgTextAlign(avg,NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
+
+    const auto amountText=[](char *buffer,size_t size,float value,
+                             const char *suffix) {
+        const float rounded=roundf(value);
+        if(fabsf(value-rounded)<.05f) {
+            return snprintf(buffer,size,"%.0f%s",rounded,suffix);
+        }
+        return snprintf(buffer,size,"%.1f%s",value,suffix);
+    };
+
+    struct Marker {
+        IntakeTimelineEvent event;
+        bool hasMeal;
+        bool hasInsulin;
+        IntakeInsulinKind insulinKind;
+        bool glucoseAnchored;
+        float anchorX;
+        float anchorY;
+        float visualWidth;
+        std::string mealText;
+        std::string insulinText;
+    };
+    std::vector<Marker> markers;
+    markers.reserve(events.size());
+
+    for(const auto &event:events) {
+        if(event.time<visibleStart||event.time>visibleEnd)
+            continue;
+        const bool hasMeal=(event.flags&IntakeTimelineMeal)!=0U;
+        const bool hasCarbs=hasMeal
+                &&(event.flags&IntakeTimelineCarbsPresent)!=0U
+                &&std::isfinite(event.carbs);
+        const bool hasInsulin=std::isfinite(event.insulin)&&event.insulin>0.0f;
+        const IntakeInsulinKind insulinKind=intakeInsulinKind(
+                event.flags,event.insulin);
+        if(!hasMeal&&!hasInsulin)
+            continue;
+
+        const float timeRatio=static_cast<float>(event.time-visibleStart)/
+                static_cast<float>(visibleEnd-visibleStart);
+        const float anchorX=dleft+dwidth*timeRatio;
+        char mealBuffer[24],insulinBuffer[24];
+        int mealLength=0,insulinLength=0;
+        float visualWidth=0.0f;
+        float bounds[4];
+        if(hasMeal) {
+            if(hasCarbs) {
+                mealLength=amountText(mealBuffer,sizeof(mealBuffer),event.carbs,"g");
+            }
+            else {
+#ifdef WEAROS
+                constexpr std::string_view mealLabel="Meal";
+#else
+                const std::string_view mealLabel=usedtext->menustr2[5];
+#endif
+                mealLength=snprintf(mealBuffer,sizeof(mealBuffer),"%.*s",
+                        static_cast<int>(mealLabel.size()),mealLabel.data());
+            }
+            nvgTextBounds(avg,0,0,mealBuffer,mealBuffer+mealLength,bounds);
+            visualWidth=std::max(density*40.0f,
+                    bounds[2]-bounds[0]+horizontalPadding*2.0f+
+                            density*5.0f);
+        }
+        if(hasInsulin) {
+            char amountBuffer[24];
+            const int amountLength=amountText(amountBuffer,
+                    sizeof(amountBuffer),event.insulin,"U");
+            const char *prefix=insulinKind==IntakeInsulinKind::Rapid?"N":
+                               insulinKind==IntakeInsulinKind::Long?"T":"I";
+            insulinLength=snprintf(insulinBuffer,sizeof(insulinBuffer),
+                    "%s  %.*s",prefix,amountLength,amountBuffer);
+            nvgTextBounds(avg,0,0,insulinBuffer,
+                          insulinBuffer+insulinLength,bounds);
+            visualWidth=std::max(visualWidth,std::max(density*40.0f,
+                    bounds[2]-bounds[0]+horizontalPadding*2.0f+
+                            density*5.0f));
+        }
+        float anchorY=(plotTop+plotBottom)*.5f;
+        const bool glucoseAnchored=intakemarkers::anchor_y(
+                glucosePoints,event.time,anchorY);
+        anchorY=std::clamp(anchorY,plotTop,plotBottom);
+        markers.push_back({event,hasMeal,hasInsulin,insulinKind,
+                           glucoseAnchored,anchorX,anchorY,visualWidth,
+                           std::string(mealBuffer,mealLength),
+                           std::string(insulinBuffer,insulinLength)});
+    }
+
+    struct MarkerCluster {
+        std::vector<std::size_t> indices;
+    };
+    std::vector<MarkerCluster> clusters;
+    // 42dp matches the combined forgiving touch radii of two source markers;
+    // keeping them separate below that distance would create ambiguous taps.
+    // The independent 68dp span limit keeps a dense chain from swallowing a
+    // visually separate marker at its far edge.
+    const float minimumClusterDistance=std::max(42.0f,density*42.0f);
+    const float clusterMaximumSpan=std::max(68.0f,density*68.0f);
+    for(std::size_t index=0;index<markers.size();++index) {
+        if(clusters.empty()) {
+            clusters.push_back({{index}});
+            continue;
+        }
+        const Marker &first=markers[clusters.back().indices.front()];
+        const Marker &previous=markers[clusters.back().indices.back()];
+        const Marker &current=markers[index];
+        const float visualCollisionDistance=(previous.visualWidth+
+                current.visualWidth)*.5f+density*4.0f;
+        const float adjacentDistance=std::min(clusterMaximumSpan,
+                std::max(minimumClusterDistance,visualCollisionDistance));
+        if(intakemarkers::joins_cluster(first.anchorX,previous.anchorX,
+                current.anchorX,adjacentDistance,
+                clusterMaximumSpan)) {
+            clusters.back().indices.push_back(index);
+        }
+        else {
+            clusters.push_back({{index}});
+        }
+    }
+
+    enum class ClusterRowKind : std::uint8_t {
+        Meal,
+        Rapid,
+        Long,
+        OtherInsulin
+    };
+    struct ClusterRow {
+        ClusterRowKind kind;
+        std::string text;
+        float width;
+        float top;
+    };
+    for(const MarkerCluster &cluster:clusters) {
+        if(cluster.indices.size()>1U) {
+            std::vector<std::int32_t> keys;
+            keys.reserve(cluster.indices.size());
+            float centerX=0.0f,centerY=0.0f;
+            bool hasClusterMeal=false,hasClusterRapid=false;
+            bool hasClusterLong=false,hasClusterOther=false;
+            for(const std::size_t index:cluster.indices) {
+                const Marker &marker=markers[index];
+                keys.push_back(marker.event.key);
+                centerX+=marker.anchorX;
+                centerY+=marker.anchorY;
+                hasClusterMeal=hasClusterMeal||marker.hasMeal;
+                hasClusterRapid=hasClusterRapid||
+                        marker.insulinKind==IntakeInsulinKind::Rapid;
+                hasClusterLong=hasClusterLong||
+                        marker.insulinKind==IntakeInsulinKind::Long;
+                hasClusterOther=hasClusterOther||
+                        marker.insulinKind==IntakeInsulinKind::Other;
+            }
+            centerX/=static_cast<float>(cluster.indices.size());
+            centerY/=static_cast<float>(cluster.indices.size());
+
+            char countBuffer[32];
+            const int countLength=snprintf(countBuffer,sizeof(countBuffer),
+                    "%zu\xC3\x97",cluster.indices.size());
+            float countBounds[4];
+            nvgTextBounds(avg,0,0,countBuffer,countBuffer+countLength,
+                          countBounds);
+            int kindCount=static_cast<int>(hasClusterMeal)+
+                          static_cast<int>(hasClusterRapid)+
+                          static_cast<int>(hasClusterLong)+
+                          static_cast<int>(hasClusterOther);
+            const float dotDiameter=density*3.8f;
+            const float dotsWidth=kindCount>0
+                    ?kindCount*dotDiameter+(kindCount-1)*density*2.0f:0.0f;
+            const float badgeWidth=std::max(density*48.0f,
+                    countBounds[2]-countBounds[0]+dotsWidth+
+                    horizontalPadding*2.0f+density*5.0f);
+            const float badgeLeft=std::clamp(centerX-badgeWidth*.5f,
+                    dleft+density*2.0f,
+                    dleft+dwidth-badgeWidth-density*2.0f);
+            const float connectorGap=density*8.0f;
+            const bool above=centerY-plotTop>=chipHeight+connectorGap||
+                    centerY-plotTop>=plotBottom-centerY;
+            float badgeTop=above?centerY-chipHeight-connectorGap:
+                                 centerY+connectorGap;
+            badgeTop=std::clamp(badgeTop,plotTop,
+                                std::max(plotTop,plotBottom-chipHeight));
+            const float badgeCenterX=badgeLeft+badgeWidth*.5f;
+            const float connectorY=badgeTop>centerY?badgeTop:
+                                   badgeTop+chipHeight;
+
+            nvgBeginPath(avg);
+            nvgMoveTo(avg,centerX,centerY);
+            nvgLineTo(avg,badgeCenterX,connectorY);
+            nvgStrokeWidth(avg,std::max(1.0f,density*.72f));
+            nvgStrokeColor(avg,modernGraphGridStrong);
+            nvgStroke(avg);
+
+            // One stacked anchor signals that the badge opens a list. Source
+            // event keys remain attached to the hit target, not to tiny and
+            // ambiguous sub-regions of the badge.
+            const float anchorRadius=density*3.0f;
+            nvgBeginPath(avg);
+            nvgCircle(avg,centerX-density*1.5f,centerY-density*1.0f,
+                      anchorRadius);
+            nvgFillColor(avg,modernGraphSurface);
+            nvgFill(avg);
+            nvgStrokeColor(avg,modernGraphGridStrong);
+            nvgStroke(avg);
+            nvgBeginPath(avg);
+            nvgCircle(avg,centerX+density*1.5f,centerY+density*1.0f,
+                      anchorRadius);
+            nvgFillColor(avg,modernGraphSurface);
+            nvgFill(avg);
+            nvgStrokeColor(avg,hasClusterMeal?mealBorder:
+                    hasClusterRapid?rapidBorder:
+                    hasClusterLong?longBorder:otherInsulinBorder);
+            nvgStroke(avg);
+
+            nvgBeginPath(avg);
+            nvgRoundedRect(avg,badgeLeft,badgeTop,badgeWidth,chipHeight,
+                           chipHeight*.48f);
+            nvgFillColor(avg,hexcolor(0x172028));
+            nvgFill(avg);
+            nvgStrokeWidth(avg,std::max(1.0f,density*.78f));
+            nvgStrokeColor(avg,modernGraphGridStrong);
+            nvgStroke(avg);
+
+            float dotX=badgeLeft+horizontalPadding+dotDiameter*.5f;
+            const float dotY=badgeTop+chipHeight*.5f;
+            const auto drawKindDot=[&](const bool shown,
+                                       const NVGcolor color) {
+                if(!shown)
+                    return;
+                nvgBeginPath(avg);
+                nvgCircle(avg,dotX,dotY,dotDiameter*.5f);
+                nvgFillColor(avg,color);
+                nvgFill(avg);
+                dotX+=dotDiameter+density*2.0f;
+            };
+            drawKindDot(hasClusterMeal,mealBorder);
+            drawKindDot(hasClusterRapid,rapidBorder);
+            drawKindDot(hasClusterLong,longBorder);
+            drawKindDot(hasClusterOther,otherInsulinBorder);
+            const float textLeft=badgeLeft+horizontalPadding+dotsWidth+
+                    (dotsWidth>0.0f?density*5.0f:0.0f);
+            nvgTextAlign(avg,NVG_ALIGN_LEFT|NVG_ALIGN_MIDDLE);
+            nvgFillColor(avg,modernGraphText);
+            nvgText(avg,textLeft,badgeTop+chipHeight*.52f,
+                    countBuffer,countBuffer+countLength);
+            nvgTextAlign(avg,NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
+
+            const float markerRadius=markerTapRadius+density*3.0f;
+            broadHits.push_back({keys,
+                    std::max(dleft,centerX-markerRadius),
+                    std::max(plotTop,centerY-markerRadius),
+                    std::min(dleft+dwidth,centerX+markerRadius),
+                    std::min(plotBottom,centerY+markerRadius)});
+            hits.push_back({keys,
+                    std::max(dleft,badgeLeft-chipTapPadding),
+                    std::max(plotTop,badgeTop-chipTapPadding),
+                    std::min(dleft+dwidth,
+                             badgeLeft+badgeWidth+chipTapPadding),
+                    std::min(plotBottom,
+                             badgeTop+chipHeight+chipTapPadding)});
+            continue;
+        }
+
+        // Multi-event clusters returned above, so the established one-record
+        // marker rendering below stays visually and behaviorally unchanged.
+        const Marker &single=markers[cluster.indices.front()];
+        std::vector<ClusterRow> rows;
+        const float centerX=single.anchorX;
+        const float minAnchorY=single.anchorY;
+        const float maxAnchorY=single.anchorY;
+
+        const auto addRow=[&](const ClusterRowKind kind,
+                              const std::string &text) {
+            float bounds[4];
+            nvgTextBounds(avg,0,0,text.data(),text.data()+text.size(),bounds);
+            ClusterRow row{kind,text,
+                    std::max(density*40.0f,
+                             bounds[2]-bounds[0]+horizontalPadding*2.0f+
+                                     density*5.0f),
+                    0.0f};
+            rows.push_back(std::move(row));
+        };
+        if(single.hasMeal)
+            addRow(ClusterRowKind::Meal,single.mealText);
+        if(single.hasInsulin) {
+            const ClusterRowKind kind=single.insulinKind==
+                    IntakeInsulinKind::Rapid?ClusterRowKind::Rapid:
+                    single.insulinKind==IntakeInsulinKind::Long?
+                            ClusterRowKind::Long:
+                            ClusterRowKind::OtherInsulin;
+            addRow(kind,single.insulinText);
+        }
+        if(rows.empty())
+            continue;
+
+        float groupWidth=0.0f;
+        for(const ClusterRow &row:rows)
+            groupWidth=std::max(groupWidth,row.width);
+        const float groupHeight=rows.size()*chipHeight+
+                (rows.size()-1)*chipGap;
+        float groupLeft=std::clamp(centerX-groupWidth*.5f,
+                dleft+density*2.0f,
+                dleft+dwidth-groupWidth-density*2.0f);
+        const float connectorGap=density*8.0f;
+        const float spaceAbove=minAnchorY-plotTop;
+        const float spaceBelow=plotBottom-maxAnchorY;
+        const bool above=spaceAbove>=groupHeight+connectorGap||
+                spaceAbove>=spaceBelow;
+        float groupTop=above?minAnchorY-groupHeight-connectorGap:
+                             maxAnchorY+connectorGap;
+        groupTop=std::clamp(groupTop,plotTop,
+                            std::max(plotTop,plotBottom-groupHeight));
+
+        // Every source event keeps its own CGM anchor. Dense events converge
+        // into one compact summary without moving their measured time/value.
+        nvgStrokeWidth(avg,std::max(1.0f,density*.72f));
+        nvgStrokeColor(avg,modernGraphGridStrong);
+        const auto drawCircleSymbol=[&](const float x,const float y,
+                                        const NVGcolor color,
+                                        const bool anchored) {
+            nvgBeginPath(avg);
+            nvgCircle(avg,x,y,density*2.55f);
+            if(anchored) {
+                nvgFillColor(avg,modernGraphSurface);
+                nvgFill(avg);
+            }
+            nvgStrokeWidth(avg,std::max(1.0f,density*.9f));
+            nvgStrokeColor(avg,color);
+            nvgStroke(avg);
+            if(anchored) {
+                nvgBeginPath(avg);
+                nvgCircle(avg,x,y,density*.92f);
+                nvgFillColor(avg,color);
+                nvgFill(avg);
+            }
+        };
+        const auto drawDiamondSymbol=[&](const float x,const float y,
+                                         const NVGcolor color,
+                                         const bool anchored) {
+            const float radius=density*3.05f;
+            nvgBeginPath(avg);
+            nvgMoveTo(avg,x,y-radius);
+            nvgLineTo(avg,x+radius,y);
+            nvgLineTo(avg,x,y+radius);
+            nvgLineTo(avg,x-radius,y);
+            nvgClosePath(avg);
+            if(anchored) {
+                nvgFillColor(avg,modernGraphSurface);
+                nvgFill(avg);
+            }
+            nvgStrokeWidth(avg,std::max(1.0f,density*.9f));
+            nvgStrokeColor(avg,color);
+            nvgStroke(avg);
+            if(anchored) {
+                nvgBeginPath(avg);
+                nvgCircle(avg,x,y,density*.82f);
+                nvgFillColor(avg,color);
+                nvgFill(avg);
+            }
+        };
+        for(const std::size_t index:cluster.indices) {
+            const Marker &marker=markers[index];
+            const float attachX=std::clamp(marker.anchorX,
+                    groupLeft+chipHeight*.35f,
+                    groupLeft+groupWidth-chipHeight*.35f);
+            const float attachY=groupTop>marker.anchorY?groupTop:
+                                groupTop+groupHeight;
+            nvgBeginPath(avg);
+            nvgMoveTo(avg,marker.anchorX,marker.anchorY);
+            nvgLineTo(avg,attachX,attachY);
+            nvgStroke(avg);
+
+            const float symbolOffset=marker.hasMeal&&marker.hasInsulin
+                    ?density*2.9f:0.0f;
+            if(marker.hasMeal) {
+                drawCircleSymbol(marker.anchorX-symbolOffset,marker.anchorY,
+                                 mealBorder,marker.glucoseAnchored);
+            }
+            if(marker.hasInsulin) {
+                const float insulinX=marker.anchorX+symbolOffset;
+                if(marker.insulinKind==IntakeInsulinKind::Long) {
+                    // Tresiba uses a diamond at the measured glucose point.
+                    drawDiamondSymbol(insulinX,marker.anchorY,longBorder,
+                                      marker.glucoseAnchored);
+                }
+                else {
+                    // NovoRapid stays circular; colour and shape therefore
+                    // distinguish both insulin kinds even in dense clusters.
+                    const NVGcolor color=marker.insulinKind==
+                            IntakeInsulinKind::Rapid?rapidBorder:
+                            otherInsulinBorder;
+                    drawCircleSymbol(insulinX,marker.anchorY,color,
+                                      marker.glucoseAnchored);
+                }
+            }
+            // The visible anchor is deliberately compact, but its touch area
+            // is forgiving. This affects single taps only; drag/pinch gesture
+            // handling remains owned by the Java graph surface.
+            broadHits.push_back({{marker.event.key},
+                    std::max(dleft,marker.anchorX-markerTapRadius-symbolOffset),
+                    std::max(plotTop,marker.anchorY-markerTapRadius),
+                    std::min(dleft+dwidth,
+                             marker.anchorX+markerTapRadius+symbolOffset),
+                    std::min(plotBottom,marker.anchorY+markerTapRadius)});
+        }
+
+        float rowTop=groupTop;
+        for(ClusterRow &row:rows) {
+            row.top=rowTop;
+            const float rowLeft=std::clamp(centerX-row.width*.5f,
+                    dleft+density*2.0f,
+                    dleft+dwidth-row.width-density*2.0f);
+            NVGcolor fill=otherInsulinFill;
+            NVGcolor border=otherInsulinBorder;
+            NVGcolor textColor=otherInsulinText;
+            float cornerRadius=chipHeight*.32f;
+            switch(row.kind) {
+                case ClusterRowKind::Meal:
+                    fill=mealFill;
+                    border=mealBorder;
+                    textColor=mealText;
+                    cornerRadius=chipHeight*.48f;
+                    break;
+                case ClusterRowKind::Rapid:
+                    fill=rapidFill;
+                    border=rapidBorder;
+                    textColor=rapidText;
+                    cornerRadius=chipHeight*.48f;
+                    break;
+                case ClusterRowKind::Long:
+                    fill=longFill;
+                    border=longBorder;
+                    textColor=longText;
+                    cornerRadius=chipHeight*.18f;
+                    break;
+                case ClusterRowKind::OtherInsulin:
+                    break;
+            }
+            nvgBeginPath(avg);
+            nvgRoundedRect(avg,rowLeft,rowTop,row.width,chipHeight,
+                           cornerRadius);
+            nvgFillColor(avg,fill);
+            nvgFill(avg);
+            nvgStrokeWidth(avg,std::max(1.0f,density*.70f));
+            nvgStrokeColor(avg,border);
+            nvgStroke(avg);
+            if(row.kind==ClusterRowKind::Rapid) {
+                nvgBeginPath(avg);
+                nvgCircle(avg,rowLeft+density*7.0f,
+                          rowTop+chipHeight*.5f,density*1.7f);
+                nvgFillColor(avg,rapidBorder);
+                nvgFill(avg);
+            }
+            else if(row.kind==ClusterRowKind::Long) {
+                const float iconX=rowLeft+density*7.0f;
+                const float iconY=rowTop+chipHeight*.5f;
+                const float iconRadius=density*2.2f;
+                nvgBeginPath(avg);
+                nvgMoveTo(avg,iconX,iconY-iconRadius);
+                nvgLineTo(avg,iconX+iconRadius,iconY);
+                nvgLineTo(avg,iconX,iconY+iconRadius);
+                nvgLineTo(avg,iconX-iconRadius,iconY);
+                nvgClosePath(avg);
+                nvgFillColor(avg,longBorder);
+                nvgFill(avg);
+            }
+            nvgFillColor(avg,textColor);
+            nvgText(avg,rowLeft+row.width*.5f+density*1.5f,
+                    rowTop+chipHeight*.52f,
+                    row.text.data(),row.text.data()+row.text.size());
+
+            rowTop+=chipHeight+chipGap;
+        }
+
+        const auto &event=single.event;
+        // A single marker owns only its compact chip group; its connector
+        // never steals taps from a nearby meal or insulin value.
+        hits.push_back({{event.key},groupLeft,groupTop,
+                        groupLeft+groupWidth,groupTop+groupHeight});
+        broadHits.push_back({{event.key},
+                std::max(dleft,groupLeft-chipTapPadding),
+                std::max(plotTop,groupTop-chipTapPadding),
+                std::min(dleft+dwidth,
+                         groupLeft+groupWidth+chipTapPadding),
+                std::min(plotBottom,
+                         groupTop+groupHeight+chipTapPadding)});
+    }
+    nvgRestore(avg);
+    {
+        std::lock_guard<std::mutex> guard(intakeTimelineMutex);
+        // Broad accessibility targets come first; reverse hit-testing then
+        // gives exact chip cells deterministic priority when targets overlap.
+        broadHits.insert(broadHits.end(),hits.begin(),hits.end());
+        if(renderRevision==intakeTimelineRevision)
+            intakeTimelineHits=std::move(broadHits);
+    }
+}
 
 int shownlabels;
 
@@ -799,14 +1989,22 @@ extern vector<NumDisplay*> numdatas;
 
 //        int len=snprintf(buf,maxbuf,"%02d:%02d", tms->tm_hour,mktmmin(tms));
       int len=mktime(tms->tm_hour,mktmmin(tms),buf);
-        nvgFontSize(avg, smallsize);
-        nvgTextAlign(avg,NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
-        float cor=((posy-dtop)<(dheight/2))?smallsize:-smallsize;
-        nvgText(avg, posx,posy+cor*.92, buf, buf+len);
         char *buf2=buf+len;
         *buf2++='\n';
-         len=snprintf(buf2,maxbuf-len-1,gformat, ::gconvert(value,glunit));
-        sidenum(avg,posx,posy,buf2,len,false);
+        const int valuelen=snprintf(buf2,maxbuf-len-1,gformat, ::gconvert(value,glunit));
+
+        if(modernnormal) {
+            graphselectionactive=true;
+            graphselectiontime=static_cast<uint32_t>(tim);
+            graphselectionvalue=value;
+            }
+        else {
+            nvgFontSize(avg, smallsize);
+            nvgTextAlign(avg,NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
+            const float cor=((posy-dtop)<(dheight/2))?smallsize:-smallsize;
+            nvgText(avg, posx,posy+cor*.92, buf, buf+len);
+            sidenum(avg,posx,posy,buf2,valuelen,false);
+            }
         
     //    nvgText(avg, posx,posy+cor*.92*2, buf, buf+len);
 #ifndef DONTTALK
@@ -821,6 +2019,124 @@ extern vector<NumDisplay*> numdatas;
         }
     return false;
     }
+
+void JCurve::drawgraphselection(NVGcontext* avg,float posx,float posy) {
+    if(!modernnormal||!graphselectionactive)
+        return;
+
+    const float right=dleft+dwidth;
+    const float bottom=dtop+dheight-smallfontlineheight*1.45f;
+    if(posx<dleft||posx>right||posy<dtop||posy>bottom)
+        return;
+
+    const float selectedvalue=static_cast<float>(graphselectionvalue);
+    const float targetlow=settings->targetlow();
+    const float targethigh=settings->targethigh();
+    const NVGcolor &selectioncolor=selectedvalue<targetlow?modernGraphLow:
+                                   (selectedvalue>targethigh?modernGraphHigh:
+                                                                    modernGraphGlucose);
+    const NVGcolor &selectionglow=selectedvalue<targetlow?modernGraphLowGlow:
+                                  (selectedvalue>targethigh?modernGraphHighGlow:
+                                                                   modernGraphGlucoseGlow);
+
+    nvgSave(avg);
+    nvgScissor(avg,dleft,dtop,dwidth,dheight);
+    nvgLineCap(avg,NVG_ROUND);
+
+    nvgStrokeWidth(avg,std::max(density*.65f,.75f));
+    nvgStrokeColor(avg,modernGraphCrosshair);
+    nvgBeginPath(avg);
+    nvgMoveTo(avg,posx,dtop);
+    nvgLineTo(avg,posx,bottom);
+    nvgMoveTo(avg,dleft,posy);
+    nvgLineTo(avg,right,posy);
+    nvgStroke(avg);
+
+    nvgBeginPath(avg);
+    nvgCircle(avg,posx,posy,pointRadius*2.35f);
+    nvgFillColor(avg,selectionglow);
+    nvgFill(avg);
+    nvgBeginPath(avg);
+    nvgCircle(avg,posx,posy,pointRadius*1.25f);
+    nvgFillColor(avg,modernGraphSurface);
+    nvgFill(avg);
+    nvgStrokeWidth(avg,std::max(density*1.35f,1.0f));
+    nvgStrokeColor(avg,selectioncolor);
+    nvgStroke(avg);
+    nvgBeginPath(avg);
+    nvgCircle(avg,posx,posy,pointRadius*.56f);
+    nvgFillColor(avg,selectioncolor);
+    nvgFill(avg);
+    nvgRestore(avg);
+
+    constexpr int textcapacity=48;
+    char valuestr[textcapacity];
+    char numberstr[24];
+    const int numberlen=snprintf(numberstr,sizeof(numberstr),gformat,
+                                 ::gconvert(graphselectionvalue,glunit));
+    const char *unit=glunit==1?"mmol/L":"mg/dL";
+    const int valuelen=snprintf(valuestr,sizeof(valuestr),"%.*s  %s",
+                                numberlen,numberstr,unit);
+
+    char timestr[24];
+    time_t selectedtime=graphselectiontime;
+    struct tm tmbuf;
+    struct tm *tms=localtime_r(&selectedtime,&tmbuf);
+    const int timelen=tms?mktime(tms->tm_hour,mktmmin(tms),timestr):0;
+
+    nvgSave(avg);
+    nvgFontFaceId(avg,font);
+    nvgTextAlign(avg,NVG_ALIGN_LEFT|NVG_ALIGN_MIDDLE);
+    nvgFontSize(avg,smallsize*1.05f);
+    float valuebounds[4];
+    nvgTextBounds(avg,0,0,valuestr,valuestr+valuelen,valuebounds);
+    nvgFontSize(avg,smallsize*.88f);
+    float timebounds[4];
+    nvgTextBounds(avg,0,0,timestr,timestr+timelen,timebounds);
+
+    const float padding=density*11.0f;
+    const float contentwidth=std::max(valuebounds[2]-valuebounds[0],
+                                      timebounds[2]-timebounds[0]);
+    const float cardwidth=std::max(density*108.0f,contentwidth+padding*2.0f);
+    const float cardheight=std::max(density*58.0f,smallsize*2.65f);
+    const float margin=density*6.0f;
+    const float markerGap=pointRadius*2.8f;
+    float cardx=posx-cardwidth*.5f;
+    cardx=std::max(dleft+margin,std::min(cardx,right-cardwidth-margin));
+    float cardy=posy-cardheight-markerGap;
+    if(cardy<dtop+margin)
+        cardy=posy+markerGap;
+    cardy=std::max(dtop+margin,std::min(cardy,bottom-cardheight-margin));
+
+    const float corner=density*12.0f;
+    NVGpaint shadow=nvgBoxGradient(avg,cardx,cardy+density*3.0f,cardwidth,
+                                   cardheight,corner,density*12.0f,
+                                   nvgRGBA(0,0,0,105),nvgRGBA(0,0,0,0));
+    nvgBeginPath(avg);
+    nvgRoundedRect(avg,cardx-density*7.0f,cardy-density*7.0f,
+                   cardwidth+density*14.0f,cardheight+density*17.0f,
+                   corner+density*7.0f);
+    nvgFillPaint(avg,shadow);
+    nvgFill(avg);
+
+    nvgBeginPath(avg);
+    nvgRoundedRect(avg,cardx,cardy,cardwidth,cardheight,corner);
+    nvgFillColor(avg,modernGraphTooltip);
+    nvgFill(avg);
+    nvgStrokeWidth(avg,std::max(density*.8f,.75f));
+    nvgStrokeColor(avg,selectioncolor);
+    nvgStroke(avg);
+
+    const float textx=cardx+padding;
+    nvgTextAlign(avg,NVG_ALIGN_LEFT|NVG_ALIGN_MIDDLE);
+    nvgFontSize(avg,smallsize*1.05f);
+    nvgFillColor(avg,nvgRGBA(241,245,249,255));
+    nvgText(avg,textx,cardy+cardheight*.37f,valuestr,valuestr+valuelen);
+    nvgFontSize(avg,smallsize*.88f);
+    nvgFillColor(avg,modernGraphText);
+    nvgText(avg,textx,cardy+cardheight*.72f,timestr,timestr+timelen);
+    nvgRestore(avg);
+    }
  bool    JCurve::glucosepoint(NVGcontext* avg,time_t tim,uint32_t value,   float posx, float posy) {
     nvgCircle(avg, posx,posy,pointRadius);
     return glucosepointinfo(avg,tim,value,posx,posy);
@@ -829,7 +2145,96 @@ extern vector<NumDisplay*> numdatas;
 
 
 void endstep(NVGcontext* avg) ;
+
+static const NVGcolor &modernGraphStateColor(const graphpoints::RangeState state,
+                                             const bool glow=false) {
+    switch(state) {
+        case graphpoints::RangeState::low:
+            return glow?modernGraphLowGlow:modernGraphLow;
+        case graphpoints::RangeState::high:
+            return glow?modernGraphHighGlow:modernGraphHigh;
+        case graphpoints::RangeState::in_range:
+        default:
+            return glow?modernGraphGlucoseGlow:modernGraphGlucose;
+        }
+}
+
+static void drawModernGraphSample(NVGcontext* avg,const float x,const float y,
+                                  const float radius,
+                                  const graphpoints::RangeState state) {
+    // A slim surface ring separates a sample from the line while the larger
+    // inner core keeps its range state readable without adding another glow.
+    nvgBeginPath(avg);
+    nvgCircle(avg,x,y,radius);
+    nvgFillColor(avg,modernGraphSurface);
+    nvgFill(avg);
+    nvgBeginPath(avg);
+    nvgCircle(avg,x,y,radius*.68f);
+    nvgFillColor(avg,modernGraphStateColor(state));
+    nvgFill(avg);
+}
+
 template <class TX,class TY>   void  JCurve::showScan(NVGcontext* avg,const ScanData *low,const ScanData *high,  const TX &transx,  const TY &transy,const int colorindex) {
+
+    if(modernnormal) {
+        const float targetlow=settings->targetlow();
+        const float targethigh=settings->targethigh();
+        const float radius=graphpoints::sample_radius(density,duration,true);
+        const float minspacing=graphpoints::minimum_spacing(density,duration);
+        const ScanData *lastvalid=nullptr;
+        for(const ScanData *it=high;it!=low;) {
+            --it;
+            if(it->valid()) {
+                lastvalid=it;
+                break;
+                }
+            }
+        nvgSave(avg);
+        nvgScissor(avg,dleft,dtop,dwidth,dheight);
+#ifdef DOESSEARCH
+        const bool search=scansearchtype==(scansearchtype&searchdata.type);
+#endif
+        bool first=true,hasdrawn=false,haspreviousstate=false;
+        float lastdrawx=0.0f;
+        graphpoints::RangeState previousstate=graphpoints::RangeState::in_range;
+        for(const ScanData *it=low;it!=high;it++) {
+            if(!it->valid())
+                continue;
+            const uint32_t tim=it->t;
+            const uint32_t glu=it->g*10;
+            const float posx=transx(tim),posy=transy(glu);
+            const graphpoints::RangeState state=
+                    graphpoints::range_state(glu,targetlow,targethigh);
+            const bool statechanged=haspreviousstate&&state!=previousstate;
+            bool found=false;
+#ifdef DOESSEARCH
+            found=search&&searchdata(it);
+            if(found) {
+                nvgBeginPath(avg);
+                nvgCircle(avg,posx,posy,foundPointRadius);
+                nvgFillColor(avg,modernGraphNow);
+                nvgFill(avg);
+                }
+#endif
+            if(!found) {
+                const bool draw=graphpoints::should_draw_sample(
+                        posx,lastdrawx,minspacing,hasdrawn,first,
+                        it==lastvalid,statechanged,false);
+                if(draw) {
+                    drawModernGraphSample(avg,posx,posy,radius,state);
+                    lastdrawx=posx;
+                    hasdrawn=true;
+                    }
+                if(glucosepointinfo(avg,tim,glu,posx,posy))
+                    lasttouchedcolor=colorindex;
+                }
+            previousstate=state;
+            haspreviousstate=true;
+            first=false;
+            }
+        nvgRestore(avg);
+        return;
+        }
 
     nvgFillColor(avg,*getcolor(colorindex));
     nvgBeginPath(avg);
@@ -931,9 +2336,182 @@ template <class TX,class TY> void JCurve::showlineScan(NVGcontext* avg,const Sca
             }
         }
 #endif
+    if(modernnormal) {
+        nvgSave(avg);
+        nvgScissor(avg,dleft,dtop,dwidth,dheight);
+        nvgLineCap(avg,NVG_ROUND);
+        nvgLineJoin(avg,NVG_ROUND);
+
+        // Give every uninterrupted stream segment a quiet depth cue without
+        // changing which samples are connected or how gaps are detected.
+        nvgBeginPath(avg);
+        bool areasegment=false;
+        bool hasarea=false;
+        uint32_t arealate=0;
+        float arealastx=0.0f;
+        const float baseline=dtop+dheight;
+        for(const ScanData *it=low;it!=high;it++) {
+            if(!it->valid())
+                continue;
+            const uint32_t tim=it->t;
+            const float posx=transx(tim);
+            const float posy=transy(it->g*10);
+            if(areasegment&&tim>arealate) {
+                nvgLineTo(avg,arealastx,baseline);
+                nvgClosePath(avg);
+                areasegment=false;
+                }
+            if(!areasegment) {
+                nvgMoveTo(avg,posx,baseline);
+                nvgLineTo(avg,posx,posy);
+                areasegment=true;
+                hasarea=true;
+                }
+            else
+                nvgLineTo(avg,posx,posy);
+            arealastx=posx;
+            arealate=tim+dif;
+            }
+        if(areasegment) {
+            nvgLineTo(avg,arealastx,baseline);
+            nvgClosePath(avg);
+            }
+        if(hasarea) {
+            NVGpaint area=nvgLinearGradient(avg,0,dtop,0,baseline,
+                                             modernGraphGlucoseAreaTop,
+                                             modernGraphGlucoseAreaBottom);
+            nvgFillPaint(avg,area);
+            nvgFill(avg);
+            }
+
+        const float targetlow=settings->targetlow();
+        const float targethigh=settings->targethigh();
+        const auto statecolor=[&](float glucose,bool glow)->const NVGcolor & {
+            return modernGraphStateColor(
+                    graphpoints::range_state(glucose,targetlow,targethigh),glow);
+            };
+
+        // Split a segment exactly where it crosses a configured target. This
+        // makes the clinical meaning of every colour unambiguous instead of
+        // colouring a whole interval by only its newest sample.
+        const auto drawstates=[&](bool glow) {
+            bool haveprevious=false;
+            uint32_t previouslate=0;
+            float previousx=0.0f,previousy=0.0f,previousvalue=0.0f;
+            nvgStrokeWidth(avg,glow?pollCurveStrokeWidth+density*3.2f:
+                                    pollCurveStrokeWidth+density*.35f);
+            for(const ScanData *it=low;it!=high;it++) {
+                if(!it->valid())
+                    continue;
+                const uint32_t tim=it->t;
+                const float value=it->g*10;
+                const float posx=transx(tim);
+                const float posy=transy(value);
+                if(haveprevious&&tim<=previouslate) {
+                    float stops[4]={0.0f,1.0f,0.0f,0.0f};
+                    int stopcount=2;
+                    const float delta=value-previousvalue;
+                    if(delta!=0.0f) {
+                        for(const float threshold:{targetlow,targethigh}) {
+                            const float crossing=(threshold-previousvalue)/delta;
+                            if(crossing>0.0f&&crossing<1.0f)
+                                stops[stopcount++]=crossing;
+                            }
+                        }
+                    std::sort(stops,stops+stopcount);
+                    for(int part=0;part<stopcount-1;part++) {
+                        const float from=stops[part],to=stops[part+1];
+                        const float mid=(from+to)*.5f;
+                        const float midvalue=previousvalue+delta*mid;
+                        nvgBeginPath(avg);
+                        nvgMoveTo(avg,previousx+(posx-previousx)*from,
+                                     previousy+(posy-previousy)*from);
+                        nvgLineTo(avg,previousx+(posx-previousx)*to,
+                                     previousy+(posy-previousy)*to);
+                        nvgStrokeColor(avg,statecolor(midvalue,glow));
+                        nvgStroke(avg);
+                        }
+                    }
+                haveprevious=true;
+                previouslate=tim+dif;
+                previousx=posx;
+                previousy=posy;
+                previousvalue=value;
+                }
+            };
+        drawstates(true);
+        drawstates(false);
+
+        float lastx=-1.0f,lasty=-1.0f;
+        uint32_t lastglu=0;
+        bool haslast=false;
+        const ScanData *lastvalid=nullptr;
+        for(const ScanData *it=low;it!=high;it++) {
+            if(!it->valid())
+                continue;
+            const uint32_t tim=it->t;
+            const uint32_t glu=it->g*10;
+            const float posx=transx(tim);
+            const float posy=transy(glu);
+            if(glucosepointinfo(avg,tim,glu,posx,posy))
+                lasttouchedcolor=colorindex;
+            lastx=posx;
+            lasty=posy;
+            lastglu=glu;
+            haslast=true;
+            lastvalid=it;
+            }
+
+        // Visual density is adaptive, but every reading above still runs
+        // through glucosepointinfo so scrubbing/hit-testing remains exact.
+        const float sampleradius=graphpoints::sample_radius(density,duration,false);
+        const float minspacing=graphpoints::minimum_spacing(density,duration);
+        bool firstsample=true,hasdrawn=false,haspreviousstate=false;
+        float lastdrawx=0.0f;
+        graphpoints::RangeState previousstate=graphpoints::RangeState::in_range;
+        for(const ScanData *it=low;it!=high;it++) {
+            if(!it->valid())
+                continue;
+            const uint32_t glu=it->g*10;
+            const float posx=transx(it->t);
+            const float posy=transy(glu);
+            const graphpoints::RangeState state=
+                    graphpoints::range_state(glu,targetlow,targethigh);
+            const bool statechanged=haspreviousstate&&state!=previousstate;
+            if(graphpoints::should_draw_sample(
+                    posx,lastdrawx,minspacing,hasdrawn,firstsample,
+                    it==lastvalid,statechanged,true)) {
+                drawModernGraphSample(avg,posx,posy,sampleradius,state);
+                lastdrawx=posx;
+                hasdrawn=true;
+                }
+            previousstate=state;
+            haspreviousstate=true;
+            firstsample=false;
+            }
+
+        if(haslast&&lastx>=dleft&&lastx<=dleft+dwidth&&
+           lasty>=dtop&&lasty<=dtop+dheight) {
+            nvgBeginPath(avg);
+            nvgCircle(avg,lastx,lasty,pointRadius*2.15f);
+            nvgFillColor(avg,statecolor(lastglu,true));
+            nvgFill(avg);
+            nvgBeginPath(avg);
+            nvgCircle(avg,lastx,lasty,pointRadius*1.02f);
+            nvgFillColor(avg,statecolor(lastglu,false));
+            nvgFill(avg);
+            nvgBeginPath(avg);
+            nvgCircle(avg,lastx,lasty,pointRadius*.38f);
+            nvgFillColor(avg,modernGraphSurface);
+            nvgFill(avg);
+            }
+        nvgRestore(avg);
+        return;
+        }
+
     bool restart=true;
     nvgBeginPath(avg);
-    const NVGcolor *col=getcolor(colorindex);
+    const NVGcolor *col=modernnormal?&modernGraphGlucose:getcolor(colorindex);
     nvgStrokeColor(avg, *col);
     nvgFillColor(avg,*col);
     nvgStrokeWidth(avg, pollCurveStrokeWidth);
@@ -1026,7 +2604,7 @@ template <class TX,class TY> void    JCurve::calihistcurve(NVGcontext* avg,const
     if(hist->isDexcom()&&!settings->data()->dexcomPredict)
         return;
 
-    const NVGcolor *col=getcolor(colorindex);
+    const NVGcolor *col=modernnormal?&modernGraphHistory:getcolor(colorindex);
     nvgStrokeColor(avg, *col);
     nvgFillColor(avg,*col);
      bool restart=true;
@@ -1094,6 +2672,67 @@ template <class TX,class TY> void    JCurve::calihistcurve(NVGcontext* avg,const
             nvgFill(avg);
             }
         }
+    if(modernnormal) {
+        const float targetlow=settings->targetlow();
+        const float targethigh=settings->targethigh();
+        const float sampleradius=graphpoints::sample_radius(density,duration,false);
+        const float minspacing=graphpoints::minimum_spacing(density,duration);
+        bool firstsample=true,hasdrawn=false,haspreviousstate=false;
+        bool hascandidate=false,candidatedrawn=false;
+        float lastdrawx=0.0f,candidatex=0.0f,candidatey=0.0f;
+        graphpoints::RangeState previousstate=graphpoints::RangeState::in_range;
+        graphpoints::RangeState candidatestate=graphpoints::RangeState::in_range;
+        const auto flushsegment=[&]() {
+            if(hascandidate&&!candidatedrawn)
+                drawModernGraphSample(avg,candidatex,candidatey,sampleradius,
+                                      candidatestate);
+            hascandidate=false;
+            };
+
+        nvgSave(avg);
+        nvgScissor(avg,dleft,dtop,dwidth,dheight);
+        CalibrateBackward<Glucose> markercalibration(hist,CalibratePast);
+        for(auto pos=lastpos;pos>=firstpos;--pos) {
+            const Glucose *histglu=hist->getglucose(pos);
+            if(!histglu->valid()) {
+                flushsegment();
+                firstsample=true;
+                haspreviousstate=false;
+                continue;
+                }
+            const uint32_t tim=histglu->gettime();
+            const auto mgdL=histglu->getmgdL();
+            double calibrated=markercalibration.backvalue(tim,mgdL);
+            if(isnan(calibrated)) {
+                if(!allvalues)
+                    break;
+                calibrated=mgdL;
+                }
+            const uint32_t glu=std::round(calibrated*10.0);
+            const float posx=xtrans(tim),posy=ytrans(glu);
+            const graphpoints::RangeState state=
+                    graphpoints::range_state(glu,targetlow,targethigh);
+            const bool statechanged=haspreviousstate&&state!=previousstate;
+            const bool draw=graphpoints::should_draw_sample(
+                    posx,lastdrawx,minspacing,hasdrawn,firstsample,false,
+                    statechanged,false);
+            if(draw) {
+                drawModernGraphSample(avg,posx,posy,sampleradius,state);
+                lastdrawx=posx;
+                hasdrawn=true;
+                }
+            candidatex=posx;
+            candidatey=posy;
+            candidatestate=state;
+            hascandidate=true;
+            candidatedrawn=draw;
+            previousstate=state;
+            haspreviousstate=true;
+            firstsample=false;
+            }
+        flushsegment();
+        nvgRestore(avg);
+        }
 #ifdef DOESSEARCH
     if((searchdata.type&calibratedHistorysearchtype)==calibratedHistorysearchtype) {
         CalibrateBackward<Glucose>  calibrate(hist,CalibratePast);
@@ -1126,7 +2765,7 @@ template <class TX,class TY> void    JCurve::histcurve(NVGcontext* avg,const Sen
     if(hist->isDexcom()&&!settings->data()->dexcomPredict)
         return;
 
-    const NVGcolor *col=getcolor(colorindex);
+    const NVGcolor *col=modernnormal?&modernGraphHistory:getcolor(colorindex);
     nvgStrokeColor(avg, *col);
     nvgFillColor(avg,*col);
      bool restart=true;
@@ -1183,6 +2822,59 @@ template <class TX,class TY> void    JCurve::histcurve(NVGcontext* avg,const Sen
             nvgCircle(avg, startx,starty,historyStrokeWidth);
             nvgFill(avg);
             }
+        }
+    if(modernnormal) {
+        const float targetlow=settings->targetlow();
+        const float targethigh=settings->targethigh();
+        const float sampleradius=graphpoints::sample_radius(density,duration,false);
+        const float minspacing=graphpoints::minimum_spacing(density,duration);
+        bool firstsample=true,hasdrawn=false,haspreviousstate=false;
+        bool hascandidate=false,candidatedrawn=false;
+        float lastdrawx=0.0f,candidatex=0.0f,candidatey=0.0f;
+        graphpoints::RangeState previousstate=graphpoints::RangeState::in_range;
+        graphpoints::RangeState candidatestate=graphpoints::RangeState::in_range;
+        const auto flushsegment=[&]() {
+            if(hascandidate&&!candidatedrawn)
+                drawModernGraphSample(avg,candidatex,candidatey,sampleradius,
+                                      candidatestate);
+            hascandidate=false;
+            };
+
+        nvgSave(avg);
+        nvgScissor(avg,dleft,dtop,dwidth,dheight);
+        for(auto pos=firstpos;pos<=lastpos;pos++) {
+            const Glucose *histglu=hist->getglucose(pos);
+            if(!histglu->valid()) {
+                flushsegment();
+                firstsample=true;
+                haspreviousstate=false;
+                continue;
+                }
+            const uint32_t tim=histglu->gettime();
+            const uint32_t glu=histglu->getsputnik();
+            const float posx=xtrans(tim),posy=ytrans(glu);
+            const graphpoints::RangeState state=
+                    graphpoints::range_state(glu,targetlow,targethigh);
+            const bool statechanged=haspreviousstate&&state!=previousstate;
+            const bool draw=graphpoints::should_draw_sample(
+                    posx,lastdrawx,minspacing,hasdrawn,firstsample,false,
+                    statechanged,false);
+            if(draw) {
+                drawModernGraphSample(avg,posx,posy,sampleradius,state);
+                lastdrawx=posx;
+                hasdrawn=true;
+                }
+            candidatex=posx;
+            candidatey=posy;
+            candidatestate=state;
+            hascandidate=true;
+            candidatedrawn=draw;
+            previousstate=state;
+            haspreviousstate=true;
+            firstsample=false;
+            }
+        flushsegment();
+        nvgRestore(avg);
         }
 #ifdef DOESSEARCH
     if((searchdata.type&historysearchtype)==historysearchtype) {
@@ -1265,6 +2957,8 @@ void JCurve::setdiffcurrent() {
 void JCurve::setstarttime(uint32_t newstart) {
     CURVELOGGER("setstarttime(%u) nowclamp=%d\n",newstart,nowclamp);
     starttime=newstart;
+    if(modernui)
+        graphselectionactive=false;
     if(nowclamp) {
         setdiffcurrent();
         }
@@ -1273,7 +2967,10 @@ uint32_t JCurve::maxstarttime() {
     float duraf=((float)valuesize/dwidth);
     CURVELOGGER("dwidth=%f valuesize=%f duraf=%f\n",(double)dwidth,(double)valuesize,(double)duraf);
     float subtr=0.91 - duraf*1.2f;
-    return time(nullptr)-subtr*duration;
+    const uint32_t legacyMaximum=static_cast<uint32_t>(
+            time(nullptr)-subtr*duration);
+    return forecastgraph::maximum_start(legacyMaximum,
+            static_cast<uint32_t>(duration),forecastGraphEndTime());
     }
 void JCurve::begrenstijd() {
     auto maxstart= maxstarttime();
@@ -1381,7 +3078,7 @@ pair<int,int> JCurve::getextremes(const vector<int> &hists, const pair<const Sca
     return {gmin,gmax};
     }
 template <class LT> void    JCurve::glucoselines(NVGcontext* avg,const float last,const float smallfontlineheight,const int gmax,const LT &transy,bool showlevels) {
-    nvgStrokeWidth(avg, glucoseLinesStrokeWidth);
+    nvgStrokeWidth(avg, modernnormal?std::max(density*.58f,.65f):glucoseLinesStrokeWidth);
     nvgStrokeColor(avg, *getgray());
     const double yscale=transy(1)-transy(0);
     const float mindisunit=smallsize*1.5;
@@ -1391,19 +3088,26 @@ template <class LT> void    JCurve::glucoselines(NVGcontext* avg,const float las
     const double unit2=unit*2;
 
     uint32_t step=minst<=unit?unit:ceilf(minst/unit2)*unit2;
+    if(modernnormal&&step<unit2*2.0)
+        step=static_cast<uint32_t>(unit2*2.0);
     float startld;
-    nvgTextAlign(avg,NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
-
-    if(getLevelLeft()) {
-        startld = timelen*.4;
+    if(modernnormal) {
+        nvgTextAlign(avg,NVG_ALIGN_RIGHT|NVG_ALIGN_MIDDLE);
+        startld=dleft+dwidth-density*5.0f;
         }
-    else  {
-        startld =  dwidth/2+dleft;
+    else {
+        nvgTextAlign(avg,NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
+        if(getLevelLeft()) {
+            startld = timelen*.4;
+            }
+        else  {
+            startld =  dwidth/2+dleft;
+            }
         }
 
   const    uint32_t startl=0;
   
-    const float endline=last;
+    const float endline=modernnormal?dleft+dwidth:last;
 //    CURVELOGGER("glucoselines: unit=%f unit2=%f step=%d (%g) startl=%d (%g)\n",unit,unit2,step,::gconvert(step,glunit),startl,::gconvert(startl,glunit));
 #ifdef WEAROS
    const auto endlevel=dheight-smallfontlineheight;
@@ -1412,7 +3116,7 @@ template <class LT> void    JCurve::glucoselines(NVGcontext* avg,const float las
     
     for(auto y=startl+step;y<gmax;y+=step) {
         float dy=transy(y);
-        if(dy<=0)
+        if(modernnormal?(dy<=dtop||dy>=dtop+dheight):(dy<=0))
             continue;
         nvgBeginPath(avg);
          nvgMoveTo(avg,dleft ,dy) ;
@@ -1421,7 +3125,8 @@ template <class LT> void    JCurve::glucoselines(NVGcontext* avg,const float las
 #ifdef WEAROS
         if(showlevels&&dy>startlevel&&dy<endlevel) 
 #else
-        if(dy>smallfontlineheight) 
+        if(modernnormal?(dy>dtop+smallfontlineheight&&dy<dtop+dheight-smallfontlineheight)
+                       :(dy>smallfontlineheight))
 #endif
         {
             constexpr const int  bufsize=50;
@@ -1437,6 +3142,20 @@ template <class LT> void    JCurve::glucoselines(NVGcontext* avg,const float las
 #endif
             if(len>bufsize)
                 len=bufsize;
+            if(modernnormal) {
+                float bounds[4];
+                nvgTextBounds(avg,startld,dy,buf,buf+len,bounds);
+                const float horizontal=density*3.5f;
+                const float vertical=density*1.5f;
+                nvgBeginPath(avg);
+                nvgRoundedRect(avg,bounds[0]-horizontal,bounds[1]-vertical,
+                               bounds[2]-bounds[0]+horizontal*2.0f,
+                               bounds[3]-bounds[1]+vertical*2.0f,
+                               density*4.0f);
+                nvgFillColor(avg,modernGraphAxisBackdrop);
+                nvgFill(avg);
+                nvgFillColor(avg,modernGraphText);
+                }
             nvgText(avg, startld,dy, buf, buf+len);
             }
 
@@ -1488,23 +3207,23 @@ void    JCurve::timelines(NVGcontext* avg,const displaytime *disp, const LT &tra
        nvgTextAlign(avg,NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
        timeY=(dheight-statusbarheight-dbottom)*.5f+statusbarheight;
 #ifdef NOCUTOFF
-if(nocutoff) {
+if(nocutoff&&!modernnormal) {
       lower=timelen*.5f;
       upper=dwidth-lower;
       }
 #endif
       }
    else {
-       nvgTextAlign(avg,NVG_ALIGN_CENTER|NVG_ALIGN_TOP);
-    timeY=
+       nvgTextAlign(avg,NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
+     timeY=
     #ifdef WEAROS
         smallfontlineheight*1.45f + //MODIFIED
 //        smallfontlineheight*1.7f +
     #endif
-   statusbarheight
+   (modernnormal?dtop+dheight-smallfontlineheight*.70f:statusbarheight)
       ;
 #ifdef NOCUTOFF
-   if(nocutoff) {
+   if(nocutoff&&!modernnormal) {
          float straal=dwidth*.5f;
          float over=straal-timeY;
          lower=straal-sqrt(pow(straal,2)-pow(over,2))+timelen*.4f;
@@ -1513,7 +3232,9 @@ if(nocutoff) {
       }
 #endif
       }
-    const float lowY=dheight+dtop+dbottom;
+    const float lowY=modernnormal
+            ?dtop+dheight-smallfontlineheight*1.45f
+            :dheight+dtop+dbottom;
     for(auto tim=first;tim<=last;tim+=tstep) {
         float dtim=transx(tim);
         char buf[20];
@@ -1521,7 +3242,12 @@ if(nocutoff) {
         time_t tmptime=tim;
          struct tm *stm=localtime_r(&tmptime,&tmbuf);
 
-         if(stm->tm_hour||stm->tm_min) {
+         if(modernnormal) {
+            const bool dayboundary=!(stm->tm_hour||stm->tm_min);
+            nvgStrokeWidth(avg,std::max(density*(dayboundary?.9f:.52f),.6f));
+            nvgStrokeColor(avg,dayboundary?modernGraphGridStrong:modernGraphGrid);
+            }
+         else if(stm->tm_hour||stm->tm_min) {
             if(stm->tm_min||stm->tm_hour%3) {
                 nvgStrokeWidth(avg, timeLinesStrokeWidth);
                 nvgStrokeColor(avg, *getgray());
@@ -1547,7 +3273,7 @@ if(nocutoff) {
             nvgText(avg, dtim,timeY, buf, buf+len);
             }
         nvgBeginPath(avg);
-        nvgMoveTo(avg,dtim ,0) ;
+        nvgMoveTo(avg,dtim,modernnormal?dtop+density*5.0f:0) ;
         nvgLineTo( avg, dtim,lowY);
         nvgStroke(avg);
         }
@@ -1682,12 +3408,53 @@ CURVELOGGER("showbluevalue %zd\n",used.size());
         nvgFontSize(avg, smallsize);
         nvgFillColor(avg, *getblack());
 
-        nvgBeginPath(avg);
-        nvgStrokeColor(avg, dooryellow);
-        nvgStrokeWidth(avg, nowLineStrokeWidth);
-        nvgMoveTo(avg,xpos ,dtop) ;
-        nvgLineTo( avg, xpos,dheight+dtop+dbottom);
-        nvgStroke(avg);
+        if(modernnormal) {
+            nvgSave(avg);
+            nvgScissor(avg,dleft,dtop,dwidth,dheight);
+            nvgLineCap(avg,NVG_ROUND);
+            const float lineTop=dtop+smallfontlineheight*1.30f;
+            const float lineBottom=dtop+dheight-smallfontlineheight*1.45f;
+            NVGpaint nowGlow=nvgLinearGradient(avg,xpos,lineTop,xpos,lineBottom,
+                                                modernGraphNowGlow,
+                                                modernGraphNowFade);
+            nvgBeginPath(avg);
+            nvgStrokePaint(avg,nowGlow);
+            nvgStrokeWidth(avg,std::max(density*3.2f,1.5f));
+            nvgMoveTo(avg,xpos,lineTop);
+            nvgLineTo(avg,xpos,lineBottom);
+            nvgStroke(avg);
+            NVGpaint nowCore=nvgLinearGradient(avg,xpos,lineTop,xpos,lineBottom,
+                                                modernGraphNow,
+                                                modernGraphNowFade);
+            nvgBeginPath(avg);
+            nvgStrokePaint(avg,nowCore);
+            nvgStrokeWidth(avg,std::max(density*.95f,.9f));
+            nvgMoveTo(avg,xpos,lineTop);
+            nvgLineTo(avg,xpos,lineBottom);
+            nvgStroke(avg);
+            nvgBeginPath(avg);
+            nvgRoundedRect(avg,xpos-density*4.0f,lineTop-density*1.8f,
+                           density*8.0f,density*3.6f,density*1.8f);
+            nvgFillColor(avg,modernGraphNow);
+            nvgFill(avg);
+            nvgRestore(avg);
+            }
+        else {
+            nvgBeginPath(avg);
+            nvgStrokeColor(avg,dooryellow);
+            nvgStrokeWidth(avg,nowLineStrokeWidth);
+            nvgMoveTo(avg,xpos,dtop);
+            nvgLineTo(avg,xpos,dheight+dtop+dbottom);
+            nvgStroke(avg);
+            }
+        const float getx= xpos+headsize*.9f+8*dwidth/headsize;
+        if(modernnormal) {
+            // The Java dashboard owns the fresh glucose hero. Still run the
+            // native status path so alarms, warm-up/error state and viewed
+            // bookkeeping retain their legacy behavior.
+            showlastsstream(avg,nu,getx,used);
+            return;
+            }
 #ifndef WEAROS
         if(const auto *sens=sensors->getSensorData()) {
             if(!(sens->isDexcom()||sens->isSibionics())||!sens->unused()) {
@@ -1733,8 +3500,6 @@ CURVELOGGER("showbluevalue %zd\n",used.size());
         nvgResetTransform(avg);
         }
 #endif
-        const float getx= xpos+headsize*.9f+8*dwidth/headsize;
-
 constexpr const bool showcurrentdate=true;
 
 if(showcurrentdate) {
@@ -1796,6 +3561,45 @@ if(showcurrentdate) {
 
 
  void       JCurve::showsaverange(NVGcontext* avg,const float last, const float dlow,const float dhigh) {
+    if(modernnormal) {
+        const float top=dlow<dhigh?dlow:dhigh;
+        const float bottom=dlow>dhigh?dlow:dhigh;
+        const float right=dleft+dwidth;
+
+        nvgBeginPath(avg);
+        nvgRect(avg,dleft,top,dwidth,bottom-top);
+        NVGpaint targetpaint=nvgLinearGradient(avg,0,top,0,bottom,
+                                                modernGraphTargetFill,
+                                                modernGraphTargetFillBottom);
+        nvgFillPaint(avg,targetpaint);
+        nvgFill(avg);
+
+        nvgStrokeWidth(avg,std::max(density*.7f,.7f));
+        nvgStrokeColor(avg,modernGraphTargetBorder);
+        nvgBeginPath(avg);
+        nvgMoveTo(avg,dleft,top);
+        nvgLineTo(avg,right,top);
+        nvgMoveTo(avg,dleft,bottom);
+        nvgLineTo(avg,right,bottom);
+        nvgStroke(avg);
+
+        // A restrained inline label explains the band without adding a
+        // separate legend or stealing vertical space from the plot.
+        if(bottom-top>density*26.0f) {
+            char targetlabel[48];
+            const double lowvalue=::gconvert(settings->targetlow(),glunit);
+            const double highvalue=::gconvert(settings->targethigh(),glunit);
+            const int targetlen=snprintf(targetlabel,sizeof(targetlabel),
+                    glunit==1?"%.1f - %.1f mmol/L":"%.0f - %.0f mg/dL",
+                    lowvalue,highvalue);
+            nvgFontSize(avg,smallsize*.68f);
+            nvgTextAlign(avg,NVG_ALIGN_LEFT|NVG_ALIGN_TOP);
+            nvgFillColor(avg,nvgRGBAf2(0x68/255.0f,0xC9/255.0f,0x98/255.0f,.78f));
+            nvgText(avg,dleft+density*8.0f,top+density*6.0f,
+                    targetlabel,targetlabel+targetlen);
+            }
+        return;
+        }
     showsavedomain(avg,last,dlow,dhigh) ;
     showunsaveredline(avg,last,dlow) ;
     }
@@ -1910,6 +3714,17 @@ int    JCurve::displaycurve(NVGcontext* avg,time_t nu) {
     starttime=(doclamp)?(nu-diffcurrent):(starttime);
     const uint32_t starttime2=starttime;
     const uint32_t endtime=starttime2+duration;
+    // Stored/backend values are invariant raw sensor mg/dL. This frame-local
+    // copy receives the current calibration only for presentation, so changing
+    // a calibration never mutates forecast training identities or history.
+    forecastgraph::Snapshot forecastSnapshot=forecastGraphSnapshot();
+    // Follow the glucose layer that is visually on top. Raw stream/scan layers
+    // are drawn after their calibrated counterparts, so calibration is applied
+    // to the forecast only when a calibrated layer is the sole active source.
+    const bool calibrateForecastDisplay=settings->data()->DoCalibrate&&
+            ((showcalibratedscans&&!showscans)||
+             (!showcalibratedscans&&!showscans&&
+              showcalibratedstream&&!showstream));
     mealpos.clear();
     hidden.clear(); 
     hists.clear(); 
@@ -1925,6 +3740,46 @@ int    JCurve::displaycurve(NVGcontext* avg,time_t nu) {
             );
             
     histlen=hists.size();
+    if(calibrateForecastDisplay&&!forecastSnapshot.points.empty()) {
+        const SensorGlucoseData *displaySensor=nullptr;
+        uint32_t newestPollTime=0U;
+        for(const int sensorIndex:hists) {
+            const SensorGlucoseData *candidate=
+                    sensors->getSensorData(sensorIndex);
+            if(!candidate)
+                continue;
+            const auto polls=candidate->getPolldata();
+            for(auto iterator=polls.rbegin();iterator!=polls.rend();++iterator) {
+                if(!iterator->t||iterator->t>static_cast<uint32_t>(nu)||
+                   !iterator->valid(0))
+                    continue;
+                if(iterator->t>newestPollTime) {
+                    newestPollTime=iterator->t;
+                    displaySensor=candidate;
+                    }
+                break;
+                }
+            }
+        if(displaySensor) {
+            auto calibrator=make_calibrator<ScanData>(displaySensor);
+            for(auto &point:forecastSnapshot.points) {
+                const double center=calibrator.calibrateNow(
+                        point.time,point.medianMgDl);
+                const double lower=calibrator.calibrateNow(
+                        point.time,point.lowMgDl);
+                const double upper=calibrator.calibrateNow(
+                        point.time,point.highMgDl);
+                if(std::isfinite(center)&&std::isfinite(lower)&&
+                   std::isfinite(upper)) {
+                    point.medianMgDl=static_cast<float>(center);
+                    point.lowMgDl=static_cast<float>(
+                            std::min({center,lower,upper}));
+                    point.highMgDl=static_cast<float>(
+                            std::max({center,lower,upper}));
+                    }
+                }
+            }
+        }
     CURVELOGGER("displaycurve histlen=%d doclamp=%d starttime=%u\n",histlen,doclamp,starttime2);
     delete[] scanranges;
     scanranges=new pair<const ScanData *,const ScanData*> [histlen];
@@ -2027,8 +3882,52 @@ int    JCurve::displaycurve(NVGcontext* avg,time_t nu) {
 
     const pair<const ScanData *,const ScanData*> *scanpoll[]= {scanranges,pollranges,caliStreamSpans,caliScansSpans};
     CURVELOGAR("Before getextremes");
-    if((setend<starttime2||settime>=endtime)) {
-       auto extr=getextremes(hists,scanpoll,std::size(scanpoll),histpositions);
+    // Keep preview eligibility tied to the glucose renderer itself as a
+    // second safety net: even if the Java state update is one frame late,
+    // preview data can never cover real glucose samples in this time window.
+    const auto glucoseextr=getextremes(hists,scanpoll,std::size(scanpoll),histpositions);
+    const bool hasrealglucose=glucoseextr.second>0&&glucoseextr.first<=glucoseextr.second;
+    const uint32_t futureStart=std::max<uint32_t>(
+            starttime2,static_cast<uint32_t>(nu));
+    const bool hasVisibleForecast=std::any_of(
+            forecastSnapshot.points.begin(),forecastSnapshot.points.end(),
+            [&](const forecastgraph::Point &point) {
+                return point.time>=futureStart&&point.time<=endtime;
+            });
+    const bool showpreview=modernnormal&&graphpreview&&!hasrealglucose&&
+                           !hasVisibleForecast;
+    if(!graphPanYRangeLocked&&(setend<starttime2||settime>=endtime)) {
+       auto extr=glucoseextr;
+       bool hasForecastExtremes=false;
+       int forecastMinimum=6000;
+       int forecastMaximum=0;
+       for(const auto &point:forecastSnapshot.points) {
+           if(point.time<futureStart||point.time>endtime)
+               continue;
+           const float center=std::clamp(point.medianMgDl,20.0f,600.0f);
+           const int low=static_cast<int>(std::lround(
+                   std::min(center,forecastgraph::bounded_low(point))*10.0f));
+           const int high=static_cast<int>(std::lround(
+                   std::max(center,forecastgraph::bounded_high(point))*10.0f));
+           forecastMinimum=std::min(forecastMinimum,low);
+           forecastMaximum=std::max(forecastMaximum,high);
+           hasForecastExtremes=true;
+           }
+       if(hasForecastExtremes) {
+           if(hasrealglucose) {
+               extr.first=std::min(extr.first,forecastMinimum);
+               extr.second=std::max(extr.second,forecastMaximum);
+               }
+           else {
+               extr={forecastMinimum,forecastMaximum};
+               }
+           }
+       if(showpreview) {
+           const int low=settings->targetlow();
+           const int high=settings->targethigh();
+           const int targetspan=std::max(high-low,180);
+           extr={std::max(0,low-targetspan/3),high+targetspan/3};
+           }
        for(int i=0;i<numdatas.size();i++)  {
             CURVELOGGER("%d before extremenums \n",i);
             extr  = numdatas[i]->extremenums(*this,extr);
@@ -2042,18 +3941,199 @@ displaytime disp=getdisplaytime(nu,starttime2,endtime, transx);
     const float dlast=nu<endtime?transx(disp.last):dleft+dwidth;
     CURVELOGAR("before showsaverange");
     showsaverange(avg,dlast,transy(settings->targetlow()),transy(settings->targethigh()));
+    drawforecastactivities(avg,static_cast<uint32_t>(nu),starttime2,endtime,
+                           forecastSnapshot.activities);
 
     nvgFontSize(avg, smallsize);
     CURVELOGAR("before showNums");
     const int catnr=settings->getlabelcount();
 
-    showdates(avg,nu,starttime2,endtime) ;
+    if(!modernnormal)
+        showdates(avg,nu,starttime2,endtime) ;
 
     int nupos=transx(nu); 
     timelines(avg,&disp,  transx,nu);
-    if(disp.tstep>(60*60))
+    if(!modernnormal&&disp.tstep>(60*60))
         epochlines(avg,starttime2,endtime<nu?endtime:disp.last,transx);
     glucoselines(avg,dlast,smallfontlineheight,gmax,transy,(starttime2+duration/3)<nu) ;
+
+    forecastgraph::Point forecastActualAnchor{};
+    bool hasForecastActualAnchor=false;
+    for(const int sensorIndex:hists) {
+        const SensorGlucoseData *sensor=sensors->getSensorData(sensorIndex);
+        if(!sensor)
+            continue;
+        auto forecastCalibrator=make_calibrator<ScanData>(sensor);
+        const auto polls=sensor->getPolldata();
+        for(auto iterator=polls.rbegin();iterator!=polls.rend();++iterator) {
+            if(!iterator->t||iterator->t>static_cast<uint32_t>(nu)||
+               !iterator->valid(0))
+                continue;
+            if(!hasForecastActualAnchor||
+               iterator->t>forecastActualAnchor.time) {
+                float mgdl=static_cast<float>(iterator->g);
+                if(calibrateForecastDisplay) {
+                    const double calibrated=forecastCalibrator.calibrateNow(
+                            *iterator);
+                    if(std::isfinite(calibrated))
+                        mgdl=static_cast<float>(calibrated);
+                    }
+                forecastActualAnchor={iterator->t,mgdl,mgdl,mgdl};
+                hasForecastActualAnchor=true;
+                }
+            break;
+            }
+        }
+    drawforecast(avg,static_cast<uint32_t>(nu),starttime2,endtime,
+                 forecastSnapshot.points,forecastSnapshot.confidence,
+                 hasForecastActualAnchor?&forecastActualAnchor:nullptr);
+
+    if(showpreview) {
+        constexpr int previewcount=57;
+        struct previewpoint { float x; float y; float value; };
+        previewpoint points[previewcount];
+        const float low=settings->targetlow();
+        const float high=settings->targethigh();
+        const float targetspan=std::max(high-low,180.0f);
+        const float center=(low+high)*.5f;
+        const uint32_t visibleend=std::min<uint32_t>(endtime,nu>60?nu-60:nu);
+        const uint32_t previews=static_cast<uint32_t>(duration*.90f);
+        const uint32_t visiblebegin=visibleend>previews?visibleend-previews:starttime2;
+        for(int i=0;i<previewcount;i++) {
+            const float phase=static_cast<float>(i)/(previewcount-1);
+            const float tail=phase>.84f?(1.0f-phase)/.16f:1.0f;
+            const float highdistance=(phase-.22f)/.085f;
+            const float lowdistance=(phase-.61f)/.075f;
+            const float highbump=expf(-(highdistance*highdistance));
+            const float lowdip=expf(-(lowdistance*lowdistance));
+            // A calm, plausible day shape is easier to read than a decorative
+            // wave while still demonstrating every configured range state.
+            float value=center+tail*targetspan*(.070f*sinf(i*.39f)+
+                                                .035f*sinf(i*.13f));
+            value+=targetspan*.68f*highbump;
+            value-=targetspan*.72f*lowdip;
+            const uint32_t tim=visiblebegin+static_cast<uint32_t>((visibleend-visiblebegin)*phase);
+            points[i]={static_cast<float>(transx(tim)),
+                       static_cast<float>(transy(static_cast<uint32_t>(std::max(value,1.0f)))),
+                       value};
+            }
+        const auto statecolor=[&](float value,bool glow)->const NVGcolor & {
+            return modernGraphStateColor(
+                    graphpoints::range_state(value,low,high),glow);
+            };
+        const auto drawpreview=[&](bool glow) {
+            nvgStrokeWidth(avg,glow?pollCurveStrokeWidth+density*3.2f:
+                                    pollCurveStrokeWidth+density*.35f);
+            for(int i=1;i<previewcount;i++) {
+                const previewpoint &a=points[i-1],&b=points[i];
+                float stops[4]={0.0f,1.0f,0.0f,0.0f};
+                int stopcount=2;
+                const float delta=b.value-a.value;
+                if(delta!=0.0f) {
+                    for(const float threshold:{low,high}) {
+                        const float crossing=(threshold-a.value)/delta;
+                        if(crossing>0.0f&&crossing<1.0f)
+                            stops[stopcount++]=crossing;
+                        }
+                    }
+                std::sort(stops,stops+stopcount);
+                for(int part=0;part<stopcount-1;part++) {
+                    const float from=stops[part],to=stops[part+1];
+                    nvgBeginPath(avg);
+                    nvgMoveTo(avg,a.x+(b.x-a.x)*from,a.y+(b.y-a.y)*from);
+                    nvgLineTo(avg,a.x+(b.x-a.x)*to,a.y+(b.y-a.y)*to);
+                    nvgStrokeColor(avg,statecolor(a.value+delta*(from+to)*.5f,glow));
+                    nvgStroke(avg);
+                    }
+                }
+            };
+        nvgSave(avg);
+        nvgScissor(avg,dleft,dtop,dwidth,dheight);
+        nvgLineCap(avg,NVG_ROUND);
+        nvgLineJoin(avg,NVG_ROUND);
+        drawpreview(true);
+        drawpreview(false);
+
+        const float sampleradius=graphpoints::sample_radius(density,duration,false);
+        const float minspacing=graphpoints::minimum_spacing(density,duration);
+        bool hasdrawn=false;
+        float lastdrawx=0.0f;
+        graphpoints::RangeState previousstate=graphpoints::RangeState::in_range;
+        for(int i=0;i<previewcount;i++) {
+            const graphpoints::RangeState state=
+                    graphpoints::range_state(points[i].value,low,high);
+            const bool statechanged=i>0&&state!=previousstate;
+            if(graphpoints::should_draw_sample(
+                    points[i].x,lastdrawx,minspacing,hasdrawn,i==0,
+                    i==previewcount-1,statechanged,true)) {
+                drawModernGraphSample(avg,points[i].x,points[i].y,
+                                      sampleradius,state);
+                lastdrawx=points[i].x;
+                hasdrawn=true;
+                }
+            previousstate=state;
+            }
+
+        const previewpoint &last=points[previewcount-1];
+        nvgBeginPath(avg);
+        nvgCircle(avg,last.x,last.y,pointRadius*2.15f);
+        nvgFillColor(avg,statecolor(last.value,true));
+        nvgFill(avg);
+        nvgBeginPath(avg);
+        nvgCircle(avg,last.x,last.y,pointRadius*1.05f);
+        nvgFillColor(avg,statecolor(last.value,false));
+        nvgFill(avg);
+        nvgBeginPath(avg);
+        nvgCircle(avg,last.x,last.y,pointRadius*.38f);
+        nvgFillColor(avg,modernGraphSurface);
+        nvgFill(avg);
+
+        char previewvalue[32];
+        const char *previewunit=glunit==1?"mmol/L":"mg/dL";
+        const int previewvaluelen=snprintf(previewvalue,sizeof(previewvalue),
+                glunit==1?"%.1f  %s":"%.0f  %s",
+                ::gconvert(static_cast<uint32_t>(std::max(last.value,1.0f)),glunit),
+                previewunit);
+        nvgFontSize(avg,smallsize*.82f);
+        nvgTextAlign(avg,NVG_ALIGN_LEFT|NVG_ALIGN_MIDDLE);
+        float valuebounds[4];
+        nvgTextBounds(avg,0,0,previewvalue,previewvalue+previewvaluelen,valuebounds);
+        const float valuew=valuebounds[2]-valuebounds[0]+density*16.0f;
+        const float valueh=std::max(smallfontlineheight*.92f,density*26.0f);
+        const float valuex=std::max(dleft+density*6.0f,last.x-valuew-density*10.0f);
+        const float valuey=std::max(dtop+density*6.0f,
+                std::min(last.y-valueh*.5f,dtop+dheight-valueh-density*6.0f));
+        nvgBeginPath(avg);
+        nvgRoundedRect(avg,valuex,valuey,valuew,valueh,density*7.0f);
+        nvgFillColor(avg,nvgRGBA(24,27,30,246));
+        nvgFill(avg);
+        nvgStrokeWidth(avg,std::max(density*.8f,.8f));
+        nvgStrokeColor(avg,statecolor(last.value,false));
+        nvgStroke(avg);
+        nvgFillColor(avg,nvgRGBA(238,241,244,255));
+        nvgText(avg,valuex+density*8.0f,valuey+valueh*.52f,
+                previewvalue,previewvalue+previewvaluelen);
+
+        const char previewlabel[]="DEMO  /  PREVIEW";
+        nvgFontSize(avg,smallsize*.76f);
+        nvgTextAlign(avg,NVG_ALIGN_LEFT|NVG_ALIGN_MIDDLE);
+        float bounds[4];
+        nvgTextBounds(avg,0,0,previewlabel,nullptr,bounds);
+        const float labelw=bounds[2]-bounds[0]+density*16.0f;
+        const float labelh=std::max(smallfontlineheight*.82f,density*22.0f);
+        const float labelx=dleft+density*8.0f;
+        const float labely=dtop+density*8.0f;
+        nvgBeginPath(avg);
+        nvgRoundedRect(avg,labelx,labely,labelw,labelh,labelh*.5f);
+        nvgFillColor(avg,nvgRGBA(31,35,39,238));
+        nvgFill(avg);
+        nvgStrokeWidth(avg,std::max(density*.7f,.7f));
+        nvgStrokeColor(avg,modernGraphGridStrong);
+        nvgStroke(avg);
+        nvgFillColor(avg,modernGraphText);
+        nvgText(avg,labelx+density*8.0f,labely+labelh*.52f,previewlabel,nullptr);
+        nvgRestore(avg);
+        }
 
 //        nvgCircle(avg, posx,posy,foundPointRadius);
 
@@ -2140,6 +4220,75 @@ displaytime disp=getdisplaytime(nu,starttime2,endtime, transx);
             el->showNums(*this, transx,  transy,was) ;
         }
 
+    // Build the event anchor surface from the glucose layers that are actually
+    // visible in this frame. Later-rendered layers replace an equal timestamp,
+    // matching what the user sees when stream/scan sources overlap.
+    std::vector<intakemarkers::GlucosePoint> intakeGlucosePoints;
+    const auto appendScanPoints=[&](const std::pair<const ScanData*,
+                                     const ScanData*> &range) {
+        if(!range.first||!range.second)
+            return;
+        for(const ScanData *point=range.first;point<range.second;++point) {
+            if(!point->valid())
+                continue;
+            const float y=transy(point->g*10);
+            if(std::isfinite(y))
+                intakeGlucosePoints.push_back({point->t,y});
+        }
+    };
+    if(showhistories||showcalibratedhistories) {
+        for(int i=histlen-1;i>=0;--i) {
+            const SensorGlucoseData *sensor=sensors->getSensorData(hists[i]);
+            if(!sensor)
+                continue;
+            for(int32_t position=histpositions[i].first;
+                position<=histpositions[i].second;++position) {
+                const Glucose *point=sensor->getglucose(position);
+                if(!point||!point->valid())
+                    continue;
+                const float y=transy(point->getsputnik());
+                if(std::isfinite(y))
+                    intakeGlucosePoints.push_back({point->gettime(),y});
+            }
+        }
+    }
+    if(showcalibratedstream) {
+        for(int i=histlen-1;i>=0;--i)
+            appendScanPoints(caliStreamSpans[i]);
+    }
+    if(showstream) {
+        for(int i=histlen-1;i>=0;--i)
+            appendScanPoints(pollranges[i]);
+    }
+    if(showcalibratedscans) {
+        for(int i=histlen-1;i>=0;--i)
+            appendScanPoints(caliScansSpans[i]);
+    }
+    if(showscans) {
+        for(int i=histlen-1;i>=0;--i)
+            appendScanPoints(scanranges[i]);
+    }
+    std::stable_sort(intakeGlucosePoints.begin(),intakeGlucosePoints.end(),
+            [](const auto &left,const auto &right) {
+                return left.time<right.time;
+            });
+    std::vector<intakemarkers::GlucosePoint> uniqueGlucosePoints;
+    uniqueGlucosePoints.reserve(intakeGlucosePoints.size());
+    for(const auto &point:intakeGlucosePoints) {
+        if(!uniqueGlucosePoints.empty()&&
+           uniqueGlucosePoints.back().time==point.time) {
+            uniqueGlucosePoints.back()=point;
+        }
+        else {
+            uniqueGlucosePoints.push_back(point);
+        }
+    }
+
+    // Backend-owned records stay transient in native code. Their marker dot is
+    // now attached to the interpolated CGM Y at the event time; only the small
+    // readable chip is offset from the line, and dense chips are clustered.
+    drawintakeevents(avg,starttime2,endtime,uniqueGlucosePoints);
+
     if(nu<endtime&&(dwidth-smallfontlineheight)>nupos) {
         showbluevalue(avg,nu, nupos,usedsensors);
         CURVELOGAR("end display curve value");
@@ -2150,6 +4299,10 @@ displaytime disp=getdisplaytime(nu,starttime2,endtime, transx);
         shownglucose.resize(0);
 #endif
         }
+
+    if(modernnormal&&graphselectionactive)
+        drawgraphselection(avg,transx(graphselectiontime),
+                           transy(graphselectionvalue));
 
 #ifdef JUGGLUCO_APP
     if(hidden.size()) {
@@ -2357,7 +4510,7 @@ char hourminstr[hourminstrlen]=hourtext;
 
 void    JCurve::startstepNVG(NVGcontext* avg,int width, int height) {
         nvgBeginFrame(avg, width, height, 1.0);
-        const int font=invertcolors?whitefont:blackfont;
+        const int font=modernnormal?whitefont:(invertcolors?whitefont:blackfont);
         this->font=font;
         nvgFontFaceId(avg,font);
         nvgLineCap(avg, NVG_ROUND);
@@ -2429,7 +4582,7 @@ void    JCurve::startstepNVG(NVGcontext* avg,int width, int height) {
                 failures=0;
 #endif
                 nvgBeginPath(avg);
-                 nvgFillColor(avg,getoldcolor());
+                 nvgFillColor(avg,modernnormal?modernGraphMuted:getoldcolor());
                 float relage=(float)age/(float)maxbluetoothage;
                 float sensory= gety+headsize/3.1f;
                 nvgRect(avg, getx+sensorbounds.left, sensorbounds.top+sensory, relage*sensorbounds.width, sensorbounds.height);
@@ -2703,6 +4856,11 @@ int    JCurve::showLargevalue(NVGcontext* avg, int index,float getx,float gety,f
         shownglucose[index].glucosetrend=poll->tr;
 #endif
 #endif
+         // The Java hero already renders a valid numeric reading and trend.
+         // Keep the sensor label and the LO/HI branches above visible so a
+         // modern graph never suppresses native diagnostic state.
+         if(modernnormal)
+             return;
          float valuex=getx-(convglucose>=10.0f?density*20.0f:0.0f);
          char *value=head+1;
          int gllen=snprintf(value,maxhead-1,gformat,convglucose);

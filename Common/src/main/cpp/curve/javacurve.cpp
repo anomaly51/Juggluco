@@ -1,6 +1,12 @@
 #include <sys/prctl.h>
 #include "curve.hpp"
 #include <jni.h>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <utility>
+#include <vector>
 #include <string_view>
 #include <string>
 #include "share/logs.hpp"
@@ -11,6 +17,8 @@
 //#include "nanovg_gl_utils.h"
 //#define OLDEVERSENSE
 #include "JCurve.hpp"
+#include "forecastgraph.hpp"
+#include "intakeevents.hpp"
 
 extern Sensoren *sensors;
 #define NANOVG_GLES2_IMPLEMENTATION
@@ -42,6 +50,550 @@ extern "C" JNIEXPORT jboolean JNICALL fromjava(turnoffalarm)(JNIEnv* env, jclass
 
 extern "C" JNIEXPORT void JNICALL fromjava(resize)(JNIEnv* env, jclass obj, jint widthin, jint heightin,jint initscreenwidth) {
  appcurve.resizescreen(widthin,heightin,initscreenwidth);
+ }
+
+extern "C" JNIEXPORT void JNICALL fromjava(setmodernui)(JNIEnv* env, jclass obj,jboolean enabled) {
+ appcurve.setmodernui(enabled);
+ if(enabled) {
+     const auto now=time(nullptr);
+     appcurve.setLiveWindow(static_cast<uint32_t>(now));
+     }
+ }
+
+extern "C" JNIEXPORT void JNICALL fromjava(setgraphpreview)(JNIEnv* env, jclass obj,jboolean enabled) {
+ appcurve.setgraphpreview(enabled);
+ }
+
+extern "C" JNIEXPORT void JNICALL fromjava(setgraphhours)(JNIEnv* env, jclass obj,jint hours) {
+ appcurve.setgraphhours(hours);
+ const auto now=time(nullptr);
+ appcurve.setLiveWindow(static_cast<uint32_t>(now));
+ }
+
+extern "C" JNIEXPORT jint JNICALL fromjava(getgraphhours)(JNIEnv* env, jclass obj) {
+ return appcurve.getgraphhours();
+ }
+
+extern "C" JNIEXPORT void JNICALL fromjava(setTimelineEvents)(JNIEnv* env,
+        jclass obj,jintArray keys,jlongArray timesMs,jfloatArray carbs,
+        jfloatArray insulin,jintArray flags) {
+ if(!keys||!timesMs||!carbs||!insulin||!flags) {
+     replaceIntakeTimelineEvents({});
+     return;
+     }
+ const jsize count=std::min({env->GetArrayLength(keys),
+                             env->GetArrayLength(timesMs),
+                             env->GetArrayLength(carbs),
+                             env->GetArrayLength(insulin),
+                             env->GetArrayLength(flags),
+                             static_cast<jsize>(1000)});
+ std::vector<jint> keyValues(count);
+ std::vector<jlong> timeValues(count);
+ std::vector<jfloat> carbValues(count);
+ std::vector<jfloat> insulinValues(count);
+ std::vector<jint> flagValues(count);
+ if(count>0) {
+     env->GetIntArrayRegion(keys,0,count,keyValues.data());
+     env->GetLongArrayRegion(timesMs,0,count,timeValues.data());
+     env->GetFloatArrayRegion(carbs,0,count,carbValues.data());
+     env->GetFloatArrayRegion(insulin,0,count,insulinValues.data());
+     env->GetIntArrayRegion(flags,0,count,flagValues.data());
+     }
+ std::vector<IntakeTimelineEvent> events;
+ events.reserve(count);
+ for(jsize index=0;index<count;index++) {
+     const jlong millis=timeValues[index];
+     if(millis<=0)
+         continue;
+     const auto seconds=static_cast<uint64_t>(millis/1000LL);
+     if(seconds>UINT32_MAX)
+         continue;
+     events.push_back({static_cast<int32_t>(keyValues[index]),
+                       static_cast<uint32_t>(seconds),
+                       static_cast<float>(carbValues[index]),
+                       static_cast<float>(insulinValues[index]),
+                       static_cast<uint32_t>(flagValues[index])});
+     }
+ replaceIntakeTimelineEvents(std::move(events));
+ }
+
+extern "C" JNIEXPORT void JNICALL fromjava(setForecast)(JNIEnv* env,
+        jclass obj,jlongArray timesMs,jfloatArray median,jfloatArray low,
+        jfloatArray high,jfloat confidence) {
+ const auto now=static_cast<uint32_t>(time(nullptr));
+ const uint32_t oldForecastEnd=forecastGraphEndTime();
+ const uint32_t oldLiveStart=forecastgraph::live_start(
+         now,static_cast<uint32_t>(appcurve.duration),oldForecastEnd);
+ const uint32_t liveTolerance=std::max<uint32_t>(5U*60U,
+                         static_cast<uint32_t>(appcurve.duration)/10U);
+ const int64_t distance=static_cast<int64_t>(appcurve.starttime)-
+                        static_cast<int64_t>(oldLiveStart);
+ const bool wasViewingLive=appcurve.doclamp||appcurve.nowclamp||
+                           std::llabs(distance)<=liveTolerance;
+
+ if(!timesMs||!median||!low||!high) {
+     replaceForecastGraph({},0.0f);
+     if(wasViewingLive)
+         appcurve.setLiveWindow(now);
+     return;
+     }
+ const jsize count=std::min({env->GetArrayLength(timesMs),
+                             env->GetArrayLength(median),
+                             env->GetArrayLength(low),
+                             env->GetArrayLength(high),
+                             static_cast<jsize>(1024)});
+ std::vector<jlong> timeValues(count);
+ std::vector<jfloat> medianValues(count),lowValues(count),highValues(count);
+ if(count>0) {
+     env->GetLongArrayRegion(timesMs,0,count,timeValues.data());
+     env->GetFloatArrayRegion(median,0,count,medianValues.data());
+     env->GetFloatArrayRegion(low,0,count,lowValues.data());
+     env->GetFloatArrayRegion(high,0,count,highValues.data());
+     }
+ std::vector<forecastgraph::Point> points;
+ points.reserve(count);
+ for(jsize index=0;index<count;++index) {
+     const jlong millis=timeValues[index];
+     const float center=medianValues[index];
+     const float lowValue=lowValues[index];
+     const float highValue=highValues[index];
+     if(millis<=0||!std::isfinite(center)||!std::isfinite(lowValue)||
+        !std::isfinite(highValue)||center<=0.0f)
+         continue;
+     const uint64_t seconds=static_cast<uint64_t>(millis/1000LL);
+     if(seconds>UINT32_MAX)
+         continue;
+     const float lower=std::min({lowValue,highValue,center});
+     const float upper=std::max({lowValue,highValue,center});
+     points.push_back({static_cast<uint32_t>(seconds),center,lower,upper});
+     }
+ const float safeConfidence=std::isfinite(confidence)?confidence:0.0f;
+ replaceForecastGraph(std::move(points),safeConfidence);
+ if(wasViewingLive)
+     appcurve.setLiveWindow(now);
+ }
+
+extern "C" JNIEXPORT void JNICALL fromjava(setForecastActivities)(JNIEnv* env,
+        jclass obj,jintArray kinds,jlongArray startsMs,jlongArray peaksMs,
+        jlongArray endsMs,jfloatArray strengths,jfloatArray confidences) {
+ if(!kinds||!startsMs||!peaksMs||!endsMs||!strengths||!confidences) {
+     replaceForecastActivities({});
+     return;
+     }
+ const jsize count=std::min({env->GetArrayLength(kinds),
+                             env->GetArrayLength(startsMs),
+                             env->GetArrayLength(peaksMs),
+                             env->GetArrayLength(endsMs),
+                             env->GetArrayLength(strengths),
+                             env->GetArrayLength(confidences),
+                             static_cast<jsize>(1024)});
+ std::vector<jint> kindValues(count);
+ std::vector<jlong> startValues(count),peakValues(count),endValues(count);
+ std::vector<jfloat> strengthValues(count),confidenceValues(count);
+ if(count>0) {
+     env->GetIntArrayRegion(kinds,0,count,kindValues.data());
+     env->GetLongArrayRegion(startsMs,0,count,startValues.data());
+     env->GetLongArrayRegion(peaksMs,0,count,peakValues.data());
+     env->GetLongArrayRegion(endsMs,0,count,endValues.data());
+     env->GetFloatArrayRegion(strengths,0,count,strengthValues.data());
+     env->GetFloatArrayRegion(confidences,0,count,confidenceValues.data());
+     }
+ std::vector<forecastgraph::Activity> activities;
+ activities.reserve(count);
+ for(jsize index=0;index<count;++index) {
+     if(!forecastgraph::valid_kind(kindValues[index])||
+        startValues[index]<=0||endValues[index]<=startValues[index])
+         continue;
+     const uint64_t start=static_cast<uint64_t>(startValues[index]/1000LL);
+     const uint64_t end=static_cast<uint64_t>(endValues[index]/1000LL);
+     if(start>UINT32_MAX||end>UINT32_MAX)
+         continue;
+     uint64_t peak=peakValues[index]>0?
+                   static_cast<uint64_t>(peakValues[index]/1000LL):start;
+     peak=std::clamp<uint64_t>(peak,start,end);
+     const float rawStrength=strengthValues[index];
+     const float rawConfidence=confidenceValues[index];
+     const float safeStrength=std::isfinite(rawStrength)?
+                              std::max(0.0f,rawStrength):0.0f;
+     const float safeConfidence=std::isfinite(rawConfidence)?
+                                forecastgraph::clamp01(rawConfidence):0.0f;
+     activities.push_back({
+             static_cast<forecastgraph::ActivityKind>(kindValues[index]),
+             static_cast<uint32_t>(start),static_cast<uint32_t>(peak),
+             static_cast<uint32_t>(end),safeStrength,safeConfidence});
+     }
+ replaceForecastActivities(std::move(activities));
+ }
+
+extern "C" JNIEXPORT void JNICALL fromjava(setForecastActivitiesSampled)(
+        JNIEnv* env,jclass obj,jintArray kinds,jlongArray startsMs,
+        jlongArray peaksMs,jlongArray endsMs,jfloatArray strengths,
+        jfloatArray confidences,jintArray sampleCounts,
+        jlongArray sampleTimesMs,jfloatArray sampleLevels) {
+ constexpr jsize maximumActivities=1024;
+ constexpr jint maximumSamplesPerActivity=256;
+ constexpr uint64_t maximumTotalSamples=65'536U;
+ if(!kinds||!startsMs||!peaksMs||!endsMs||!strengths||!confidences) {
+     replaceForecastActivities({});
+     return;
+     }
+ const jsize count=env->GetArrayLength(kinds);
+ const bool metadataLengthsValid=count>=0&&count<=maximumActivities&&
+         env->GetArrayLength(startsMs)==count&&
+         env->GetArrayLength(peaksMs)==count&&
+         env->GetArrayLength(endsMs)==count&&
+         env->GetArrayLength(strengths)==count&&
+         env->GetArrayLength(confidences)==count;
+ if(!metadataLengthsValid) {
+     replaceForecastActivities({});
+     return;
+     }
+ std::vector<jint> kindValues(count);
+ std::vector<jlong> startValues(count),peakValues(count),endValues(count);
+ std::vector<jfloat> strengthValues(count),confidenceValues(count);
+ if(count>0) {
+     env->GetIntArrayRegion(kinds,0,count,kindValues.data());
+     env->GetLongArrayRegion(startsMs,0,count,startValues.data());
+     env->GetLongArrayRegion(peaksMs,0,count,peakValues.data());
+     env->GetLongArrayRegion(endsMs,0,count,endValues.data());
+     env->GetFloatArrayRegion(strengths,0,count,strengthValues.data());
+     env->GetFloatArrayRegion(confidences,0,count,confidenceValues.data());
+     }
+
+ // Sample arrays are an additive contract. Reject a malformed sampled payload
+ // as a whole, but keep every valid summary activity on the historical
+ // triangle fallback instead of dropping insulin/meal context from the graph.
+ bool samplesValid=sampleCounts&&sampleTimesMs&&sampleLevels&&
+         env->GetArrayLength(sampleCounts)==count&&
+         env->GetArrayLength(sampleTimesMs)==env->GetArrayLength(sampleLevels);
+ std::vector<jint> countValues;
+ uint64_t totalSamples=0U;
+ if(samplesValid) {
+     countValues.resize(count);
+     if(count>0)
+         env->GetIntArrayRegion(sampleCounts,0,count,countValues.data());
+     for(const jint value:countValues) {
+         if(value<0||value==1||value>maximumSamplesPerActivity||
+            totalSamples>maximumTotalSamples-static_cast<uint64_t>(value)) {
+             samplesValid=false;
+             break;
+             }
+         totalSamples+=static_cast<uint64_t>(value);
+         }
+     if(samplesValid&&
+        static_cast<uint64_t>(env->GetArrayLength(sampleTimesMs))!=totalSamples)
+         samplesValid=false;
+     }
+ std::vector<jlong> sampleTimeValues;
+ std::vector<jfloat> sampleLevelValues;
+ if(samplesValid&&totalSamples>0U) {
+     const jsize flatCount=static_cast<jsize>(totalSamples);
+     sampleTimeValues.resize(flatCount);
+     sampleLevelValues.resize(flatCount);
+     env->GetLongArrayRegion(sampleTimesMs,0,flatCount,sampleTimeValues.data());
+     env->GetFloatArrayRegion(sampleLevels,0,flatCount,sampleLevelValues.data());
+     }
+
+ std::vector<forecastgraph::Activity> activities;
+ activities.reserve(count);
+ std::size_t sampleOffset=0U;
+ for(jsize index=0;index<count;++index) {
+     const std::size_t eventSampleCount=samplesValid?
+             static_cast<std::size_t>(countValues[index]):0U;
+     std::vector<forecastgraph::ActivitySample> samples;
+     bool eventSamplesValid=samplesValid;
+     if(eventSamplesValid) {
+         samples.reserve(eventSampleCount);
+         uint32_t previousTime=0U;
+         for(std::size_t point=0U;point<eventSampleCount;++point) {
+             const std::size_t flatIndex=sampleOffset+point;
+             const jlong millis=sampleTimeValues[flatIndex];
+             const float level=sampleLevelValues[flatIndex];
+             const uint64_t seconds=millis>0?
+                     static_cast<uint64_t>(millis/1000LL):0U;
+             if(!seconds||seconds>UINT32_MAX||!std::isfinite(level)||
+                level<0.0f||level>1.0f||
+                (point>0U&&seconds<=previousTime)) {
+                 eventSamplesValid=false;
+                 samples.clear();
+                 break;
+                 }
+             previousTime=static_cast<uint32_t>(seconds);
+             samples.push_back({previousTime,level});
+             }
+         sampleOffset+=eventSampleCount;
+         }
+     if(!forecastgraph::valid_kind(kindValues[index])||
+        startValues[index]<=0||endValues[index]<=startValues[index])
+         continue;
+     const uint64_t start=static_cast<uint64_t>(startValues[index]/1000LL);
+     const uint64_t end=static_cast<uint64_t>(endValues[index]/1000LL);
+     if(!start||start>UINT32_MAX||end>UINT32_MAX)
+         continue;
+     uint64_t peak=peakValues[index]>0?
+                   static_cast<uint64_t>(peakValues[index]/1000LL):start;
+     peak=std::clamp<uint64_t>(peak,start,end);
+     const float rawStrength=strengthValues[index];
+     const float rawConfidence=confidenceValues[index];
+     const float safeStrength=std::isfinite(rawStrength)?
+                              std::max(0.0f,rawStrength):0.0f;
+     const float safeConfidence=std::isfinite(rawConfidence)?
+                                forecastgraph::clamp01(rawConfidence):0.0f;
+     activities.push_back({
+             static_cast<forecastgraph::ActivityKind>(kindValues[index]),
+             static_cast<uint32_t>(start),static_cast<uint32_t>(peak),
+             static_cast<uint32_t>(end),safeStrength,safeConfidence,
+             eventSamplesValid?std::move(samples):
+                               std::vector<forecastgraph::ActivitySample>{}});
+     }
+ replaceForecastActivities(std::move(activities));
+ }
+
+extern "C" JNIEXPORT void JNICALL fromjava(
+        setForecastActivitiesRangedSampled)(JNIEnv* env,jclass obj,
+        jintArray kinds,jintArray identityHashes,jlongArray startsMs,
+        jlongArray onsetsMs,jlongArray peaksMs,jlongArray peakLowsMs,
+        jlongArray peakHighsMs,jlongArray endsMs,jlongArray endLowsMs,
+        jlongArray endHighsMs,jfloatArray strengths,jfloatArray confidences,
+        jfloatArray attributionConfidences,jintArray overlapCounts,
+        jintArray sampleCounts,jlongArray sampleTimesMs,
+        jfloatArray sampleLevels) {
+ constexpr jsize maximumActivities=1024;
+ constexpr jint maximumSamplesPerActivity=256;
+ constexpr uint64_t maximumTotalSamples=65'536U;
+ if(!kinds||!identityHashes||!startsMs||!onsetsMs||!peaksMs||
+    !peakLowsMs||!peakHighsMs||!endsMs||!endLowsMs||!endHighsMs||
+    !strengths||!confidences||!attributionConfidences||!overlapCounts) {
+     replaceForecastActivities({});
+     return;
+     }
+ const jsize count=env->GetArrayLength(kinds);
+ const auto sameLength=[&](jarray values) {
+     return values&&env->GetArrayLength(values)==count;
+     };
+ const bool metadataLengthsValid=count>=0&&count<=maximumActivities&&
+         sameLength(identityHashes)&&sameLength(startsMs)&&
+         sameLength(onsetsMs)&&sameLength(peaksMs)&&
+         sameLength(peakLowsMs)&&sameLength(peakHighsMs)&&
+         sameLength(endsMs)&&sameLength(endLowsMs)&&
+         sameLength(endHighsMs)&&sameLength(strengths)&&
+         sameLength(confidences)&&sameLength(attributionConfidences)&&
+         sameLength(overlapCounts);
+ if(!metadataLengthsValid) {
+     replaceForecastActivities({});
+     return;
+     }
+
+ std::vector<jint> kindValues(count),identityValues(count),
+                   overlapValues(count);
+ std::vector<jlong> startValues(count),onsetValues(count),peakValues(count),
+                    peakLowValues(count),peakHighValues(count),endValues(count),
+                    endLowValues(count),endHighValues(count);
+ std::vector<jfloat> strengthValues(count),confidenceValues(count),
+                     attributionValues(count);
+ if(count>0) {
+     env->GetIntArrayRegion(kinds,0,count,kindValues.data());
+     env->GetIntArrayRegion(identityHashes,0,count,identityValues.data());
+     env->GetIntArrayRegion(overlapCounts,0,count,overlapValues.data());
+     env->GetLongArrayRegion(startsMs,0,count,startValues.data());
+     env->GetLongArrayRegion(onsetsMs,0,count,onsetValues.data());
+     env->GetLongArrayRegion(peaksMs,0,count,peakValues.data());
+     env->GetLongArrayRegion(peakLowsMs,0,count,peakLowValues.data());
+     env->GetLongArrayRegion(peakHighsMs,0,count,peakHighValues.data());
+     env->GetLongArrayRegion(endsMs,0,count,endValues.data());
+     env->GetLongArrayRegion(endLowsMs,0,count,endLowValues.data());
+     env->GetLongArrayRegion(endHighsMs,0,count,endHighValues.data());
+     env->GetFloatArrayRegion(strengths,0,count,strengthValues.data());
+     env->GetFloatArrayRegion(confidences,0,count,confidenceValues.data());
+     env->GetFloatArrayRegion(attributionConfidences,0,count,
+                              attributionValues.data());
+     }
+
+ bool samplesValid=sampleCounts&&sampleTimesMs&&sampleLevels&&
+         env->GetArrayLength(sampleCounts)==count&&
+         env->GetArrayLength(sampleTimesMs)==env->GetArrayLength(sampleLevels);
+ std::vector<jint> countValues;
+ uint64_t totalSamples=0U;
+ if(samplesValid) {
+     countValues.resize(count);
+     if(count>0)
+         env->GetIntArrayRegion(sampleCounts,0,count,countValues.data());
+     for(const jint value:countValues) {
+         if(value<0||value==1||value>maximumSamplesPerActivity||
+            totalSamples>maximumTotalSamples-static_cast<uint64_t>(value)) {
+             samplesValid=false;
+             break;
+             }
+         totalSamples+=static_cast<uint64_t>(value);
+         }
+     if(samplesValid&&static_cast<uint64_t>(
+            env->GetArrayLength(sampleTimesMs))!=totalSamples)
+         samplesValid=false;
+     }
+ std::vector<jlong> sampleTimeValues;
+ std::vector<jfloat> sampleLevelValues;
+ if(samplesValid&&totalSamples>0U) {
+     const jsize flatCount=static_cast<jsize>(totalSamples);
+     sampleTimeValues.resize(flatCount);
+     sampleLevelValues.resize(flatCount);
+     env->GetLongArrayRegion(sampleTimesMs,0,flatCount,
+                             sampleTimeValues.data());
+     env->GetFloatArrayRegion(sampleLevels,0,flatCount,
+                              sampleLevelValues.data());
+     }
+
+ const auto optionalSeconds=[](const jlong millis) -> uint32_t {
+     if(millis<=0)
+         return 0U;
+     const uint64_t seconds=static_cast<uint64_t>(millis/1000LL);
+     return seconds>0U&&seconds<=UINT32_MAX?
+            static_cast<uint32_t>(seconds):0U;
+     };
+ std::vector<forecastgraph::Activity> activities;
+ activities.reserve(count);
+ std::size_t sampleOffset=0U;
+ for(jsize index=0;index<count;++index) {
+     const std::size_t eventSampleCount=samplesValid?
+             static_cast<std::size_t>(countValues[index]):0U;
+     std::vector<forecastgraph::ActivitySample> samples;
+     bool eventSamplesValid=samplesValid;
+     if(eventSamplesValid) {
+         samples.reserve(eventSampleCount);
+         uint32_t previousTime=0U;
+         for(std::size_t point=0U;point<eventSampleCount;++point) {
+             const std::size_t flatIndex=sampleOffset+point;
+             const uint32_t seconds=optionalSeconds(
+                     sampleTimeValues[flatIndex]);
+             const float level=sampleLevelValues[flatIndex];
+             if(!seconds||!std::isfinite(level)||level<0.0f||level>1.0f||
+                (point>0U&&seconds<=previousTime)) {
+                 eventSamplesValid=false;
+                 samples.clear();
+                 break;
+                 }
+             previousTime=seconds;
+             samples.push_back({seconds,level});
+             }
+         sampleOffset+=eventSampleCount;
+         }
+     if(!forecastgraph::valid_kind(kindValues[index])||
+        startValues[index]<=0||endValues[index]<=startValues[index])
+         continue;
+     const uint32_t start=optionalSeconds(startValues[index]);
+     const uint32_t end=optionalSeconds(endValues[index]);
+     if(!start||!end||end<=start)
+         continue;
+     uint32_t peak=optionalSeconds(peakValues[index]);
+     peak=std::clamp(peak?peak:start,start,end);
+     const float rawStrength=strengthValues[index];
+     const float rawConfidence=confidenceValues[index];
+     const float safeStrength=std::isfinite(rawStrength)?
+                              std::max(0.0f,rawStrength):0.0f;
+     const float safeConfidence=std::isfinite(rawConfidence)?
+                                forecastgraph::clamp01(rawConfidence):0.0f;
+     forecastgraph::Activity activity{
+             static_cast<forecastgraph::ActivityKind>(kindValues[index]),
+             start,peak,end,safeStrength,safeConfidence,
+             eventSamplesValid?std::move(samples):
+                               std::vector<forecastgraph::ActivitySample>{}};
+     activity.onset=optionalSeconds(onsetValues[index]);
+     activity.peakLow=optionalSeconds(peakLowValues[index]);
+     activity.peakHigh=optionalSeconds(peakHighValues[index]);
+     activity.endLow=optionalSeconds(endLowValues[index]);
+     activity.endHigh=optionalSeconds(endHighValues[index]);
+     activity.identity=identityValues[index];
+     activity.overlapCount=overlapValues[index];
+     activity.attributionConfidence=attributionValues[index];
+     activities.push_back(std::move(activity));
+     }
+ replaceForecastActivities(std::move(activities));
+ }
+
+extern "C" JNIEXPORT jlongArray JNICALL fromjava(forecastReadings)(JNIEnv* env,
+        jclass obj,jlong afterMs,jint requestedLimit) {
+ struct Reading {
+     uint32_t time;
+     int32_t mgdl;
+     float rate;
+     int sensorIndex;
+ };
+ const int limit=std::clamp<int>(requestedLimit,0,20'000);
+ if(limit==0||!sensors)
+     return env->NewLongArray(0);
+ const uint64_t after=afterMs>0?static_cast<uint64_t>(afterMs):0ULL;
+ const uint32_t latestActual=static_cast<uint32_t>(time(nullptr))+60U;
+ std::vector<Reading> readings;
+ for(int sensorIndex=0;sensorIndex<=sensors->last();++sensorIndex) {
+     const SensorGlucoseData *sensor=sensors->getSensorData(sensorIndex);
+     if(!sensor)
+         continue;
+     const auto polls=sensor->getPolldata();
+     for(const ScanData &poll:polls) {
+         // Dexcom's vendor prediction is stored in history, not polls. Reading
+         // only this stream plus the wall-clock guard keeps that synthetic
+         // future point out of model training/backfill.
+         if(!poll.t||poll.t>latestActual||!poll.valid(0))
+             continue;
+         const uint64_t millis=static_cast<uint64_t>(poll.t)*1000ULL;
+         if(millis<=after)
+             continue;
+         // Backend storage is deliberately raw and invariant. Calibration is
+         // a mutable presentation transform applied only while rendering the
+         // forecast, so changing calibration never rewrites model history.
+         readings.push_back({poll.t,poll.g,poll.getchange(),sensorIndex});
+         }
+     }
+ std::stable_sort(readings.begin(),readings.end(),[](const Reading &left,
+                                                      const Reading &right) {
+     if(left.time!=right.time)
+         return left.time<right.time;
+     return left.sensorIndex<right.sensorIndex;
+ });
+ std::vector<Reading> unique;
+ unique.reserve(readings.size());
+ for(const Reading &reading:readings) {
+     if(!unique.empty()&&unique.back().time==reading.time)
+         unique.back()=reading;
+     else
+         unique.push_back(reading);
+     }
+ // The Java checkpoint advances to the newest row returned by this call.
+ // Therefore pagination must return the earliest rows after `afterMs`;
+ // returning the newest tail would skip the intervening history forever.
+ if(unique.size()>static_cast<size_t>(limit))
+     unique.resize(static_cast<size_t>(limit));
+
+ std::vector<jlong> flat;
+ flat.reserve(unique.size()*3U);
+ for(const Reading &reading:unique) {
+     uint32_t rateBits=0U;
+     static_assert(sizeof(rateBits)==sizeof(reading.rate));
+     std::memcpy(&rateBits,&reading.rate,sizeof(rateBits));
+     flat.push_back(static_cast<jlong>(reading.time)*1000LL);
+     flat.push_back(static_cast<jlong>(reading.mgdl));
+     flat.push_back(static_cast<jlong>(static_cast<uint64_t>(rateBits)));
+     }
+ jlongArray result=env->NewLongArray(static_cast<jsize>(flat.size()));
+ if(result&&!flat.empty())
+     env->SetLongArrayRegion(result,0,static_cast<jsize>(flat.size()),flat.data());
+ return result;
+ }
+
+extern "C" JNIEXPORT jint JNICALL fromjava(timelineEventAt)(JNIEnv* env,
+        jclass obj,jfloat x,jfloat y) {
+ return intakeTimelineEventAt(x,y);
+ }
+
+extern "C" JNIEXPORT jintArray JNICALL fromjava(timelineEventsAt)(JNIEnv* env,
+        jclass obj,jfloat x,jfloat y) {
+ const std::vector<std::int32_t> keys=intakeTimelineEventsAt(x,y);
+ jintArray result=env->NewIntArray(static_cast<jsize>(keys.size()));
+ if(result&&!keys.empty()) {
+     static_assert(sizeof(jint)==sizeof(std::int32_t));
+     env->SetIntArrayRegion(result,0,static_cast<jsize>(keys.size()),
+                            reinterpret_cast<const jint*>(keys.data()));
+     }
+ return result;
  }
 
 
@@ -483,6 +1035,9 @@ extern "C" JNIEXPORT void JNICALL fromjava(flingX) (JNIEnv *env, jclass clazz,jf
 extern "C" JNIEXPORT jint JNICALL fromjava(translate) (JNIEnv *env, jclass clazz,jfloat dx,jfloat dy,jfloat yold,jfloat y) {
  return appcurve.translate(dx,dy,yold,y);
  }
+extern "C" JNIEXPORT void JNICALL fromjava(lockGraphYRangeForPan) (JNIEnv *env, jclass clazz) {
+ appcurve.lockGraphYRangeForPan();
+ }
 extern "C" JNIEXPORT jint JNICALL fromjava(mouseScale)(JNIEnv *env, jclass clazz,jfloat dx,jfloat xold, jfloat x){
  return  appcurve.mouseScale(dx,xold,x);
  }
@@ -518,6 +1073,10 @@ extern "C" JNIEXPORT jlong JNICALL fromjava(tap) (JNIEnv *env, jclass clazz,jflo
 int64_t longpress(float x,float y);
 extern "C" JNIEXPORT jlong JNICALL fromjava(longpress) (JNIEnv *env, jclass clazz,jfloat x,jfloat y) {
  return appcurve.longpress(x,y);
+ }
+
+extern "C" JNIEXPORT jlong JNICALL fromjava(graphscrub) (JNIEnv *env, jclass clazz,jfloat x,jfloat y) {
+ return appcurve.graphscrub(x,y);
  }
 
 #include "numhit.hpp"
@@ -859,8 +1418,9 @@ extern "C" JNIEXPORT void JNICALL fromjava(setsystemui)(JNIEnv *env, jclass thiz
  }
 
 extern "C" JNIEXPORT void JNICALL fromjava(settonow)(JNIEnv *env, jclass thiz) {
- auto max=time(nullptr);
- appcurve.setstarttime(max-appcurve.duration*3/5);
+ appcurve.unlockGraphYRange();
+ const auto now=static_cast<uint32_t>(time(nullptr));
+ appcurve.setLiveWindow(now);
  }
 
 

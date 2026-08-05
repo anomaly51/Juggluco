@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/intake_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/modern_secondary_background"
+    android:clickable="true"
+    android:focusable="true">
+
+    <LinearLayout
+        android:id="@+id/intake_page"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp">
+            <ImageButton
+                android:id="@+id/intake_back_button"
+                android:layout_width="46dp"
+                android:layout_height="46dp"
+                android:background="@drawable/intake_button_secondary"
+                android:contentDescription="@string/intake_back"
+                android:padding="12dp"
+                android:rotation="180"
+                android:src="@drawable/modern_secondary_chevron" />
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/insulin_form_title"
+                    android:textColor="@color/modern_secondary_text_primary"
+                    android:textSize="19sp"
+                    android:textStyle="bold" />
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:maxLines="1"
+                    android:text="@string/insulin_form_subtitle"
+                    android:textColor="@color/modern_secondary_text_muted"
+                    android:textSize="10sp" />
+            </LinearLayout>
+            <TextView
+                android:id="@+id/intake_backend_status"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:background="@drawable/intake_chip"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:minWidth="116dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:text="@string/intake_backend_checking"
+                android:textColor="@color/modern_secondary_text_secondary"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginStart="16dp"
+            android:layout_marginTop="6dp"
+            android:layout_marginEnd="16dp"
+            android:orientation="horizontal">
+            <TextView
+                android:id="@+id/intake_time"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/intake_button_secondary"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:singleLine="true"
+                android:textColor="@color/modern_secondary_text_primary"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+            <Spinner
+                android:id="@+id/insulin_product_spinner"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:background="@drawable/intake_button_secondary"
+                android:paddingStart="10dp"
+                android:paddingEnd="6dp"
+                android:popupBackground="@color/modern_secondary_surface_raised"
+                android:spinnerMode="dropdown" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginStart="16dp"
+            android:layout_marginTop="7dp"
+            android:layout_marginEnd="16dp"
+            android:layout_marginBottom="8dp"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/insulin_dose_prompt"
+                    android:textColor="@color/modern_secondary_text_secondary"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+                <EditText
+                    android:id="@+id/insulin_dose"
+                    android:layout_width="match_parent"
+                    android:layout_height="68dp"
+                    android:layout_marginTop="5dp"
+                    android:background="@drawable/intake_surface"
+                    android:gravity="center"
+                    android:hint="@string/insulin_dose_hint"
+                    android:imeOptions="actionDone|flagNoExtractUi"
+                    android:inputType="numberDecimal"
+                    android:maxLines="1"
+                    android:padding="8dp"
+                    android:selectAllOnFocus="true"
+                    android:textColor="@color/modern_secondary_text_primary"
+                    android:textColorHint="@color/modern_secondary_text_muted"
+                    android:textSize="32sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+            <Button
+                android:id="@+id/insulin_save"
+                android:layout_width="0dp"
+                android:layout_height="54dp"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:background="@drawable/intake_button_primary"
+                android:stateListAnimator="@null"
+                android:text="@string/insulin_save"
+                android:textAllCaps="false"
+                android:textColor="@color/modern_secondary_on_accent"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

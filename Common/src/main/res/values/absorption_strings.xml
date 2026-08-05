@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="carb_absorption_label">ESTIMATED ABSORPTION SPEED</string>
+    <string name="carb_absorption_not_estimated">Not estimated</string>
+    <string name="carb_absorption_slow">Slow</string>
+    <string name="carb_absorption_medium">Medium</string>
+    <string name="carb_absorption_fast">Fast</string>
+    <string name="carb_absorption_value">%1$s · %2$d/100</string>
+    <string name="carb_absorption_summary">Estimated carbohydrate absorption: %1$s</string>
+    <string name="carb_absorption_peak">peak around %1$d min</string>
+    <string name="carb_absorption_duration">duration around %1$d min</string>
+    <string name="carb_absorption_confidence">confidence %1$d%%</string>
+    <string name="carb_absorption_note">Approximate estimate of carbohydrate absorption speed, not a glycemic-index measurement.</string>
+    <string name="carb_absorption_forecast_explanation">Estimated carbohydrate absorption speed: %1$s. The curve shows how its modeled glucose contribution changes over time.</string>
+</resources>

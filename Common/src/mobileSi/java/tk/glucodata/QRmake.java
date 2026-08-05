@@ -22,16 +22,18 @@
 
 package tk.glucodata;
 
-import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
-import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 import static tk.glucodata.help.help;
 import static tk.glucodata.settings.Settings.removeContentView;
-import static tk.glucodata.util.getbutton;
 
 import android.graphics.Bitmap;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.MultiFormatWriter;
@@ -39,15 +41,6 @@ import com.google.zxing.WriterException;
 import com.google.zxing.common.BitMatrix;
 import com.journeyapps.barcodescanner.BarcodeEncoder;
 
-import tk.glucodata.GlucoseCurve;
-import tk.glucodata.Layout;
-import tk.glucodata.MainActivity;
-import tk.glucodata.R;
-
-/*
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
-*/
 public class QRmake {
 static private final String LOG_ID="QRmake";
 private  static Bitmap bitmap(String myStringToEncode,int width,int height) throws WriterException {
@@ -56,48 +49,50 @@ private  static Bitmap bitmap(String myStringToEncode,int width,int height) thro
             BarcodeEncoder barcodeEncoder = new BarcodeEncoder();
             return barcodeEncoder.createBitmap(bitMatrix);
             }
-/*
- public   static ImageBitmap imagebitmap(String myStringToEncode) throws WriterException {
-        return bitmap(name).asImageBitmap();
-        } */
 public static void show(MainActivity act, String code) {
-     var image=new ImageView(act);
-     int height= GlucoseCurve.getheight()-MainActivity.systembarTop-MainActivity.systembarBottom;
+     ImageView image=new ImageView(act);
+     int height=GlucoseCurve.getheight()-MainActivity.systembarTop-MainActivity.systembarBottom;
      int width=GlucoseCurve.getwidth()-MainActivity.systembarLeft-MainActivity.systembarRight;
-     int qrWidth=(int)(width*.7f);
-     int qrHeight=Math.min(qrWidth,height);
-
-//     int qrWidth=(int)(width*.7f);
+     int availableWidth=Math.max(ClinicalUi.dp(act,180),width-ClinicalUi.dp(act,72));
+     int availableHeight=Math.max(ClinicalUi.dp(act,180),height-ClinicalUi.dp(act,300));
+     int qrSize=Math.min(availableWidth,availableHeight);
      try {
-         image.setImageBitmap(bitmap(code,qrHeight,qrHeight));
+         image.setImageBitmap(bitmap(code,qrSize,qrSize));
          }
      catch(Throwable th) {
         Log.stack(LOG_ID,"setImageBitmap",th);
         }
-     var close=getbutton(act, R.string.closename);
-     close.setOnClickListener(v -> {
-        MainActivity.doonback();
-        });
-   final var help=getbutton(act,R.string.helpname);
-   help.setOnClickListener(v-> help(R.string.QRmirror,act));
-   var buttonlayout=new Layout(act,(x, w, h)->{
-         return new int[] {w,h};
-           },new View[]{help},new View[]{close});
+     image.setAdjustViewBounds(true);
+     image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+     image.setContentDescription(act.getString(R.string.connection_qr_title));
 
-     buttonlayout.setLayoutParams(new ViewGroup.LayoutParams(MATCH_PARENT , MATCH_PARENT));
-     Layout.getMargins(close).bottomMargin=(int)(height*.35f);
-     Layout.getMargins(help).topMargin=(int)(height*.15f);
-     var layout=new Layout(act,(x, w, h)->{
-         return new int[] {w,h};
-           },new View[]{image,buttonlayout});
-      layout.setBackgroundColor( Applic.backgroundcolor);
-    layout.usebaseline=false;
-      var hor=(int)((height-qrHeight)*.5f);
-      var ver =(int)((width-qrWidth)*.4f);
+     Button close=ConnectionUi.headerButton(act,R.string.closename);
+     LinearLayout helpRow=ClinicalUi.actionRow(act,act.getString(R.string.helpname),
+           act.getString(R.string.connection_qr_help_hint));
+     FrameLayout qrCard=new FrameLayout(act);
+     qrCard.setBackground(ClinicalUi.surface(act,true,false));
+     int cardPadding=ClinicalUi.dp(act,16);
+     qrCard.setPadding(cardPadding,cardPadding,cardPadding,cardPadding);
+     FrameLayout.LayoutParams imageParams=new FrameLayout.LayoutParams(qrSize,qrSize,
+           Gravity.CENTER);
+     qrCard.addView(image,imageParams);
 
-      layout.setPadding(MainActivity.systembarLeft+ver,MainActivity.systembarTop+hor,MainActivity.systembarRight+ver,MainActivity.systembarBottom+hor);
-      act.addMyContentView(layout, new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT));
-      MainActivity.setonback(()-> removeContentView(layout));
+     LinearLayout content=ConnectionUi.content(act);
+     content.addView(ClinicalUi.header(act,
+           act.getString(R.string.connection_qr_title),close));
+     content.addView(ConnectionUi.intro(act,R.string.connection_qr_intro));
+     LinearLayout.LayoutParams qrParams=new LinearLayout.LayoutParams(
+           ViewGroup.LayoutParams.MATCH_PARENT,qrSize+cardPadding*2);
+     qrParams.topMargin=ClinicalUi.dp(act,18);
+     content.addView(qrCard,qrParams);
+     content.addView(ClinicalUi.sectionLabel(act,
+           act.getString(R.string.connection_support_section)));
+     content.addView(ClinicalUi.card(act,helpRow));
+     ScrollView screen=ConnectionUi.screen(act,content);
+     ConnectionUi.fullScreen(act,screen);
+     MainActivity.setonback(()->removeContentView(screen));
+     close.setOnClickListener(view->MainActivity.doonback());
+     helpRow.setOnClickListener(view->help(R.string.QRmirror,act));
       }
 
    }

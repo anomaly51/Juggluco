@@ -1,0 +1,494 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/modern_dashboard_chrome"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="?android:attr/windowBackground"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:importantForAccessibility="auto"
+    android:theme="@style/ModernDashboardThemeOverlay">
+
+    <LinearLayout
+        android:id="@+id/modern_dashboard_shell"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:baselineAligned="false"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:id="@+id/modern_dashboard_app_bar"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:gravity="center_vertical"
+            android:minHeight="52dp"
+            android:orientation="horizontal"
+            android:paddingStart="16dp"
+            android:paddingEnd="12dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif-medium"
+                    android:includeFontPadding="false"
+                    android:text="@string/dashboard_today"
+                    android:textColor="?android:attr/textColorPrimary"
+                    android:textSize="19sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/modern_dashboard_date"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:fontFamily="sans-serif"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:textColor="?android:attr/textColorSecondary"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <FrameLayout
+                android:id="@+id/modern_dashboard_backend_action"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:layout_marginEnd="4dp"
+                android:clickable="true"
+                android:contentDescription="@string/dashboard_backend_settings"
+                android:focusable="true"
+                android:minWidth="88dp"
+                android:minHeight="48dp">
+
+                <TextView
+                    android:id="@+id/modern_dashboard_backend_status"
+                    android:layout_width="wrap_content"
+                    android:layout_height="22dp"
+                    android:layout_gravity="center"
+                    android:background="@drawable/modern_dashboard_status_chip"
+                    android:drawableStart="@drawable/modern_dashboard_status_dot"
+                    android:drawablePadding="4dp"
+                    android:drawableTint="@color/modern_dashboard_status_text"
+                    android:ellipsize="end"
+                    android:fontFamily="sans-serif-medium"
+                    android:gravity="center"
+                    android:importantForAccessibility="no"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:minHeight="22dp"
+                    android:paddingStart="7dp"
+                    android:paddingEnd="7dp"
+                    android:text="@string/dashboard_backend_checking"
+                    android:textColor="@color/modern_dashboard_status_text"
+                    android:textSize="9sp" />
+            </FrameLayout>
+
+            <Button
+                android:id="@+id/modern_dashboard_sensor"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:background="@drawable/modern_dashboard_hero_action"
+                android:contentDescription="@string/dashboard_sensor_status"
+                android:drawableStart="@drawable/modern_dashboard_sensor"
+                android:drawablePadding="5dp"
+                android:drawableTint="?attr/colorControlActivated"
+                android:gravity="center"
+                android:minWidth="92dp"
+                android:minHeight="48dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:stateListAnimator="@null"
+                android:text="@string/dashboard_sensor_status"
+                android:textAllCaps="false"
+                android:textColor="?attr/colorControlActivated"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/modern_dashboard_content"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:baselineAligned="false"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:id="@+id/modern_dashboard_body"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:baselineAligned="false"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:orientation="vertical"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="8dp">
+
+                <LinearLayout
+                    android:id="@+id/modern_dashboard_hero"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/modern_dashboard_hero_card"
+                    android:clipToPadding="false"
+                    android:gravity="center_vertical"
+                    android:orientation="vertical"
+                    android:paddingStart="16dp"
+                    android:paddingTop="12dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="13dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:minHeight="24dp"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:fontFamily="sans-serif-medium"
+                            android:includeFontPadding="false"
+                            android:letterSpacing="0.06"
+                            android:maxLines="1"
+                            android:text="@string/dashboard_current_glucose"
+                            android:textAllCaps="true"
+                            android:textColor="?android:attr/textColorSecondary"
+                            android:textSize="10sp" />
+
+                        <TextView
+                            android:id="@+id/modern_dashboard_status"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/modern_dashboard_status_chip"
+                            android:drawableStart="@drawable/modern_dashboard_status_dot"
+                            android:drawablePadding="5dp"
+                            android:drawableTint="@color/modern_dashboard_status_text"
+                            android:gravity="center"
+                            android:minWidth="64dp"
+                            android:minHeight="26dp"
+                            android:paddingStart="9dp"
+                            android:paddingEnd="9dp"
+                            android:text="@string/dashboard_status_loading"
+                            android:textColor="@color/modern_dashboard_status_text"
+                            android:textSize="11sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/modern_dashboard_hero_content"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:baselineAligned="false"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <LinearLayout
+                            android:id="@+id/modern_dashboard_reading_column"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical">
+
+                            <LinearLayout
+                                android:id="@+id/modern_dashboard_hero_reading"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:gravity="start|center_vertical"
+                                android:importantForAccessibility="yes"
+                                android:minHeight="65dp"
+                                android:orientation="horizontal">
+
+                                <TextView
+                                    android:id="@+id/modern_dashboard_value"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:fontFamily="sans-serif-light"
+                                    android:includeFontPadding="false"
+                                    android:maxLines="1"
+                                    android:text="@string/dashboard_empty_value"
+                                    android:textColor="?android:attr/textColorPrimary"
+                                    android:textSize="62sp" />
+
+                                <TextView
+                                    android:id="@+id/modern_dashboard_trend"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="7dp"
+                                    android:includeFontPadding="false"
+                                    android:textColor="?attr/colorControlActivated"
+                                    android:textSize="34sp"
+                                    android:textStyle="bold"
+                                    android:visibility="gone" />
+
+                                <TextView
+                                    android:id="@+id/modern_dashboard_unit"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_gravity="bottom"
+                                    android:layout_marginStart="7dp"
+                                    android:layout_marginBottom="10dp"
+                                    android:fontFamily="sans-serif-medium"
+                                    android:maxLines="1"
+                                    android:textColor="?android:attr/textColorSecondary"
+                                    android:textSize="12sp" />
+                            </LinearLayout>
+
+                            <LinearLayout
+                                android:id="@+id/modern_dashboard_meta"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal">
+
+                                <TextView
+                                    android:id="@+id/modern_dashboard_range_state"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:fontFamily="sans-serif-medium"
+                                    android:includeFontPadding="false"
+                                    android:maxLines="1"
+                                    android:text="@string/dashboard_state_unknown"
+                                    android:textColor="?android:attr/textColorSecondary"
+                                    android:textSize="12sp"
+                                    android:textStyle="bold" />
+
+                                <View
+                                    android:id="@+id/modern_dashboard_meta_separator"
+                                    android:layout_width="3dp"
+                                    android:layout_height="3dp"
+                                    android:layout_marginStart="8dp"
+                                    android:layout_marginEnd="8dp"
+                                    android:background="@drawable/modern_dashboard_status_dot"
+                                    android:backgroundTint="?android:attr/textColorSecondary" />
+
+                                <TextView
+                                    android:id="@+id/modern_dashboard_freshness"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:fontFamily="sans-serif"
+                                    android:includeFontPadding="false"
+                                    android:maxLines="2"
+                                    android:text="@string/dashboard_no_current_reading"
+                                    android:textColor="@color/modern_dashboard_freshness_text"
+                                    android:textSize="12sp"
+                                    android:visibility="gone" />
+                            </LinearLayout>
+                        </LinearLayout>
+                    </LinearLayout>
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/modern_dashboard_graph_card"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/modern_dashboard_graph_card"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:id="@+id/modern_dashboard_graph_header"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:fontFamily="sans-serif-medium"
+                            android:includeFontPadding="false"
+                            android:text="@string/dashboard_graph_title"
+                            android:textColor="?android:attr/textColorPrimary"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <Button
+                            android:id="@+id/modern_dashboard_forecast"
+                            android:layout_width="wrap_content"
+                            android:layout_height="48dp"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginEnd="4dp"
+                            android:background="@drawable/forecast_dashboard_chip"
+                            android:ellipsize="end"
+                            android:fontFamily="sans-serif-medium"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:maxWidth="88dp"
+                            android:minHeight="48dp"
+                            android:minWidth="64dp"
+                            android:paddingStart="7dp"
+                            android:paddingEnd="7dp"
+                            android:stateListAnimator="@null"
+                            android:text="@string/forecast_dashboard_loading"
+                            android:textAllCaps="false"
+                            android:textColor="@color/modern_secondary_text_secondary"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/modern_dashboard_target_range"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:drawableStart="@drawable/modern_dashboard_status_dot"
+                            android:drawablePadding="6dp"
+                            android:drawableTint="?attr/colorControlActivated"
+                            android:fontFamily="sans-serif-medium"
+                            android:includeFontPadding="false"
+                            android:ellipsize="end"
+                            android:maxWidth="128dp"
+                            android:maxLines="1"
+                            android:text="@string/dashboard_target_unavailable"
+                            android:textColor="?android:attr/textColorSecondary"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/modern_dashboard_graph_controls"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp">
+
+                        <TextView
+                            android:id="@+id/modern_dashboard_graph_hint"
+                            android:layout_width="0dp"
+                            android:layout_height="0dp"
+                            android:text="@string/dashboard_graph_hint"
+                            android:visibility="gone" />
+
+                        <HorizontalScrollView
+                            android:layout_width="0dp"
+                            android:layout_height="48dp"
+                            android:layout_weight="1"
+                            android:clipToPadding="false"
+                            android:fillViewport="false"
+                            android:overScrollMode="never"
+                            android:scrollbars="none">
+
+                            <LinearLayout
+                                android:id="@+id/modern_dashboard_ranges"
+                                android:layout_width="wrap_content"
+                                android:layout_height="48dp"
+                                android:background="@drawable/modern_dashboard_range_track"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal">
+
+                                <Button
+                                    android:id="@+id/modern_dashboard_range_3h"
+                                    style="@style/ModernDashboardRangeChip"
+                                    android:contentDescription="@string/dashboard_show_3_hours"
+                                    android:text="@string/dashboard_3_hours" />
+
+                                <Button
+                                    android:id="@+id/modern_dashboard_range_6h"
+                                    style="@style/ModernDashboardRangeChip"
+                                    android:contentDescription="@string/dashboard_show_6_hours"
+                                    android:text="@string/dashboard_6_hours" />
+
+                                <Button
+                                    android:id="@+id/modern_dashboard_range_8h"
+                                    style="@style/ModernDashboardRangeChip"
+                                    android:contentDescription="@string/dashboard_show_8_hours"
+                                    android:text="@string/dashboard_8_hours" />
+
+                                <Button
+                                    android:id="@+id/modern_dashboard_range_12h"
+                                    style="@style/ModernDashboardRangeChip"
+                                    android:contentDescription="@string/dashboard_show_12_hours"
+                                    android:text="@string/dashboard_12_hours" />
+
+                                <Button
+                                    android:id="@+id/modern_dashboard_range_24h"
+                                    style="@style/ModernDashboardRangeChip"
+                                    android:contentDescription="@string/dashboard_show_24_hours"
+                                    android:text="@string/dashboard_24_hours" />
+                            </LinearLayout>
+                        </HorizontalScrollView>
+
+                        <Button
+                            android:id="@+id/modern_dashboard_now"
+                            android:layout_width="wrap_content"
+                            android:layout_height="48dp"
+                            android:background="@drawable/modern_dashboard_secondary_action"
+                            android:contentDescription="@string/now"
+                            android:drawableStart="@drawable/modern_dashboard_now"
+                            android:drawablePadding="3dp"
+                            android:drawableTint="?attr/colorControlActivated"
+                            android:gravity="center"
+                            android:minWidth="62dp"
+                            android:minHeight="48dp"
+                            android:paddingStart="5dp"
+                            android:paddingEnd="5dp"
+                            android:stateListAnimator="@null"
+                            android:text="@string/now"
+                            android:textAllCaps="false"
+                            android:textColor="?attr/colorControlActivated"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <FrameLayout
+                        android:id="@+id/modern_dashboard_graph_host"
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:clipChildren="true"
+                        android:clipToPadding="true" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/modern_dashboard_actions"
+                android:layout_width="match_parent"
+                android:layout_height="64dp"
+                android:background="@drawable/modern_dashboard_nav_background"
+                android:baselineAligned="false"
+                android:gravity="center"
+                android:importantForAccessibility="auto"
+                android:orientation="horizontal"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp">
+
+                <Button
+                    android:id="@+id/modern_dashboard_overview"
+                    style="@style/ModernDashboardNavigationItem"
+                    android:contentDescription="@string/dashboard_overview"
+                    android:drawableTop="@drawable/modern_dashboard_overview"
+                    android:text="@string/dashboard_overview" />
+
+                <Button
+                    android:id="@+id/modern_dashboard_add_intake"
+                    style="@style/ModernDashboardNavigationItem"
+                    android:contentDescription="@string/intake_add_short"
+                    android:drawableTop="@drawable/modern_dashboard_intake"
+                    android:drawableTint="@null"
+                    android:text="@string/intake_add_short"
+                    android:textColor="@color/modern_dashboard_nav_text" />
+
+                <Button
+                    android:id="@+id/modern_dashboard_menu"
+                    style="@style/ModernDashboardNavigationItem"
+                    android:contentDescription="@string/dashboard_more"
+                    android:drawableTop="@drawable/modern_dashboard_menu"
+                    android:text="@string/dashboard_more" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

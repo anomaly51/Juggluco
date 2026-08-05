@@ -2687,13 +2687,11 @@ way as the history values of Libre sensors are shown in Juggluco. You
 can also turn them off by unchecking right middle menu→History. In
 Juggluco they are not used for alarms, you can just display them to
 judge how well they predict.</p>
-<h2 class="western">Invert screen</h2>
-<p style="margin-bottom: 0cm">Turn the display upside down. It is
-switched on by default, because otherwise I\'d sometimes accidentally
-touch OK while scanning a sensor.</p>
-<p style="margin-bottom: 0cm">Some people ask for portrait mode, but
-I have turned that off, because it is totally inappropriate for the
-display of the glucose graph.</p>
+<h2 class="western">Screen orientation</h2>
+<p style="margin-bottom: 0cm">Juggluco follows your device orientation
+and supports both portrait and landscape layouts. If the screen does
+not rotate, enable Auto-rotate in Android or change the device rotation
+lock.</p>
 <h2 class="western"><a href="https://www.juggluco.nl/Jugglucohelp/IOBhelp.html">Insulin
 onboard (IOB)</a></h2>
 <p><span lang="en-US">IOB is a measure of how much insulin remains

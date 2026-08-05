@@ -38,6 +38,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.GridLayout;
 import android.widget.HorizontalScrollView;
+import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -76,6 +77,987 @@ import static tk.glucodata.util.getlabel;
 
 class Meal {
 private static final String LOG_ID="Meal";
+private static Button clinicalListButton(ViewGroup parent) {
+    Button view=ClinicalUi.button(parent.getContext(),"",ClinicalUi.ButtonRole.SECONDARY);
+    view.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+    view.setTextSize(TypedValue.COMPLEX_UNIT_SP,16f);
+    view.setSingleLine(false);
+    view.setMinHeight(ClinicalUi.dp(parent.getContext(),58));
+    view.setBackground(ClinicalUi.surface(parent.getContext(),false,true));
+    RecyclerView.LayoutParams params=new RecyclerView.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    params.bottomMargin=ClinicalUi.dp(parent.getContext(),8);
+    view.setLayoutParams(params);
+    return view;
+    }
+
+private static LinearLayout phoneContent(MainActivity act) {
+    LinearLayout content=ClinicalUi.verticalContent(act);
+    content.setPadding(MainActivity.systembarLeft+ClinicalUi.dp(act,20),
+            MainActivity.systembarTop+ClinicalUi.dp(act,8),
+            MainActivity.systembarRight+ClinicalUi.dp(act,20),
+            MainActivity.systembarBottom+ClinicalUi.dp(act,28));
+    return content;
+    }
+
+private static Layout phoneRoot(MainActivity act,View screen) {
+    screen.setLayoutParams(new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+    screen.setMinimumHeight(Math.max(1,GlucoseCurve.getheight()));
+    Layout root=new Layout(act,false,(layout,width,height)->new int[]{width,height},
+            new View[]{screen});
+    root.useMatch=true;
+    root.setDistributeExtraSpace(false);
+    root.setBackgroundColor(ClinicalUi.window(act));
+    return root;
+    }
+
+private static void showPhoneRoot(MainActivity act,Layout root) {
+    act.addMyContentView(root,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT),false);
+    }
+
+private static Button phoneHeaderButton(MainActivity act,int text) {
+    return ClinicalUi.button(act,act.getString(text),ClinicalUi.ButtonRole.SECONDARY);
+    }
+
+private static void stylePhoneInput(MainActivity act,EditText field) {
+    field.setSingleLine(true);
+    field.setTextColor(ClinicalUi.primaryText(act));
+    field.setHintTextColor(ClinicalUi.secondaryText(act));
+    field.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
+    field.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
+    field.setMinHeight(ClinicalUi.dp(act,52));
+    field.setPaddingRelative(ClinicalUi.dp(act,14),0,ClinicalUi.dp(act,14),0);
+    field.setBackground(ClinicalUi.surface(act,false,true));
+    }
+
+private static TextView phoneError(MainActivity act) {
+    TextView error=ClinicalUi.body(act,"");
+    error.setTextColor(ClinicalUi.danger(act));
+    error.setPadding(ClinicalUi.dp(act,16),ClinicalUi.dp(act,12),
+            ClinicalUi.dp(act,16),ClinicalUi.dp(act,12));
+    error.setBackground(ClinicalUi.surface(act,false,false));
+    error.setVisibility(GONE);
+    return error;
+    }
+
+private static void setPhoneError(TextView error,CharSequence message) {
+    boolean empty=message==null||message.length()==0;
+    error.setText(empty?"":message);
+    error.setVisibility(empty?GONE:VISIBLE);
+    if(!empty) {
+        error.announceForAccessibility(message);
+        }
+    }
+
+private static LinearLayout phoneFieldCard(MainActivity act,CharSequence label,View field) {
+    return ClinicalUi.card(act,ClinicalUi.fieldRow(act,label,field));
+    }
+
+private static TextView phoneValue(MainActivity act,CharSequence text) {
+    TextView value=new TextView(act);
+    value.setText(text);
+    value.setTextColor(ClinicalUi.primaryText(act));
+    value.setTextSize(TypedValue.COMPLEX_UNIT_SP,22.0f);
+    value.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+    value.setPadding(ClinicalUi.dp(act,16),ClinicalUi.dp(act,14),
+            ClinicalUi.dp(act,16),ClinicalUi.dp(act,14));
+    value.setBackground(ClinicalUi.surface(act,false,false));
+    return value;
+    }
+
+private static boolean hasText(EditText field) {
+    return field.getText()!=null&&!field.getText().toString().trim().isEmpty();
+    }
+
+private static void phoneAskRound(MainActivity act,Runnable runner,View parent) {
+    EnableControls(parent,false);
+    EditText edit=new EditText(act);
+    edit.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);
+    edit.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI|
+            EditorInfo.IME_FLAG_NO_FULLSCREEN|EditorInfo.IME_ACTION_DONE);
+    edit.setText(Float.toString(Natives.getroundto()));
+    edit.setHint(R.string.meal_modern_rounding_hint);
+    stylePhoneInput(act,edit);
+    Button cancel=phoneHeaderButton(act,R.string.cancel);
+    Button save=ClinicalUi.button(act,act.getString(R.string.save),
+            ClinicalUi.ButtonRole.PRIMARY);
+    TextView error=phoneError(act);
+    LinearLayout content=phoneContent(act);
+    content.addView(ClinicalUi.header(act,
+            act.getString(R.string.meal_modern_rounding_title),cancel));
+    TextView intro=ClinicalUi.body(act,
+            act.getString(R.string.meal_modern_rounding_intro));
+    intro.setPadding(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),0);
+    content.addView(intro);
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_rounding_section)));
+    content.addView(phoneFieldCard(act,act.getString(R.string.roundto),edit));
+    LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    errorParams.topMargin=ClinicalUi.dp(act,12);
+    content.addView(error,errorParams);
+    LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    saveParams.topMargin=ClinicalUi.dp(act,18);
+    content.addView(save,saveParams);
+    ScrollView screen=ClinicalUi.scrollScreen(act,content);
+    Layout root=phoneRoot(act,screen);
+    showPhoneRoot(act,root);
+    Runnable close=()->{
+        help.hidekeyboard(act);
+        removeContentView(root);
+        EnableControls(parent,true);
+        act.hideSystemUI();
+        };
+    setonback(close);
+    cancel.setOnClickListener(view->doonback());
+    save.setOnClickListener(view->{
+        if(!hasText(edit)) {
+            setPhoneError(error,act.getString(R.string.meal_modern_error_rounding));
+            return;
+            }
+        float value=edit2float(edit);
+        if(Float.isNaN(value)||Float.isInfinite(value)||value<0.0f) {
+            setPhoneError(error,act.getString(R.string.meal_modern_error_rounding));
+            return;
+            }
+        setPhoneError(error,null);
+        doonback();
+        Natives.setroundto(value);
+        runner.run();
+        });
+    edit.requestFocus();
+    }
+
+private static Layout phoneMealConstructor(final NumberView numb,MainActivity act,
+        int mealptr,ObjIntConsumer<Float> give,Runnable endrun) {
+    int[] mealptrar={mealptr};
+    float[] carbs={Natives.carbinmeal(mealptr)};
+    give.accept(carbs[0],mealptr);
+
+    Button close=phoneHeaderButton(act,R.string.closename);
+    Button add=ClinicalUi.button(act,act.getString(R.string.meal_modern_add_item),
+            ClinicalUi.ButtonRole.PRIMARY);
+    Button rounding=ClinicalUi.button(act,"",ClinicalUi.ButtonRole.SECONDARY);
+    Button repeat=ClinicalUi.button(act,act.getString(R.string.meal_modern_repeat),
+            ClinicalUi.ButtonRole.SECONDARY);
+    Button helpButton=ClinicalUi.button(act,act.getString(R.string.helpname),
+            ClinicalUi.ButtonRole.SECONDARY);
+    TextView total=phoneValue(act,"");
+    TextView empty=ClinicalUi.body(act,
+            act.getString(R.string.meal_modern_empty));
+    empty.setGravity(Gravity.CENTER);
+    empty.setPadding(ClinicalUi.dp(act,16),ClinicalUi.dp(act,24),
+            ClinicalUi.dp(act,16),ClinicalUi.dp(act,24));
+    empty.setBackground(ClinicalUi.surface(act,false,false));
+
+    RecyclerView list=new RecyclerView(act);
+    list.setLayoutManager(new LinearLayoutManager(act));
+    list.setClipToPadding(false);
+    list.setPadding(0,ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,8));
+
+    LinearLayout screen=new LinearLayout(act);
+    screen.setOrientation(LinearLayout.VERTICAL);
+    screen.setBackgroundColor(ClinicalUi.window(act));
+    screen.setPadding(MainActivity.systembarLeft+ClinicalUi.dp(act,20),
+            MainActivity.systembarTop+ClinicalUi.dp(act,8),
+            MainActivity.systembarRight+ClinicalUi.dp(act,20),
+            MainActivity.systembarBottom+ClinicalUi.dp(act,16));
+    screen.addView(ClinicalUi.header(act,
+            act.getString(R.string.meal_modern_title),close));
+    TextView intro=ClinicalUi.body(act,
+            act.getString(R.string.meal_modern_intro));
+    intro.setPadding(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),0);
+    screen.addView(intro);
+    screen.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_total_section)));
+    screen.addView(total,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    screen.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_items_section)));
+    screen.addView(empty,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    screen.addView(list,new LinearLayout.LayoutParams(MATCH_PARENT,0,1.0f));
+    screen.addView(add,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    LinearLayout.LayoutParams secondaryParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    secondaryParams.topMargin=ClinicalUi.dp(act,8);
+    screen.addView(rounding,secondaryParams);
+    LinearLayout.LayoutParams repeatParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    repeatParams.topMargin=ClinicalUi.dp(act,8);
+    screen.addView(repeat,repeatParams);
+    LinearLayout.LayoutParams helpParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    helpParams.topMargin=ClinicalUi.dp(act,8);
+    screen.addView(helpButton,helpParams);
+
+    Layout root=phoneRoot(act,screen);
+    Consptr selected=new Consptr();
+    MealItemViewAdapter adapter=new MealItemViewAdapter(mealptrar,selected);
+    list.setAdapter(adapter);
+    Runnable update=()->{
+        carbs[0]=Natives.carbinmeal(mealptrar[0]);
+        total.setText(act.getString(R.string.meal_modern_total_value,carbs[0]));
+        rounding.setText(act.getString(R.string.meal_modern_rounding_value,
+                Natives.getroundto()));
+        int count=Natives.getmealitemnr(mealptrar[0]);
+        empty.setVisibility(count==0?VISIBLE:GONE);
+        list.setVisibility(count==0?GONE:VISIBLE);
+        repeat.setVisibility(carbs[0]==0.0f?GONE:VISIBLE);
+        };
+    update.run();
+
+    IntConsumer saved=newMealPtr->{
+        if(newMealPtr>=0) {
+            mealptrar[0]=newMealPtr;
+            carbs[0]=Natives.carbinmeal(newMealPtr);
+            give.accept(carbs[0],newMealPtr);
+            adapter.notifyDataSetChanged();
+            }
+        root.setVisibility(VISIBLE);
+        update.run();
+        };
+    IntConsumer openItem=index->{
+        root.setVisibility(INVISIBLE);
+        help.hidekeyboard(act);
+        phoneEditMealItem(act,numb,mealptrar[0],index,saved,carbs[0]);
+        };
+    selected.cons=openItem;
+    add.setOnClickListener(view->openItem.accept(-1));
+    rounding.setOnClickListener(view->phoneAskRound(act,update,root));
+    helpButton.setOnClickListener(view->help.helplight(R.string.mealhelp,act));
+    repeat.setOnClickListener(view->{
+        removeContentView(root);
+        act.hideSystemUI();
+        if(mealptrar[0]!=0) {
+            if(numb.currentnum!=0&&numb.currentnum!=numio.newhit)
+                Natives.hitsetmealptr(numb.currentnum,mealptrar[0]);
+            int copy=Natives.cpmeal(mealptrar[0]);
+            act.poponback();
+            numb.addnumberwithmenu(act,copy);
+            }
+        });
+    close.setOnClickListener(view->doonback());
+    setonback(()->{
+        root.setVisibility(GONE);
+        removeContentView(root);
+        help.hidekeyboard(act);
+        act.hideSystemUI();
+        endrun.run();
+        });
+    showPhoneRoot(act,root);
+    return root;
+    }
+
+private static void phoneEditMealItem(MainActivity act,NumberView numb,int mealptr,
+        int pos,IntConsumer give,float carbMealIn) {
+    EditText amount=new EditText(act);
+    EditText itemTotal=new EditText(act);
+    EditText mealTotal=new EditText(act);
+    for(EditText field:new EditText[]{amount,itemTotal,mealTotal}) {
+        field.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        field.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI|
+                EditorInfo.IME_FLAG_NO_FULLSCREEN|EditorInfo.IME_ACTION_DONE);
+        stylePhoneInput(act,field);
+        }
+    Button ingredient=ClinicalUi.button(act,
+            act.getString(R.string.meal_modern_choose_ingredient),
+            ClinicalUi.ButtonRole.SECONDARY);
+    TextView carbInfo=ClinicalUi.body(act,
+            act.getString(R.string.meal_modern_no_ingredient));
+    carbInfo.setPadding(ClinicalUi.dp(act,16),ClinicalUi.dp(act,12),
+            ClinicalUi.dp(act,16),ClinicalUi.dp(act,12));
+    carbInfo.setBackground(ClinicalUi.surface(act,false,false));
+    Button cancel=phoneHeaderButton(act,R.string.cancel);
+    Button save=ClinicalUi.button(act,act.getString(R.string.save),
+            ClinicalUi.ButtonRole.PRIMARY);
+    Button delete=ClinicalUi.button(act,act.getString(R.string.delete),
+            ClinicalUi.ButtonRole.DANGER);
+    TextView error=phoneError(act);
+    float[] carbPerUnit={0.0f};
+    int[] ingredientIndex={-1};
+    float baseMealCarbs=carbMealIn;
+    if(pos>=0) {
+        float oldAmount=Natives.getitemamount(mealptr,pos);
+        amount.setText(ondecimal(oldAmount,10));
+        int oldIngredient=Natives.getitemingredient(mealptr,pos);
+        ingredientIndex[0]=oldIngredient;
+        String ingredientName=Natives.ingredientName(oldIngredient);
+        ingredient.setText(ingredientName);
+        String unit=Natives.ingredientUnitName(oldIngredient);
+        float carb=Natives.ingredientCarb(oldIngredient);
+        carbPerUnit[0]=carb;
+        carbInfo.setText(act.getString(R.string.meal_modern_carb_value,carb,unit));
+        float total=oldAmount*carb;
+        itemTotal.setText(ondecimal(total,10));
+        mealTotal.setText(ondecimal(carbMealIn,10));
+        baseMealCarbs-=total;
+        }
+    else {
+        delete.setVisibility(GONE);
+        itemTotal.setText("0");
+        mealTotal.setText(ondecimal(carbMealIn,10));
+        }
+    final float mealBase=baseMealCarbs;
+    boolean[] changing={false};
+    amount.addTextChangedListener(new TextWatcher() {
+        public void afterTextChanged(Editable value) {
+            if(changing[0]) return;
+            changing[0]=true;
+            float total=str2float(value.toString())*carbPerUnit[0];
+            itemTotal.setText(ondecimal(total,10));
+            mealTotal.setText(ondecimal(mealBase+total,10));
+            changing[0]=false;
+            }
+        public void beforeTextChanged(CharSequence s,int start,int count,int after) {}
+        public void onTextChanged(CharSequence s,int start,int before,int count) {}
+        });
+    itemTotal.addTextChangedListener(new TextWatcher() {
+        public void afterTextChanged(Editable value) {
+            if(changing[0]||carbPerUnit[0]<=0.0f) return;
+            changing[0]=true;
+            float total=str2float(value.toString());
+            amount.setText(ondecimal(total/carbPerUnit[0],10));
+            mealTotal.setText(ondecimal(mealBase+total,10));
+            changing[0]=false;
+            }
+        public void beforeTextChanged(CharSequence s,int start,int count,int after) {}
+        public void onTextChanged(CharSequence s,int start,int before,int count) {}
+        });
+    mealTotal.addTextChangedListener(new TextWatcher() {
+        public void afterTextChanged(Editable value) {
+            if(changing[0]||carbPerUnit[0]<=0.0f) return;
+            changing[0]=true;
+            float total=str2float(value.toString())-mealBase;
+            amount.setText(ondecimal(total/carbPerUnit[0],10));
+            itemTotal.setText(ondecimal(total,10));
+            changing[0]=false;
+            }
+        public void beforeTextChanged(CharSequence s,int start,int count,int after) {}
+        public void onTextChanged(CharSequence s,int start,int before,int count) {}
+        });
+
+    LinearLayout content=phoneContent(act);
+    content.addView(ClinicalUi.header(act,act.getString(pos>=0
+            ?R.string.meal_modern_edit_item_title:R.string.meal_modern_new_item_title),cancel));
+    TextView intro=ClinicalUi.body(act,
+            act.getString(R.string.meal_modern_item_intro));
+    intro.setPadding(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),0);
+    content.addView(intro);
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_ingredient_section)));
+    content.addView(ingredient,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    LinearLayout.LayoutParams carbParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    carbParams.topMargin=ClinicalUi.dp(act,8);
+    content.addView(carbInfo,carbParams);
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_quantity_section)));
+    content.addView(phoneFieldCard(act,act.getString(R.string.quantity),amount));
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_computed_section)));
+    content.addView(ClinicalUi.card(act,
+            ClinicalUi.fieldRow(act,act.getString(R.string.meal_modern_item_total),itemTotal),
+            ClinicalUi.fieldRow(act,act.getString(R.string.meal_modern_meal_total),mealTotal)));
+    LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    errorParams.topMargin=ClinicalUi.dp(act,12);
+    content.addView(error,errorParams);
+    LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    saveParams.topMargin=ClinicalUi.dp(act,18);
+    content.addView(save,saveParams);
+    if(pos>=0) {
+        LinearLayout.LayoutParams deleteParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+        deleteParams.topMargin=ClinicalUi.dp(act,10);
+        content.addView(delete,deleteParams);
+        }
+    ScrollView screen=ClinicalUi.scrollScreen(act,content);
+    Layout root=phoneRoot(act,screen);
+    showPhoneRoot(act,root);
+    Runnable close=()->{
+        help.hidekeyboard(act);
+        removeContentView(root);
+        give.accept(-1);
+        act.hideSystemUI();
+        };
+    setonback(close);
+    cancel.setOnClickListener(view->doonback());
+    ingredient.setOnClickListener(view->{
+        help.hidekeyboard(act);
+        phoneSelectIngredient(act,numb,index->{
+            if(index<0) {
+                if(ingredientIndex[0]>=0&&index==-ingredientIndex[0]-1) {
+                    ingredientIndex[0]=-1;
+                    ingredient.setText(R.string.meal_modern_choose_ingredient);
+                    carbPerUnit[0]=0.0f;
+                    carbInfo.setText(R.string.meal_modern_no_ingredient);
+                    }
+                return;
+                }
+            ingredientIndex[0]=index;
+            String name=Natives.ingredientName(index);
+            ingredient.setText(name);
+            String unit=Natives.ingredientUnitName(index);
+            float carb=Natives.ingredientCarb(index);
+            carbPerUnit[0]=carb;
+            carbInfo.setText(act.getString(R.string.meal_modern_carb_value,carb,unit));
+            float total=str2float(amount.getText().toString())*carb;
+            itemTotal.setText(ondecimal(total,10));
+            setPhoneError(error,null);
+            });
+        });
+    save.setOnClickListener(view->{
+        if(ingredientIndex[0]<0) {
+            setPhoneError(error,act.getString(R.string.meal_modern_error_ingredient));
+            return;
+            }
+        if(!hasText(amount)) {
+            setPhoneError(error,act.getString(R.string.meal_modern_error_quantity));
+            return;
+            }
+        float value=str2float(amount.getText().toString());
+        if(Float.isNaN(value)||Float.isInfinite(value)||value<=0.0f) {
+            setPhoneError(error,act.getString(R.string.meal_modern_error_quantity));
+            return;
+            }
+        int newMealPtr=Natives.changemealitem(mealptr,pos,ingredientIndex[0],value);
+        help.hidekeyboard(act);
+        removeContentView(root);
+        give.accept(newMealPtr);
+        act.poponback();
+        act.hideSystemUI();
+        });
+    delete.setOnClickListener(view->{
+        int newMealPtr=Natives.deletefrommeal(mealptr,pos);
+        help.hidekeyboard(act);
+        removeContentView(root);
+        give.accept(newMealPtr);
+        act.poponback();
+        act.hideSystemUI();
+        });
+    amount.requestFocus();
+    }
+
+private static void phoneSearchIngredients(MainActivity act,View source,
+        IngredientViewAdapter adapter) {
+    EditText query=new EditText(act);
+    query.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+    query.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI|
+            EditorInfo.IME_FLAG_NO_FULLSCREEN|EditorInfo.IME_ACTION_SEARCH);
+    query.setHint(R.string.meal_modern_search_hint);
+    stylePhoneInput(act,query);
+    Button cancel=phoneHeaderButton(act,R.string.cancel);
+    Button apply=ClinicalUi.button(act,act.getString(R.string.search),
+            ClinicalUi.ButtonRole.PRIMARY);
+    TextView error=phoneError(act);
+    LinearLayout content=phoneContent(act);
+    content.addView(ClinicalUi.header(act,
+            act.getString(R.string.meal_modern_search_title),cancel));
+    TextView intro=ClinicalUi.body(act,
+            act.getString(R.string.meal_modern_search_intro));
+    intro.setPadding(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),0);
+    content.addView(intro);
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_search_section)));
+    content.addView(query,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    errorParams.topMargin=ClinicalUi.dp(act,12);
+    content.addView(error,errorParams);
+    LinearLayout.LayoutParams applyParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    applyParams.topMargin=ClinicalUi.dp(act,18);
+    content.addView(apply,applyParams);
+    ScrollView screen=ClinicalUi.scrollScreen(act,content);
+    Layout root=phoneRoot(act,screen);
+    showPhoneRoot(act,root);
+    Runnable close=()->{
+        help.hidekeyboard(act);
+        removeContentView(root);
+        source.setVisibility(VISIBLE);
+        };
+    setonback(close);
+    cancel.setOnClickListener(view->doonback());
+    Runnable search=()->{
+        String text=query.getText().toString();
+        if(text.trim().isEmpty()) {
+            adapter.setResults(null);
+            doonback();
+            return;
+            }
+        int[] result=Natives.searchIngredient(text);
+        if(result==null) {
+            setPhoneError(error,act.getString(R.string.meal_modern_search_error));
+            return;
+            }
+        adapter.setResults(result);
+        doonback();
+        };
+    apply.setOnClickListener(view->search.run());
+    query.setOnEditorActionListener((view,action,event)->{
+        if(action==EditorInfo.IME_ACTION_SEARCH||
+                (event!=null&&event.getKeyCode()==KeyEvent.KEYCODE_ENTER)) {
+            search.run();
+            return true;
+            }
+        return false;
+        });
+    query.requestFocus();
+    }
+
+private static void phoneSelectIngredient(MainActivity act,NumberView numb,
+        IntConsumer setIndex) {
+    help.hidekeyboard(act);
+    Button close=phoneHeaderButton(act,R.string.closename);
+    Button add=ClinicalUi.button(act,act.getString(R.string.meal_modern_define_ingredient),
+            ClinicalUi.ButtonRole.PRIMARY);
+    Button editMode=ClinicalUi.button(act,act.getString(R.string.meal_modern_edit_mode),
+            ClinicalUi.ButtonRole.SECONDARY);
+    EditText query=new EditText(act);
+    query.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+    query.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI|
+            EditorInfo.IME_FLAG_NO_FULLSCREEN|EditorInfo.IME_ACTION_SEARCH);
+    query.setHint(R.string.meal_modern_search_hint);
+    stylePhoneInput(act,query);
+    Button search=ClinicalUi.button(act,act.getString(R.string.search),
+            ClinicalUi.ButtonRole.SECONDARY);
+    TextView error=phoneError(act);
+    RecyclerView list=new RecyclerView(act);
+    list.setLayoutManager(new LinearLayoutManager(act));
+    list.setClipToPadding(false);
+    list.setPadding(0,ClinicalUi.dp(act,8),0,ClinicalUi.dp(act,8));
+
+    LinearLayout searchRow=new LinearLayout(act);
+    searchRow.setOrientation(LinearLayout.HORIZONTAL);
+    searchRow.addView(query,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+    LinearLayout.LayoutParams searchParams=new LinearLayout.LayoutParams(WRAP_CONTENT,WRAP_CONTENT);
+    searchParams.setMarginStart(ClinicalUi.dp(act,8));
+    searchRow.addView(search,searchParams);
+
+    LinearLayout screen=new LinearLayout(act);
+    screen.setOrientation(LinearLayout.VERTICAL);
+    screen.setBackgroundColor(ClinicalUi.window(act));
+    screen.setPadding(MainActivity.systembarLeft+ClinicalUi.dp(act,20),
+            MainActivity.systembarTop+ClinicalUi.dp(act,8),
+            MainActivity.systembarRight+ClinicalUi.dp(act,20),
+            MainActivity.systembarBottom+ClinicalUi.dp(act,16));
+    screen.addView(ClinicalUi.header(act,
+            act.getString(R.string.meal_modern_ingredients_title),close));
+    TextView intro=ClinicalUi.body(act,
+            act.getString(R.string.meal_modern_ingredients_intro));
+    intro.setPadding(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),0);
+    screen.addView(intro);
+    screen.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_search_section)));
+    screen.addView(searchRow,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    errorParams.topMargin=ClinicalUi.dp(act,8);
+    screen.addView(error,errorParams);
+    LinearLayout.LayoutParams editParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    editParams.topMargin=ClinicalUi.dp(act,8);
+    screen.addView(editMode,editParams);
+    screen.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_available_section)));
+    screen.addView(list,new LinearLayout.LayoutParams(MATCH_PARENT,0,1.0f));
+    screen.addView(add,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+
+    Layout root=phoneRoot(act,screen);
+    int backDepth=MainActivity.onbacknr();
+    Consptr selected=new Consptr();
+    IngredientViewAdapter adapter=new IngredientViewAdapter(selected);
+    list.setAdapter(adapter);
+    boolean[] editing={false};
+    IntConsumer choose=index->{
+        while(MainActivity.onbacknr()>backDepth) doonback();
+        setIndex.accept(index);
+        };
+    selected.cons=index->{
+        if(editing[0]) {
+            editing[0]=false;
+            editMode.setText(R.string.meal_modern_edit_mode);
+            phoneDefineIngredient(act,adapter,list,index,setIndex,root);
+            }
+        else {
+            choose.accept(index);
+            }
+        };
+    Runnable runSearch=()->{
+        help.hidekeyboard(act);
+        String text=query.getText().toString();
+        if(text.trim().isEmpty()) {
+            adapter.setResults(null);
+            setPhoneError(error,null);
+            return;
+            }
+        int[] result=Natives.searchIngredient(text);
+        if(result==null) {
+            setPhoneError(error,act.getString(R.string.meal_modern_search_error));
+            return;
+            }
+        adapter.setResults(result);
+        setPhoneError(error,null);
+        };
+    search.setOnClickListener(view->runSearch.run());
+    query.setOnEditorActionListener((view,action,event)->{
+        if(action==EditorInfo.IME_ACTION_SEARCH||
+                (event!=null&&event.getKeyCode()==KeyEvent.KEYCODE_ENTER)) {
+            runSearch.run();
+            return true;
+            }
+        return false;
+        });
+    editMode.setOnClickListener(view->{
+        editing[0]=!editing[0];
+        editMode.setText(editing[0]?R.string.meal_modern_done_editing:
+                R.string.meal_modern_edit_mode);
+        });
+    add.setOnClickListener(view->phoneDefineIngredient(
+            act,adapter,list,-1,setIndex,root));
+    close.setOnClickListener(view->doonback());
+    setonback(()->{
+        help.hidekeyboard(act);
+        removeContentView(root);
+        act.hideSystemUI();
+        });
+    showPhoneRoot(act,root);
+    }
+
+private static void phoneDefineIngredient(MainActivity act,
+        IngredientViewAdapter adapter,RecyclerView list,int pos,
+        IntConsumer setIndex,View parent) {
+    EnableControls(parent,false);
+    list.suppressLayout(true);
+    act.showSystemUI();
+    act.showui=true;
+    EditText name=new EditText(act);
+    name.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+    name.setImeOptions(editoptions);
+    name.setHint(R.string.meal_modern_name_hint);
+    stylePhoneInput(act,name);
+    EditText unit=new EditText(act);
+    unit.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+    unit.setImeOptions(editoptions);
+    unit.setHint(R.string.meal_modern_unit_hint);
+    stylePhoneInput(act,unit);
+    EditText carb=new EditText(act);
+    carb.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);
+    carb.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI|
+            EditorInfo.IME_FLAG_NO_FULLSCREEN|EditorInfo.IME_ACTION_DONE);
+    carb.setHint(R.string.meal_modern_carb_hint);
+    stylePhoneInput(act,carb);
+    Spinner units=new Spinner(act);
+    units.setMinimumHeight(ClinicalUi.dp(act,52));
+    units.setPaddingRelative(ClinicalUi.dp(act,12),0,ClinicalUi.dp(act,12),0);
+    units.setBackground(ClinicalUi.surface(act,false,true));
+    avoidSpinnerDropdownFocus(units);
+    Button cancel=phoneHeaderButton(act,R.string.cancel);
+    Button save=ClinicalUi.button(act,act.getString(R.string.save),
+            ClinicalUi.ButtonRole.PRIMARY);
+    Button delete=ClinicalUi.button(act,act.getString(R.string.delete),
+            ClinicalUi.ButtonRole.DANGER);
+    LinearLayout database=ClinicalUi.actionRow(act,
+            act.getString(R.string.meal_modern_food_database_title),
+            act.getString(R.string.meal_modern_database_hint));
+    TextView error=phoneError(act);
+
+    int selectedUnit=0;
+    if(pos>=0) {
+        name.setText(Natives.ingredientName(pos));
+        carb.setText(Float.toString(Natives.ingredientCarb(pos)));
+        unit.setText(Natives.ingredientUnitName(pos));
+        selectedUnit=Natives.ingredientUnit(pos)+1;
+        if(!Natives.ingredientdeleteable(pos)) delete.setVisibility(GONE);
+        }
+    else {
+        delete.setVisibility(GONE);
+        }
+    ArrayList<String> unitNames=Natives.getunits();
+    if(unitNames!=null&&!unitNames.isEmpty()) {
+        LabelAdapter<String> unitAdapter=new LabelAdapter<>(act,unitNames,0);
+        units.setAdapter(unitAdapter);
+        units.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent,View view,
+                    int position,long id) {
+                unit.setText(unitNames.get(position));
+                }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+            });
+        units.setSelection(Math.min(selectedUnit,unitNames.size()-1));
+        }
+    else {
+        units.setVisibility(GONE);
+        }
+
+    LinearLayout content=phoneContent(act);
+    content.addView(ClinicalUi.header(act,act.getString(pos>=0
+            ?R.string.meal_modern_edit_ingredient_title:
+            R.string.meal_modern_new_ingredient_title),cancel));
+    TextView intro=ClinicalUi.body(act,
+            act.getString(R.string.meal_modern_ingredient_intro));
+    intro.setPadding(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),0);
+    content.addView(intro);
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_details_section)));
+    content.addView(ClinicalUi.card(act,
+            ClinicalUi.fieldRow(act,act.getString(R.string.name),name),
+            ClinicalUi.fieldRow(act,act.getString(R.string.unit),unit),
+            units,
+            ClinicalUi.fieldRow(act,act.getString(R.string.carbperunit),carb)));
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_reference_section)));
+    content.addView(ClinicalUi.card(act,database));
+    LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    errorParams.topMargin=ClinicalUi.dp(act,12);
+    content.addView(error,errorParams);
+    LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    saveParams.topMargin=ClinicalUi.dp(act,18);
+    content.addView(save,saveParams);
+    if(delete.getVisibility()!=GONE) {
+        LinearLayout.LayoutParams deleteParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+        deleteParams.topMargin=ClinicalUi.dp(act,10);
+        content.addView(delete,deleteParams);
+        }
+    ScrollView screen=ClinicalUi.scrollScreen(act,content);
+    Layout root=phoneRoot(act,screen);
+    showPhoneRoot(act,root);
+    Runnable finish=()->{
+        help.hidekeyboard(act);
+        removeContentView(root);
+        list.suppressLayout(false);
+        EnableControls(parent,true);
+        act.showui=false;
+        act.hideSystemUI();
+        };
+    setonback(finish);
+    cancel.setOnClickListener(view->doonback());
+    database.setOnClickListener(view->{
+        help.hidekeyboard(act);
+        final Layout[] databaseScreen={null};
+        databaseScreen[0]=phoneFoodDatabase(act,(foodName,value,foodUnit)->{
+            removeContentView(databaseScreen[0]);
+            name.setText(foodName);
+            unit.setText(foodUnit);
+            carb.setText(Float.toString(value));
+            });
+        });
+    save.setOnClickListener(view->{
+        String ingredientName=name.getText().toString().trim();
+        String unitName=unit.getText().toString().trim();
+        if(ingredientName.isEmpty()) {
+            setPhoneError(error,act.getString(R.string.meal_modern_error_name));
+            return;
+            }
+        if(unitName.isEmpty()) {
+            setPhoneError(error,act.getString(R.string.meal_modern_error_unit));
+            return;
+            }
+        if(!hasText(carb)) {
+            setPhoneError(error,act.getString(R.string.meal_modern_error_carb));
+            return;
+            }
+        float value=edit2float(carb);
+        if(Float.isNaN(value)||Float.isInfinite(value)||value<0.0f) {
+            setPhoneError(error,act.getString(R.string.meal_modern_error_carb));
+            return;
+            }
+        Natives.saveingredient(pos,ingredientName,unitName,value);
+        adapter.notifyDataSetChanged();
+        finish.run();
+        act.poponback();
+        if(pos<0&&adapter.getItemCount()>0)
+            list.scrollToPosition(adapter.getItemCount()-1);
+        });
+    delete.setOnClickListener(view->{
+        if(pos>=0) {
+            Natives.deleteingredient(pos);
+            setIndex.accept(-pos-1);
+            }
+        adapter.notifyDataSetChanged();
+        finish.run();
+        act.poponback();
+        });
+    name.requestFocus();
+    }
+
+private static Layout phoneFoodDatabase(MainActivity act,
+        TriConsumer<String,Float,String> give) {
+    act.lightBars(false);
+    long[] hitPtr={0L};
+    TriConsumer<String,Float,String> result=(name,value,unit)->{
+        if(hitPtr[0]!=0L) {
+            Natives.freefoodptr(hitPtr[0]);
+            hitPtr[0]=0L;
+            }
+        give.accept(name,value,unit);
+        };
+    MealDatabaseViewAdapter adapter=new MealDatabaseViewAdapter(hitPtr,result);
+    RecyclerView list=new RecyclerView(act);
+    list.setLayoutManager(new LinearLayoutManager(act));
+    list.setAdapter(adapter);
+    list.setClipToPadding(false);
+    list.setPadding(0,ClinicalUi.dp(act,8),0,ClinicalUi.dp(act,8));
+    EditText query=new EditText(act);
+    query.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+    query.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI|
+            EditorInfo.IME_FLAG_NO_FULLSCREEN|EditorInfo.IME_ACTION_SEARCH);
+    query.setHint(R.string.meal_modern_food_search_hint);
+    stylePhoneInput(act,query);
+    Button search=ClinicalUi.button(act,act.getString(R.string.search),
+            ClinicalUi.ButtonRole.SECONDARY);
+    Button close=phoneHeaderButton(act,R.string.closename);
+    Button helpButton=ClinicalUi.button(act,act.getString(R.string.helpname),
+            ClinicalUi.ButtonRole.SECONDARY);
+    TextView error=phoneError(act);
+    LinearLayout searchRow=new LinearLayout(act);
+    searchRow.setOrientation(LinearLayout.HORIZONTAL);
+    searchRow.addView(query,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+    LinearLayout.LayoutParams searchButtonParams=new LinearLayout.LayoutParams(
+            WRAP_CONTENT,WRAP_CONTENT);
+    searchButtonParams.setMarginStart(ClinicalUi.dp(act,8));
+    searchRow.addView(search,searchButtonParams);
+
+    LinearLayout screen=new LinearLayout(act);
+    screen.setOrientation(LinearLayout.VERTICAL);
+    screen.setBackgroundColor(ClinicalUi.window(act));
+    screen.setPadding(MainActivity.systembarLeft+ClinicalUi.dp(act,20),
+            MainActivity.systembarTop+ClinicalUi.dp(act,8),
+            MainActivity.systembarRight+ClinicalUi.dp(act,20),
+            MainActivity.systembarBottom+ClinicalUi.dp(act,16));
+    screen.addView(ClinicalUi.header(act,
+            act.getString(R.string.meal_modern_food_database_title),close));
+    TextView intro=ClinicalUi.body(act,
+            act.getString(R.string.meal_modern_food_database_intro));
+    intro.setPadding(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),0);
+    screen.addView(intro);
+    screen.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_search_section)));
+    screen.addView(searchRow,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    LinearLayout.LayoutParams errorParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    errorParams.topMargin=ClinicalUi.dp(act,8);
+    screen.addView(error,errorParams);
+    screen.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_food_results_section)));
+    screen.addView(list,new LinearLayout.LayoutParams(MATCH_PARENT,0,1.0f));
+    screen.addView(helpButton,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    Layout root=phoneRoot(act,screen);
+    Runnable runSearch=()->{
+        help.hidekeyboard(act);
+        if(hitPtr[0]!=0L) {
+            Natives.freefoodptr(hitPtr[0]);
+            hitPtr[0]=0L;
+            }
+        hitPtr[0]=Natives.foodsearch(query.getText().toString());
+        adapter.notifyDataSetChanged();
+        setPhoneError(error,null);
+        };
+    search.setOnClickListener(view->runSearch.run());
+    query.setOnEditorActionListener((view,action,event)->{
+        if(action==EditorInfo.IME_ACTION_SEARCH||
+                (event!=null&&event.getKeyCode()==KeyEvent.KEYCODE_ENTER)) {
+            runSearch.run();
+            return true;
+            }
+        return false;
+        });
+    helpButton.setOnClickListener(view->help.help(R.string.nutrients,act));
+    close.setOnClickListener(view->doonback());
+    setonback(()->{
+        help.hidekeyboard(act);
+        removeContentView(root);
+        if(hitPtr[0]!=0L) {
+            Natives.freefoodptr(hitPtr[0]);
+            hitPtr[0]=0L;
+            }
+        act.lightBars(!Natives.getInvertColors());
+        });
+    showPhoneRoot(act,root);
+    int count=Natives.foodnr();
+    if(count>0) list.scrollToPosition(new Random().nextInt(count));
+    return root;
+    }
+
+private static LinearLayout phoneMetricRow(MainActivity act,CharSequence name,
+        CharSequence value) {
+    TextView metricName=new TextView(act);
+    metricName.setText(name);
+    metricName.setTextColor(ClinicalUi.primaryText(act));
+    metricName.setTextSize(TypedValue.COMPLEX_UNIT_SP,15.0f);
+    metricName.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
+    TextView metricValue=new TextView(act);
+    metricValue.setText(value);
+    metricValue.setTextColor(ClinicalUi.secondaryText(act));
+    metricValue.setTextSize(TypedValue.COMPLEX_UNIT_SP,15.0f);
+    metricValue.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);
+    LinearLayout row=new LinearLayout(act);
+    row.setOrientation(LinearLayout.HORIZONTAL);
+    row.setGravity(Gravity.CENTER_VERTICAL);
+    row.setMinimumHeight(ClinicalUi.dp(act,58));
+    row.setPaddingRelative(ClinicalUi.dp(act,16),ClinicalUi.dp(act,8),
+            ClinicalUi.dp(act,16),ClinicalUi.dp(act,8));
+    row.addView(metricName,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+    row.addView(metricValue,new LinearLayout.LayoutParams(WRAP_CONTENT,WRAP_CONTENT));
+    return row;
+    }
+
+private static void phoneShowNutrients(MainActivity act,int id,boolean showZero,
+        TriConsumer<String,Float,String> give) {
+    help.hidekeyboard(act);
+    String foodName=Natives.idfoodlabel(id);
+    int[] values=Natives.getcomponents(id);
+    ArrayList<View> rows=new ArrayList<>();
+    for(int index=0;index<values.length;index++) {
+        int raw=values[index];
+        if(!((showZero&&raw!=-1)||raw>0)) continue;
+        String display;
+        if(raw==-3) display=act.getString(R.string.trace);
+        else if(raw==-2) display=act.getString(R.string.unknown);
+        else {
+            float number=raw/1000.0f;
+            display=number<0.1f?Float.toString(number):ondecimal(number,10);
+            if(raw>=0&&compunits[index]!=null&&!compunits[index].isEmpty())
+                display=display+" "+compunits[index];
+            }
+        rows.add(phoneMetricRow(act,compnames[index],display));
+        }
+    Button close=phoneHeaderButton(act,R.string.closename);
+    Button use=ClinicalUi.button(act,act.getString(R.string.meal_modern_use_food),
+            ClinicalUi.ButtonRole.PRIMARY);
+    CheckDirectionBox zero=new CheckDirectionBox(act);
+    zero.setText(R.string.showzero);
+    zero.setChecked(showZero);
+    LinearLayout content=phoneContent(act);
+    content.addView(ClinicalUi.header(act,
+            act.getString(R.string.meal_modern_nutrients_title),close));
+    TextView title=ClinicalUi.body(act,foodName);
+    title.setTextColor(ClinicalUi.primaryText(act));
+    title.setTextSize(TypedValue.COMPLEX_UNIT_SP,18.0f);
+    title.setPadding(ClinicalUi.dp(act,4),0,ClinicalUi.dp(act,4),0);
+    content.addView(title);
+    TextView intro=ClinicalUi.body(act,
+            act.getString(R.string.meal_modern_nutrients_intro));
+    intro.setPadding(ClinicalUi.dp(act,4),ClinicalUi.dp(act,6),
+            ClinicalUi.dp(act,4),0);
+    content.addView(intro);
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_per_100g)));
+    content.addView(ClinicalUi.card(act,rows.toArray(new View[0])));
+    content.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.meal_modern_options_section)));
+    content.addView(ClinicalUi.card(act,ClinicalUi.toggleRow(act,zero,
+            act.getString(R.string.meal_modern_show_zero_hint))));
+    LinearLayout.LayoutParams useParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
+    useParams.topMargin=ClinicalUi.dp(act,18);
+    content.addView(use,useParams);
+    ScrollView screen=ClinicalUi.scrollScreen(act,content);
+    act.addMyContentView(screen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT),false);
+    setonback(()->removeContentView(screen));
+    close.setOnClickListener(view->doonback());
+    zero.setOnCheckedChangeListener((button,checked)->{
+        if(checked==showZero) return;
+        doonback();
+        phoneShowNutrients(act,id,checked,give);
+        });
+    use.setOnClickListener(view->{
+        removeContentView(screen);
+        act.poponback();
+        act.poponback();
+        give.accept(foodName,values[0]/100000.0f,compunits[0]);
+        });
+    }
 static public class MealItemViewAdapter extends RecyclerView.Adapter<MealItemViewHolder> {
     Consptr ingrindex;
     final int[] mealptrar;
@@ -87,17 +1069,7 @@ static public class MealItemViewAdapter extends RecyclerView.Adapter<MealItemVie
     @NonNull
     @Override
     public MealItemViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-        Button view=new Button( parent.getContext());
-
-    view.setTransformationMethod(null);
-//      view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f);
-   if(!isWearable)
-           view.setTextSize(TypedValue.COMPLEX_UNIT_PX,Applic.mediumfontsize);
-    view.setLayoutParams(new ViewGroup.LayoutParams(  MATCH_PARENT, WRAP_CONTENT));
-//       view.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-//       view.setGravity(Gravity.CENTER_VERTICAL | Gravity.FILL_HORIZONTAL);
-       view.setGravity(Gravity.LEFT);
-//        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) { view.setFontFeatureSettings("pnum"); }
+        Button view=clinicalListButton(parent);
         return new MealItemViewHolder(view,ingrindex);
         }
 
@@ -129,6 +1101,10 @@ static public class MealItemViewAdapter extends RecyclerView.Adapter<MealItemVie
 
 }
 static void askround(MainActivity act,Runnable runner ,View parent) {
+    if(!isWearable) {
+        phoneAskRound(act,runner,parent);
+        return;
+        }
     EnableControls(parent,false);
     TextView label=getlabel(act,R.string.roundto);
     EditText edit=new EditText(act);edit.setText(Float.toString(Natives.getroundto()));
@@ -174,6 +1150,8 @@ static void askround(MainActivity act,Runnable runner ,View parent) {
     }
 
 static Layout menuview(final NumberView numb, MainActivity act, int mealptr, ObjIntConsumer<Float> give,Runnable endrun) {
+    if(!isWearable)
+        return phoneMealConstructor(numb,act,mealptr,give,endrun);
     RecyclerView recycle = new RecyclerView(act);
     LinearLayoutManager lin = new LinearLayoutManager(act);
     recycle.setLayoutManager(lin);
@@ -289,6 +1267,10 @@ public static String ondecimal(final float fl,final float nr) {
     return Float.toString(Math.round(fl*nr)/nr);
     }
 static void menuitem(MainActivity act, NumberView numb, int mealptr, int pos, IntConsumer give,float carbmealin) {
+    if(!isWearable) {
+        phoneEditMealItem(act,numb,mealptr,pos,give,carbmealin);
+        return;
+        }
  
     TextView ingrlabel=getlabel(act,R.string.ingredient);
     Button Ingredient=getbutton(act,R.string.select);
@@ -481,13 +1463,7 @@ static public class IngredientViewAdapter extends RecyclerView.Adapter<Ingredien
     @NonNull
     @Override
     public IngredientViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-        Button view=new Button( parent.getContext());
-  //      view.setTransformationMethod(null);
-       if(!isWearable)
-               view.setTextSize(TypedValue.COMPLEX_UNIT_PX,Applic.mediumfontsize);
-        ViewGroup.LayoutParams params= new ViewGroup.LayoutParams(  MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        view.setLayoutParams(params);
-        view.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
+        Button view=clinicalListButton(parent);
         return new IngredientViewHolder(view,this);
 
     }
@@ -506,6 +1482,10 @@ static public class IngredientViewAdapter extends RecyclerView.Adapter<Ingredien
 
     }
 static private void doSearchIngr(MainActivity act,View view,IngredientViewAdapter adapt) {
+    if(!isWearable) {
+        phoneSearchIngredients(act,view,adapt);
+        return;
+        }
     act.showSystemUI();
     view.setVisibility(INVISIBLE);
     var ingredient=getlabel(act,R.string.ingredient);
@@ -570,6 +1550,10 @@ static private void doSearchIngr(MainActivity act,View view,IngredientViewAdapte
             );
     }
 static private void selectingredient(MainActivity act,NumberView numb,IntConsumer setindex) {
+    if(!isWearable) {
+        phoneSelectIngredient(act,numb,setindex);
+        return;
+        }
     numhidekeyboard(numb,act);
     RecyclerView recycle = new RecyclerView(act);
     LinearLayoutManager lin = new LinearLayoutManager(act);
@@ -642,6 +1626,10 @@ static private void selectingredient(MainActivity act,NumberView numb,IntConsume
     
     }
 static void    defineingredient(MainActivity act ,IngredientViewAdapter  foodadapt,RecyclerView recycle,int pos, IntConsumer  setindex,View parent) {
+    if(!isWearable) {
+        phoneDefineIngredient(act,foodadapt,recycle,pos,setindex,parent);
+        return;
+        }
 
     EnableControls(parent,false);
     recycle.suppressLayout(true);
@@ -808,14 +1796,7 @@ static public class MealDatabaseViewAdapter extends RecyclerView.Adapter<MealDat
 
     @Override
     public MealDatabaseViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-        Button view=new Button( parent.getContext());
-    view.setTransformationMethod(null);
-   //     view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f);
-
-   if(!isWearable)
-           view.setTextSize(TypedValue.COMPLEX_UNIT_PX,Applic.mediumfontsize);
-    view.setLayoutParams(new ViewGroup.LayoutParams(  MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-       view.setGravity(Gravity.LEFT);
+        Button view=clinicalListButton(parent);
         return new MealDatabaseViewHolder(view,hitptr,give);
         }
 
@@ -835,6 +1816,8 @@ static public class MealDatabaseViewAdapter extends RecyclerView.Adapter<MealDat
 }
 final static private Random random=new Random();
 static Layout  fooddatabase(MainActivity act, TriConsumer<String,Float,String> give) {
+    if(!isWearable)
+        return phoneFoodDatabase(act,give);
     act.themeLightBars();
     RecyclerView recycle = new RecyclerView(act);
     LinearLayoutManager lin = new LinearLayoutManager(act);
@@ -922,6 +1905,10 @@ static Layout  fooddatabase(MainActivity act, TriConsumer<String,Float,String> g
 static String[] compnames=Natives.getcomponentlabels( );
 static String[] compunits=Natives.getcomponentunits( );
 static void    shownutrients(MainActivity act,int id,boolean showzero,TriConsumer<String,Float,String> give) {
+    if(!isWearable) {
+        phoneShowNutrients(act,id,showzero,give);
+        return;
+        }
     hidekeyboard(act);
 //    act.hideSystemUI();
     TextView ingred=new TextView(act);

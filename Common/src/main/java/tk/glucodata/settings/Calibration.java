@@ -20,10 +20,12 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 
 import tk.glucodata.Applic;
+import tk.glucodata.ClinicalUi;
 import tk.glucodata.GlucoseCurve;
 import tk.glucodata.LabelAdapter;
 import tk.glucodata.Layout;
@@ -57,7 +59,8 @@ static public void show(MainActivity act,View parent) {
    var bloodvar=getlabel(act,R.string.bloodvar);
     float density=GlucoseCurve.metrics.density;
    bloodvar.setPaddingRelative((int)(density*10),0,(int)(4*density),0);
-   var close=getbutton(act, R.string.closename);
+   var close=isWearable?getbutton(act, R.string.closename):ClinicalUi.button(
+           act,act.getString(R.string.closename),ClinicalUi.ButtonRole.SECONDARY);
    var allvalues=getcheckbox(act,act.getString(R.string.allvalues),Natives.getAllValues());
    allvalues.setOnCheckedChangeListener( (buttonView,  isChecked)-> {
           Natives.setAllValues(isChecked);
@@ -80,21 +83,57 @@ static public void show(MainActivity act,View parent) {
    calibrateA.setOnCheckedChangeListener( (buttonView,  isChecked)-> {
           Natives.setCalibrateA(isChecked);
           });
+  if(!isWearable) {
+        LinearLayout content=ClinicalUi.verticalContent(act);
+        content.setPadding(
+                MainActivity.systembarLeft+ClinicalUi.dp(act,20),
+                MainActivity.systembarTop+ClinicalUi.dp(act,8),
+                MainActivity.systembarRight+ClinicalUi.dp(act,20),
+                MainActivity.systembarBottom+ClinicalUi.dp(act,28));
+        content.addView(ClinicalUi.header(act,
+                act.getString(R.string.calibration),close));
+
+        content.addView(ClinicalUi.sectionLabel(act,
+                act.getString(R.string.bloodvar)));
+        content.addView(ClinicalUi.card(act,
+                ClinicalUi.fieldRow(act,act.getString(R.string.bloodvar),spinner)));
+
+        content.addView(ClinicalUi.sectionLabel(act,
+                act.getString(R.string.calibration)));
+        content.addView(ClinicalUi.card(act,
+                ClinicalUi.toggleRow(act,docalibrate,null),
+                ClinicalUi.toggleRow(act,calibratepast,null),
+                ClinicalUi.toggleRow(act,allvalues,null),
+                ClinicalUi.toggleRow(act,calibrateA,null)));
+
+        LinearLayout help=ClinicalUi.actionRow(act,
+                act.getString(R.string.helpname),null);
+        help.setOnClickListener(v->tk.glucodata.help.help(
+                R.string.calibrationhelp,act));
+        content.addView(ClinicalUi.sectionLabel(act,
+                act.getString(R.string.helpname)));
+        content.addView(ClinicalUi.card(act,help));
+
+        ScrollView screen=ClinicalUi.scrollScreen(act,content);
+        act.addMyContentView(screen,new ViewGroup.LayoutParams(
+                MATCH_PARENT,MATCH_PARENT));
+        MainActivity.setonback(()-> {
+            if(parent!=null) {
+                parent.setVisibility(VISIBLE);
+                act.themeLightBars();
+                }
+            removeContentView(screen);
+            });
+        close.setOnClickListener(v->MainActivity.doonback());
+        return;
+        }
+
   View[][] views;
-  if(isWearable) {
+  {
         var buttons=new View[]{docalibrate,close};
         views=new View[][]{new View[]{calibrateA},
        new View[]{bloodvar,spinner},buttons,new View[]{calibratepast},new View[]{allvalues}} ;
     }
-    else {
-       var help=getbutton(act, R.string.helpname);
-        help.setOnClickListener(v->{
-             tk.glucodata.help.help(R.string.calibrationhelp,act);
-            });
-         var  buttons=new View[]{help,docalibrate,close};
-         var lastrow=new View[]{allvalues,calibratepast} ;
-        views=new View[][]{new View[]{calibrateA}, new View[]{bloodvar,spinner},buttons,     lastrow};
-        };
     ViewGroup  layout=new Layout(act, (lay, w, h) -> { return new int[] {w,h};},views );
   if(isWearable) {
     layout.setBackgroundColor(backgroundcolor);

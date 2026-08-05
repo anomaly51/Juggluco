@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="clinical_sensor_details_title">Сведения о сенсоре</string>
+    <string name="clinical_sensor_details_intro">Проверьте состояние сенсора, настройте прогрев и управляйте историей калибровок.</string>
+    <string name="clinical_sensor_status_section">Состояние сенсора</string>
+    <string name="clinical_sensor_warmup_section">Прогрев</string>
+    <string name="clinical_sensor_actions_section">Действия с сенсором</string>
+    <string name="clinical_sensor_help_hint">Состояние сенсора, прогрев и устранение неполадок</string>
+
+    <string name="clinical_calibration_history_title">История калибровок</string>
+    <string name="clinical_calibration_history_intro">Просматривайте калибровки потока и истории. Нажмите запись, чтобы открыть график в этот момент.</string>
+    <string name="clinical_calibration_source_section">Источник калибровок</string>
+    <string name="clinical_calibration_entries_section">Сохранённые калибровки</string>
+    <string name="clinical_calibration_help_hint">Как история калибровок влияет на отображаемую глюкозу</string>
+    <string name="clinical_calibration_settings_hint">Настроить поведение и ограничения калибровки</string>
+
+    <string name="clinical_wear_title">Wear OS</string>
+    <string name="clinical_wear_intro">Выберите устройство для чтения сенсора и ввода записей глюкозы.</string>
+    <string name="clinical_wear_help_hint">Подключение часов, направление сенсора и синхронизация</string>
+    <string name="clinical_wear_device_section">Подключённые часы</string>
+    <string name="clinical_wear_device">Часы</string>
+    <string name="clinical_wear_numbers_section">Вводить записи на</string>
+    <string name="clinical_wear_sensor_section">Читать сенсор на</string>
+    <string name="clinical_wear_unsynced_title">Часы не синхронизированы</string>
+    <string name="clinical_wear_unsynced_message">Применение настроек по умолчанию может заменить данные, ещё не переданные на телефон.</string>
+
+    <string name="clinical_garmin_status_title">Garmin</string>
+    <string name="clinical_garmin_status_intro">Контролируйте выбранные часы Garmin и передачу данных глюкозы.</string>
+    <string name="clinical_garmin_device_section">Выбранное устройство</string>
+    <string name="clinical_garmin_device">Часы Garmin</string>
+    <string name="clinical_garmin_connection_section">Состояние подключения</string>
+    <string name="clinical_garmin_transfer_section">Передача глюкозы</string>
+    <string name="clinical_garmin_tools_section">Инструменты</string>
+    <string name="clinical_garmin_refresh_hint">Обновить устройства и состояние подключения</string>
+    <string name="clinical_garmin_help_hint">Настройка Garmin Connect IQ и устранение неполадок</string>
+    <string name="clinical_garmin_reinit_hint">Переподключить и инициализировать выбранные часы</string>
+    <string name="clinical_garmin_config_hint">ID приложения, быстрые записи и оформление часов</string>
+    <string name="clinical_garmin_nothing_selected">Часы Garmin не выбраны.</string>
+    <string name="clinical_state_yes">Да</string>
+    <string name="clinical_state_no">Нет</string>
+    <string name="clinical_garmin_sdk_ready">Connect IQ SDK готов: %1$s</string>
+    <string name="clinical_garmin_registered">Часы зарегистрированы: %1$s</string>
+    <string name="clinical_garmin_sent_at">Последняя отправка: %1$s</string>
+    <string name="clinical_garmin_no_status">Ответ о состоянии ещё не получен</string>
+    <string name="clinical_garmin_status_value">Состояние: %1$s</string>
+    <string name="clinical_garmin_not_sent">Данные ещё не отправлялись</string>
+    <string name="clinical_garmin_not_received">Данные ещё не получались</string>
+    <string name="clinical_garmin_received_at">Последнее получение: %1$s</string>
+
+    <string name="clinical_garmin_config_title">Настройка Garmin</string>
+    <string name="clinical_garmin_config_intro">Подключите приложение часов и настройте удобный ввод данных.</string>
+    <string name="clinical_garmin_app_section">Приложение часов</string>
+    <string name="clinical_garmin_appearance_section">Оформление</string>
+    <string name="clinical_garmin_store_hint">Открыть приложение Juggluco в магазине Garmin</string>
+    <string name="clinical_garmin_id_hint">Использовать стандартное приложение или ввести собственный ID Connect IQ</string>
+    <string name="clinical_garmin_shortcuts_hint">Управлять быстрыми кнопками записей глюкозы на часах</string>
+    <string name="clinical_garmin_config_help_hint">Установка приложения Garmin, ID и быстрые записи</string>
+    <string name="clinical_garmin_app_id">ID приложения часов</string>
+    <string name="clinical_garmin_id_title">ID приложения Garmin</string>
+    <string name="clinical_garmin_id_intro">Используйте стандартный ID приложения Juggluco Connect IQ или укажите 32-значный шестнадцатеричный ID.</string>
+    <string name="clinical_garmin_id_error">Введите ровно 32 шестнадцатеричных символа.</string>
+    <string name="clinical_garmin_id_save_error">Не удалось сохранить ID приложения.</string>
+
+    <string name="clinical_shortcuts_title">Быстрые записи на часах</string>
+    <string name="clinical_shortcuts_intro">Создавайте короткие кнопки для часто вводимых записей на часах Garmin.</string>
+    <string name="clinical_shortcuts_entries_section">Сохранённые быстрые записи</string>
+    <string name="clinical_shortcuts_empty">Быстрых записей пока нет. Добавьте первую ниже.</string>
+    <string name="clinical_shortcuts_add_hint">Создать подпись и числовое значение</string>
+    <string name="clinical_shortcuts_help_hint">Как подписи и значения отображаются на часах</string>
+    <string name="clinical_shortcuts_index_error">Не удалось сохранить быструю запись %1$d.</string>
+    <string name="clinical_shortcuts_value_error">Подпись или значение быстрой записи слишком длинные.</string>
+    <string name="clinical_shortcut_new_title">Новая быстрая запись</string>
+    <string name="clinical_shortcut_edit_title">Изменить быструю запись</string>
+    <string name="clinical_shortcut_editor_intro">Укажите подпись на часах и числовое значение записи.</string>
+    <string name="clinical_shortcut_details_section">Параметры быстрой записи</string>
+    <string name="clinical_shortcut_required_error">Введите подпись и значение.</string>
+    <string name="clinical_shortcut_delete_title">Удалить эту быструю запись?</string>
+    <string name="clinical_shortcut_delete_message">Быстрая запись исчезнет из списка после сохранения.</string>
+</resources>

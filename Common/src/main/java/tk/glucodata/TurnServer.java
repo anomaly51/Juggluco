@@ -39,6 +39,10 @@ import android.text.method.PasswordTransformationMethod;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import android.widget.Toast;
 
 
@@ -65,7 +69,123 @@ static public  EditText getedit(Context act, String text) {
       label.setText(text);
       return label;
       }
+
+static boolean validTurnPort(int port) {
+    return port>0&&port<=65535;
+    }
+
+private static void clinicalShow(MainActivity context,View parent) {
+    EnableControls(parent,false);
+    boolean absent=Natives.TurnServerNR()==0;
+    EditText host=getedit(context,absent?"":Natives.getTurnHost(0));
+    EditText port=getnumedit(context,absent?"":String.valueOf(Natives.getTurnPort(0)));
+    EditText username=getedit(context,absent?"":Natives.getTurnUser(0));
+    EditText password=getedit(context,absent?"":Natives.getTurnPassword(0));
+    ConnectionUi.styleInput(host);
+    ConnectionUi.styleInput(port);
+    ConnectionUi.styleInput(username);
+    ConnectionUi.styleInput(password);
+    password.setInputType(InputType.TYPE_TEXT_VARIATION_PASSWORD);
+    password.setTransformationMethod(new PasswordTransformationMethod());
+
+    CheckDirectionBox showPassword=new CheckDirectionBox(context);
+    showPassword.setText(R.string.connection_show_password);
+    showPassword.setOnCheckedChangeListener((button,checked)-> {
+        int selection=password.getSelectionStart();
+        password.setInputType(checked?InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD:
+                InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        password.setTransformationMethod(checked?null:new PasswordTransformationMethod());
+        password.setSelection(Math.max(0,Math.min(selection,password.length())));
+        });
+    Button cancel=ConnectionUi.headerButton(context,R.string.cancel);
+    Button save=ClinicalUi.button(context,context.getString(R.string.save),
+            ClinicalUi.ButtonRole.PRIMARY);
+    Button delete=ClinicalUi.button(context,context.getString(R.string.delete),
+            ClinicalUi.ButtonRole.DANGER);
+    delete.setVisibility(absent?View.GONE:View.VISIBLE);
+    LinearLayout turnHelp=ClinicalUi.actionRow(context,
+            context.getString(R.string.helpname),context.getString(R.string.connection_turn_help_hint));
+    TextView error=ConnectionUi.status(context,"",true);
+
+    LinearLayout content=ConnectionUi.content(context);
+    content.addView(ClinicalUi.header(context,
+            context.getString(R.string.connection_turn_title),cancel));
+    content.addView(ConnectionUi.intro(context,R.string.connection_turn_intro));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.connection_server_details_section)));
+    content.addView(ClinicalUi.card(context,
+            ClinicalUi.fieldRow(context,context.getString(R.string.hostname),host),
+            ClinicalUi.fieldRow(context,context.getString(R.string.port),port)));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.connection_credentials_section)));
+    content.addView(ClinicalUi.card(context,
+            ClinicalUi.fieldRow(context,context.getString(R.string.username),username),
+            ClinicalUi.fieldRow(context,context.getString(R.string.password),password),
+            ConnectionUi.directToggle(context,showPassword)));
+    error.setPadding(ClinicalUi.dp(context,16),ClinicalUi.dp(context,12),
+            ClinicalUi.dp(context,16),ClinicalUi.dp(context,12));
+    content.addView(error);
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.connection_support_section)));
+    content.addView(ClinicalUi.card(context,turnHelp));
+    LinearLayout actions=new LinearLayout(context);
+    actions.setOrientation(LinearLayout.HORIZONTAL);
+    actions.setPadding(0,ClinicalUi.dp(context,20),0,0);
+    if(!absent) {
+        actions.addView(delete,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+        View gap=new View(context);
+        actions.addView(gap,new LinearLayout.LayoutParams(ClinicalUi.dp(context,12),1));
+        }
+    actions.addView(save,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
+    content.addView(actions);
+    ScrollView screen=ConnectionUi.screen(context,content);
+    ConnectionUi.fullScreen(context,screen);
+    Runnable close=()-> {
+        EnableControls(parent,true);
+        removeContentView(screen);
+        hidekeyboard(context);
+        };
+    context.setonback(close);
+    cancel.setOnClickListener(view->MainActivity.doonback());
+    turnHelp.setOnClickListener(view->help.help(R.string.turnservers,context));
+    delete.setOnClickListener(view->{
+        Natives.deleteTurnServer(0);
+        MainActivity.doonback();
+        });
+    save.setOnClickListener(view->{
+        String hostValue=host.getText().toString().trim();
+        int portValue;
+        try {
+            portValue=Integer.parseInt(port.getText().toString().trim());
+            }
+        catch(Throwable parseError) {
+            error.setText(R.string.connection_invalid_port);
+            error.setVisibility(View.VISIBLE);
+            return;
+            }
+        if(hostValue.isEmpty()) {
+            error.setText(R.string.connection_host_required);
+            error.setVisibility(View.VISIBLE);
+            return;
+            }
+        if(!validTurnPort(portValue)) {
+            error.setText(R.string.portrange);
+            error.setVisibility(View.VISIBLE);
+            return;
+            }
+        Natives.setTurnPort(0,portValue);
+        Natives.setTurnHost(0,hostValue);
+        Natives.setTurnUser(0,username.getText().toString());
+        Natives.setTurnPassword(0,password.getText().toString());
+        MainActivity.doonback();
+        });
+    }
+
 public static void show(MainActivity context,View parent) {
+   if(!Applic.isWearable) {
+      clinicalShow(context,parent);
+      return;
+      }
    EnableControls(parent,false);
    var delete=getbutton(context,context.getString(R.string.delete));
    var save=getbutton(context,R.string.save);

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="menu_screen_subtitle">Инструменты и настройки</string>
+    <string name="menu_screen_quick">Быстрые действия</string>
+    <string name="menu_screen_app">Приложение</string>
+    <string name="menu_screen_close_app">Свернуть приложение</string>
+</resources>

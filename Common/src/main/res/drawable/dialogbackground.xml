@@ -1,4 +1,10 @@
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle" >
+   <corners android:radius="22dp" />
    <solid android:color="?attr/colorDialogBackground" />
    <stroke android:width="1dip" android:color="?attr/colorDialogBorder"/>
+   <padding
+       android:left="4dp"
+       android:top="4dp"
+       android:right="4dp"
+       android:bottom="4dp" />
 </shape>

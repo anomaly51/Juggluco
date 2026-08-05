@@ -26,7 +26,9 @@ if(false) {
     MINSDK = 19
     CPPSTD = "-std=gnu++2b"
 } else {
-    ndkver = '30.0.14904198'
+    // Keep the upstream NDK as the default, while allowing a locally installed
+    // stable NDK to be selected for reproducible development builds.
+    ndkver = project.findProperty('jugglucoNdkVersion') ?: '30.0.14904198'
     APPCOMPAT = '1.7.1'
     GMSWEAR = '19.0.0'
     GMSBASE = '18.10.0'
@@ -43,6 +45,12 @@ android {
         buildConfig = true
         aidl = true
         viewBinding = true
+    }
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            returnDefaultValues = true
+        }
     }
     externalNativeBuild {
         cmake {
@@ -559,7 +567,9 @@ buildTypes {
             java.srcDirs = ['src/mobileSi/java', 'src/mobileSiNogoogle/java']
             jniLibs.srcDirs = [ 'src/mobileSi/jniLibs']
             manifest { srcFile 'src/mobileSi/AndroidManifest.xml' }
-            res.srcDirs= ['src/mobileSi/res', 'src/mobileSiNogoogle/res']
+            // mobileSiNogoogle/res is a Git symlink to this directory; use the
+            // target explicitly so the source set also works on Windows.
+            res.srcDirs= ['src/mobileSi/res', 'src/mobileNosi/res']
             }
            mobileLibreOldNosiNodexNogoogle {
                java.srcDirs = ['src/mobileNosi/java']
@@ -617,6 +627,9 @@ configurations.all {
 */
 dependencies {
   coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16'
 
     implementation 'androidx.recyclerview:recyclerview:1.4.0'
     implementation 'androidx.startup:startup-runtime:1.2.0'

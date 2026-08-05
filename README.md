@@ -2,6 +2,19 @@
 # Juggluco
 Libre 2/2+/3/3+, Sibionics GS1, Dexcom G7/1+, Accu-Chek, CareSensAir, Aidex X
 
+## Anomaly51 redesign
+
+This fork contains a redesigned Android experience, separate meal and insulin flows,
+graph event overlays, and a local-first backend for AI-assisted meal analysis and
+personalized glucose forecasting. See [REDESIGN.md](REDESIGN.md) for the product/UI
+changes and [backend/README.md](backend/README.md) for the backend contract and safety
+model. Container publishing and a persistent single-replica Kubernetes deployment are
+documented in [deploy/kubernetes/README.md](deploy/kubernetes/README.md).
+
+No API keys, local Android settings, APKs, or health databases belong in this public
+repository. Runtime secrets are supplied outside Git and backend data is stored on a
+persistent volume.
+
 The motivation to write Juggluco was the need to use the sensor glucose values for something more than knowing my current glucose level or getting a global view the success of my glucose control.
 I wanted to use the glucose curve to easily refer back to previous experiences and see exactly how it went in relation to insulin doses, carbohydrate intake and activities. A little isolated slowly generated curve in portrait mode doesn’t allow for that.
 Juggluco is an app that receives glucose values via Bluetooth from Freestyle Libre 2, 2+, 3 and 3+, Sibionics GS1Sb, Dexcom G7/ONE+, Accu-Chek SmartGuide, CareSens Air and Aidex X sensors. In addition, Juggluco can scan NovoPen® 6 and NovoPen Echo® Plus and receive test results via Bluetooth from Contour Next glucose meters. 

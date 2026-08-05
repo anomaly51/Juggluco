@@ -9,7 +9,9 @@
 #include "config.h"
 #include "settings/settings.hpp"
 #include "curve.hpp"
+#include "forecastgraph.hpp"
 #include "gluconfig.hpp"
+#include "intakemarkers.hpp"
 extern int *numheights;
 extern int shownlabels;
 inline constexpr const int maxnumsources=2;
@@ -111,6 +113,13 @@ int showhistories=0;
 int shownumbers=1;
 int showmeals=0;
 int invertcolors=0;
+bool modernui=false;
+bool modernnormal=false;
+bool graphpreview=false;
+bool graphPanYRangeLocked=false;
+bool graphselectionactive=false;
+uint32_t graphselectiontime=0;
+uint32_t graphselectionvalue=0;
 float smallerlen;
 
 float valuesize=0;
@@ -168,6 +177,20 @@ void setdiffcurrent(bool val) {
      void   sidenum(NVGcontext* avg,const float posx,const float posy,const char *buf,const int len,const bool hit);
      bool    glucosepointinfo(NVGcontext* avg,time_t tim,uint32_t value,   float posx, float posy);
      bool    glucosepoint(NVGcontext* avg,time_t tim,uint32_t value,   float posx, float posy);
+    void    drawgraphselection(NVGcontext* avg,float posx,float posy);
+    void    drawintakeevents(NVGcontext* avg,uint32_t visibleStart,
+                             uint32_t visibleEnd,
+                             const std::vector<intakemarkers::GlucosePoint>
+                                     &glucosePoints);
+    void    drawforecastactivities(NVGcontext* avg,uint32_t now,
+                                   uint32_t visibleStart,uint32_t visibleEnd,
+                                   const std::vector<forecastgraph::Activity>
+                                           &activities);
+    void    drawforecast(NVGcontext* avg,uint32_t now,uint32_t visibleStart,
+                         uint32_t visibleEnd,
+                         const std::vector<forecastgraph::Point> &points,
+                         float confidence,
+                         const forecastgraph::Point *actualAnchor);
     template <class TX,class TY> void    showScan(NVGcontext* avg,const ScanData *low,const ScanData *high,  const TX &transx,  const TY &transy,const int colorindex);
      void    makecircle(NVGcontext* avg,float posx,float posy);
     template <class TX,class TY> void    histcurve(NVGcontext* avg,const SensorGlucoseData  * hist, const int32_t firstpos, const int32_t lastpos,const TX &xtrans,const TY &ytrans,const int colorindex);
@@ -219,13 +242,24 @@ template <class TX,class TY> void    calihistcurve(NVGcontext* avg,const SensorG
     template <class TX,class TY> void showlineScan(NVGcontext* avg,const ScanData *low,const ScanData *high,  const TX &transx,  const TY &transy,const int colorindex,bool search); 
 void setfontsize(float small,float menu,float density,float headin);
 void resizescreen(int widthin, int heightin,int initscreenwidth);
+void setmodernui(bool enabled);
+void setgraphpreview(bool enabled) { graphpreview=enabled; }
+void setgraphhours(int hours);
+int getgraphhours() const;
+void setLiveWindow(uint32_t now);
+void lockGraphYRangeForPan();
+void unlockGraphYRange();
 void withbottom();
 void setextremes(std::pair<int,int> extr);
 //auto gettrans(uint32_t starttime,uint32_t endtime);
 auto gettrans(uint32_t starttime,uint32_t endtime) {
 
-    const double usedtop=pointRadius;
-    const double usedheight=dheight-2*usedtop;
+    // Keep a dedicated time-label lane below the clinical plot. `modernui`
+    // remains true between frames, so scrubbing uses the exact same geometry
+    // as rendering instead of snapping above or below the visible line.
+    const double usedtop=pointRadius+(modernui?density*4.0:0.0);
+    const double usedbottom=modernui?smallfontlineheight*1.60:pointRadius;
+    const double usedheight=dheight-usedtop-usedbottom;
     const int gmax=gmin+grange;
     const double yscale= -usedheight/grange,ymove= usedtop+usedheight*gmax/grange;
    const auto transy=[yscale,ymove](uint32_t y) {return y*yscale + ymove;};
@@ -234,12 +268,14 @@ auto gettrans(uint32_t starttime,uint32_t endtime) {
     double interval=endtime-starttime;
     const double xscale=dwidth/interval;
     const double doublestart=starttime;
-    const auto transx=[xscale,doublestart](uint32_t x) {return (x-doublestart)*xscale;};
+    const double graphleft=dleft;
+    const auto transx=[xscale,doublestart,graphleft](uint32_t x) {return graphleft+(x-doublestart)*xscale;};
 
     return std::make_pair(transx,transy);
     }
 int64_t longpress(float x,float y);
 int64_t screentap(float x,float y);
+int64_t graphscrub(float x,float y);
 uint32_t timeend() {
     return starttime+duration;    
     }
@@ -291,6 +327,8 @@ inline void setcolor(const int colindex,const NVGcolor col) {
 	settings->data()->colors[startincolors+colindex]=col;
 	}
 inline const NVGcolor *getblack() {
+	if(modernnormal)
+		return &modernGraphText;
 	if(startincolors)
 		return &white;
 	return &black;
@@ -301,16 +339,22 @@ inline const NVGcolor *getmenucolor() {
 	return &black;
 	}
 inline const NVGcolor *getgray() {
+	if(modernnormal)
+		return &modernGraphGrid;
 	if(startincolors)
 		return &backgroundgray;
 	return &foregroundgray;
 	}
 inline const NVGcolor *getdarkgray() {
+	if(modernnormal)
+		return &modernGraphMuted;
 	if(startincolors)
 		return &backgrounddarkgray;
 	return &darkgrayin;
 	}
 inline const NVGcolor *getwhite() {
+	if(modernnormal)
+		return &modernGraphSurface;
 	if(startincolors)
 		return &black;
 	return &white;
@@ -322,6 +366,8 @@ inline const NVGcolor *getyellow() {
 		return &yellow;
 	}
 inline const NVGcolor *getthreehour() {
+	if(modernnormal)
+		return &modernGraphGridStrong;
 	if(startincolors)
 		return &backgroundthreehour;
 	return &foregroundthreehour;

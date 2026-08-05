@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="ModernSensorEmptySwitch" parent="Widget.AppCompat.CompoundButton.Switch">
+        <item name="android:background">?android:attr/selectableItemBackground</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:minHeight">54dp</item>
+        <item name="android:paddingStart">14dp</item>
+        <item name="android:paddingEnd">12dp</item>
+        <item name="android:textColor">@color/modern_secondary_text_primary</item>
+        <item name="android:textSize">15sp</item>
+        <item name="showText">false</item>
+        <item name="switchMinWidth">42dp</item>
+        <item name="switchPadding">12dp</item>
+        <item name="thumbTint">@color/modern_secondary_switch_thumb</item>
+        <item name="trackTint">@color/modern_secondary_switch_track</item>
+    </style>
+</resources>

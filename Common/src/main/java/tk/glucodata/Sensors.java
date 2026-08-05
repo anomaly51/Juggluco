@@ -47,6 +47,7 @@ import android.widget.AdapterView;
 import android.widget.Button;
 
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -71,7 +72,7 @@ private static final double  X_MIN = 0.15;   // try 0.10 .. 0.20
 
 
 
-static private int progressToValue(int progress,int minValue) {
+static int progressToValue(int progress,int minValue) {
     var t = (double)progress / MAX_PROGRESS;
     var x = X_MIN + (1.0 - X_MIN) * t;
     var X_MIN3 = X_MIN * X_MIN * X_MIN;
@@ -79,7 +80,7 @@ static private int progressToValue(int progress,int minValue) {
     return (int)Math.round(minValue + (MAX_VALUE - minValue) * normalized);
     }
 
-static private int valueToProgress(double value,int minValue) {
+static int valueToProgress(double value,int minValue) {
     var normalized = (value - minValue) / (MAX_VALUE - minValue);
     var X_MIN3 = X_MIN * X_MIN * X_MIN;
     var x = Math.cbrt(normalized * (1.0 - X_MIN3) + X_MIN3);
@@ -188,6 +189,10 @@ Sensors(MainActivity act,boolean givehelp,boolean select) {
         });
 
        warmupview.setProgress(valueToProgress(60,0));
+       if(!isWearable) {
+           buildPhoneView(act,givehelp,close);
+           return;
+           }
        View[][] views;
         if(!isWearable) {
             if(givehelp) {
@@ -268,8 +273,64 @@ Sensors(MainActivity act,boolean givehelp,boolean select) {
             MainActivity.doonback();
             });
         calview.setOnClickListener(v -> { CalibrateList.show(act,sensorptr,scroll); });
-        viewgroup=scroll; 
-        }
+         viewgroup=scroll;
+         }
+
+ private void buildPhoneView(MainActivity act,boolean standalone,Button close) {
+       ConnectionUi.styleButton(act,close,ClinicalUi.ButtonRole.SECONDARY);
+       ConnectionUi.styleButton(act,calview,ClinicalUi.ButtonRole.SECONDARY);
+       ConnectionUi.styleButton(act,use,ClinicalUi.ButtonRole.PRIMARY);
+       ConnectionUi.directToggle(act,hide);
+       textview.setTextColor(ClinicalUi.primaryText(act));
+       textview.setTextSize(15);
+       textview.setLineSpacing(0f,1.15f);
+       textview.setPadding(ClinicalUi.dp(act,16),ClinicalUi.dp(act,14),
+             ClinicalUi.dp(act,16),ClinicalUi.dp(act,14));
+       textview.setMovementMethod(LinkMovementMethod.getInstance());
+       minutes.setTextColor(ClinicalUi.secondaryText(act));
+       minutes.setTextSize(14);
+       minutes.setPaddingRelative(ClinicalUi.dp(act,12),ClinicalUi.dp(act,10),
+             ClinicalUi.dp(act,12),0);
+       warmupview.setMinimumHeight(ClinicalUi.dp(act,56));
+
+       LinearLayout content=standalone?ConnectionUi.content(act):ClinicalUi.verticalContent(act);
+       if(standalone) {
+           content.addView(ClinicalUi.header(act,
+                 act.getString(R.string.clinical_sensor_details_title),close));
+           content.addView(ConnectionUi.intro(act,R.string.clinical_sensor_details_intro));
+           }
+       content.addView(ClinicalUi.sectionLabel(act,
+             act.getString(R.string.clinical_sensor_status_section)));
+       content.addView(ClinicalUi.card(act,textview));
+       content.addView(ClinicalUi.sectionLabel(act,
+             act.getString(R.string.clinical_sensor_warmup_section)));
+       content.addView(ClinicalUi.card(act,minutes,warmupview));
+       content.addView(ClinicalUi.sectionLabel(act,
+             act.getString(R.string.clinical_sensor_actions_section)));
+       content.addView(ClinicalUi.card(act,hide));
+       LinearLayout.LayoutParams actionParams=new LinearLayout.LayoutParams(
+             MATCH_PARENT,WRAP_CONTENT);
+       actionParams.topMargin=ClinicalUi.dp(act,10);
+       use.setLayoutParams(actionParams);
+       content.addView(use);
+       LinearLayout.LayoutParams calibrationParams=new LinearLayout.LayoutParams(
+             MATCH_PARENT,WRAP_CONTENT);
+       calibrationParams.topMargin=ClinicalUi.dp(act,10);
+       calview.setLayoutParams(calibrationParams);
+       content.addView(calview);
+       if(standalone) {
+           LinearLayout helpRow=ClinicalUi.actionRow(act,act.getString(R.string.helpname),
+                 act.getString(R.string.clinical_sensor_help_hint));
+           content.addView(ClinicalUi.sectionLabel(act,
+                 act.getString(R.string.connection_support_section)));
+           content.addView(ClinicalUi.card(act,helpRow));
+           helpRow.setOnClickListener(view->helplight(R.string.sensorinfo,act));
+           close.setOnClickListener(view->MainActivity.doonback());
+           }
+       ScrollView screen=ClinicalUi.scrollScreen(act,content);
+       calview.setOnClickListener(view->CalibrateList.show(act,sensorptr,screen));
+       viewgroup=screen;
+       }
 
 private static void useAgain(MainActivity act,long sensorptr) {
     if(Natives.useAgain(sensorptr)) {
@@ -303,17 +364,8 @@ static    void show(MainActivity act,String text, long sensorptr) {
             sensors.setSensorptr(sensorptr);
     var scroll=sensors.viewgroup;
    ViewGroup.LayoutParams params;
-    if(!isWearable) {
-        scroll.setBackgroundResource(R.drawable.dialogbackground);
-  //      scroll.measure(WRAP_CONTENT, WRAP_CONTENT);
- //       var width=GlucoseCurve.getwidth();
-//        scroll.setX((width-scroll.getMeasuredWidth()+MainActivity.systembarLeft-MainActivity.systembarRight)*.5f);
-        params =
-            new FrameLayout.LayoutParams(
-                    WRAP_CONTENT,
-                    WRAP_CONTENT,
-                    Gravity.CENTER_HORIZONTAL);
-        }
+    if(!isWearable)
+        params=new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT);
     else {
          int param=isWearable?MATCH_PARENT:WRAP_CONTENT;
          params=new ViewGroup.LayoutParams(param,param);

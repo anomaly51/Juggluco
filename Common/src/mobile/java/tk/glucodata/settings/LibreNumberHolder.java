@@ -38,6 +38,7 @@ import android.widget.Toast;
 import androidx.recyclerview.widget.RecyclerView;
 import tk.glucodata.Applic;
 import tk.glucodata.CheckDirectionRadio;
+import tk.glucodata.ClinicalUi;
 import tk.glucodata.GlucoseCurve;
 import tk.glucodata.MainActivity;
 import tk.glucodata.Natives;
@@ -97,12 +98,12 @@ void sendoptions(View labelview,int pos) {
     var context=(MainActivity)(labelview.getContext());
     LayoutInflater flater= LayoutInflater.from(context);
     var layout = flater.inflate(R.layout.librenumoptions, null, false);
-    layout.setBackgroundResource(R.drawable.dialogbackground);
-    int laypad=(int)(GlucoseCurve.metrics.density*4.0f);
-    layout.setPadding(laypad,0,laypad,laypad);
+    layout.setBackgroundColor(ClinicalUi.window(context));
+    int side=ClinicalUi.dp(context,20);
+    layout.setPaddingRelative(systembarLeft+side,systembarTop+ClinicalUi.dp(context,8),
+            systembarRight+side,systembarBottom+ClinicalUi.dp(context,20));
 
-    var  params =    new FrameLayout.LayoutParams( WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER_HORIZONTAL);
-    params.topMargin=MainActivity.systembarTop;
+    var params = new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT);
     context.addMyContentView(layout, params);
     Button close=layout.findViewById(R.id.close);
     Button save=layout.findViewById(R.id.save);

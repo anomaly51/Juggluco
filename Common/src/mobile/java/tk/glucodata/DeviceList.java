@@ -33,12 +33,14 @@ import static tk.glucodata.MeterScanner.shouldUseDeviceAddress;
 
 import static tk.glucodata.Log.doLog;
 
+import android.content.Context;
 import android.graphics.Color;
 import android.text.SpannableString;
 import android.text.style.ForegroundColorSpan;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -99,14 +101,30 @@ String newname;
       @Override
        public DeviceListViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
            Button view=new Button((MainActivity)parent.getContext());
+           view.setAllCaps(false);
+           view.setGravity(android.view.Gravity.START|android.view.Gravity.CENTER_VERTICAL);
+           view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,15.0f);
+           view.setTextColor(ClinicalUi.primaryText(parent.getContext()));
+           view.setPaddingRelative(ClinicalUi.dp(parent.getContext(),16),
+                 ClinicalUi.dp(parent.getContext(),10),ClinicalUi.dp(parent.getContext(),16),
+                 ClinicalUi.dp(parent.getContext(),10));
+           view.setMinimumHeight(ClinicalUi.dp(parent.getContext(),68));
+           view.setBackground(ClinicalUi.surface(parent.getContext(),false,true));
+           RecyclerView.LayoutParams params=new RecyclerView.LayoutParams(MATCH_PARENT,
+                 ViewGroup.LayoutParams.WRAP_CONTENT);
+           params.topMargin=ClinicalUi.dp(parent.getContext(),5);
+           params.bottomMargin=ClinicalUi.dp(parent.getContext(),5);
+           view.setLayoutParams(params);
+           view.setStateListAnimator(null);
            return new DeviceListViewHolder((TextView)view,this.parent);
        }
 
-private final SpannableString newcolor(String nameaddress) {
+private final SpannableString newcolor(Context context,String nameaddress) {
          SpannableString str = new SpannableString(nameaddress+"\t"+newname);
          int spanlength=str.length();
          int newlen=newname.length();
-         str.setSpan(new ForegroundColorSpan(Color.YELLOW), spanlength-newlen,spanlength, 0);
+         str.setSpan(new ForegroundColorSpan(ClinicalUi.accent(context)),
+               spanlength-newlen,spanlength,0);
          return str;
          }
 static private int aidexXindex(String name) {
@@ -124,7 +142,7 @@ static private int aidexXindex(String name) {
              String nameaddress=name+"\n"+address;
              int index= showAidexX?aidexXindex(name):GlucoseMeterHasIndex(name, shouldUseDeviceAddress(name,device)?address:null);
                  if(index<0) {
-                     text.setText(newcolor(nameaddress));
+                     text.setText(newcolor(text.getContext(),nameaddress));
                      }
                 else
                      text.setText(nameaddress);
@@ -141,20 +159,27 @@ static private int aidexXindex(String name) {
 static private boolean showAidexX=false;
 static public void show(MainActivity act, MeterList.MeterListViewAdapter meteradapt) {
       RecyclerView recycle = new RecyclerView(act);
-      recycle.setHasFixedSize(true);
-      recycle.setLayoutParams(new ViewGroup.LayoutParams(   ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-      var lin=new GridLayoutManager(act,smallScreen?2:3);
+      recycle.setHasFixedSize(false);
+      recycle.setClipToPadding(false);
+      var lin=new androidx.recyclerview.widget.LinearLayoutManager(act);
       recycle.setLayoutManager(lin);
-      var close=getbutton(act,R.string.closename);
-      close.setOnClickListener( v -> { 
-            MainActivity.doonback();
-            });
-       var help=getbutton(act,R.string.helpname);
+      Button close=ConnectionUi.headerButton(act,R.string.closename);
+      close.setOnClickListener(view->MainActivity.doonback());
+      LinearLayout deviceHelp=ClinicalUi.actionRow(act,act.getString(R.string.helpname),
+            act.getString(R.string.connection_device_scan_help_hint));
       var aidex=getcheckbox(act,"AiDEX X",showAidexX);
-        View[] firstrow=new View[]{help,aidex,close};
-      Layout layout=new Layout(act,(x,w,h)->{
-             return new int[] {w,h};
-               },firstrow,new View[]{recycle});
+      LinearLayout layout=ConnectionUi.content(act);
+      layout.setLayoutParams(new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+      layout.addView(ClinicalUi.header(act,
+            act.getString(R.string.connection_find_meters_title),close));
+      layout.addView(ConnectionUi.intro(act,R.string.connection_find_meters_intro));
+      layout.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.connection_scan_filter_section)));
+      layout.addView(ClinicalUi.card(act,ConnectionUi.directToggle(act,aidex)));
+      layout.addView(ClinicalUi.sectionLabel(act,
+            act.getString(R.string.connection_nearby_devices_section)));
+      layout.addView(recycle,new LinearLayout.LayoutParams(MATCH_PARENT,0,1.0f));
+      layout.addView(ClinicalUi.card(act,deviceHelp));
     var deviceadapt = new DeviceListViewAdapter(layout);
     recycle.setAdapter(deviceadapt);
     startAdapterScanner(deviceadapt,showAidexX);
@@ -164,10 +189,7 @@ static public void show(MainActivity act, MeterList.MeterListViewAdapter meterad
         startAdapterScanner(deviceadapt,isChecked);
         deviceadapt.notifyDataSetChanged();
         });
-     help.setOnClickListener(v-> tk.glucodata.help.help(R.string.DeviceList,act));
-     layout.setBackgroundColor(backgroundcolor);
-     float density=GlucoseCurve.metrics.density;
-    layout.setPadding((int)(density*5.0)+MainActivity.systembarLeft,MainActivity.systembarTop,MainActivity.systembarRight+(int)(density*8.0),MainActivity.systembarBottom);
+     deviceHelp.setOnClickListener(v-> tk.glucodata.help.help(R.string.DeviceList,act));
 
      act.addMyContentView(layout, new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT));
       MainActivity.setonback(()-> {

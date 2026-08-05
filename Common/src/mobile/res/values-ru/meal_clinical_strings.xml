@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="meal_modern_title">Приём пищи</string>
+    <string name="meal_modern_intro">Составьте приём пищи из ингредиентов. Общее количество углеводов обновляется автоматически.</string>
+    <string name="meal_modern_total_section">Всего</string>
+    <string name="meal_modern_total_value">%1$.1f г углеводов</string>
+    <string name="meal_modern_items_section">Ингредиенты</string>
+    <string name="meal_modern_empty">Ингредиентов пока нет. Добавьте первый ингредиент ниже.</string>
+    <string name="meal_modern_add_item">Добавить ингредиент</string>
+    <string name="meal_modern_repeat">Повторить этот приём пищи</string>
+    <string name="meal_modern_rounding_value">Округление: %1$.1f</string>
+    <string name="meal_modern_rounding_title">Округление</string>
+    <string name="meal_modern_rounding_intro">Укажите шаг округления, который применяется при переносе суммы углеводов в запись.</string>
+    <string name="meal_modern_rounding_section">Шаг округления</string>
+    <string name="meal_modern_rounding_hint">Введите 0, чтобы не округлять</string>
+    <string name="meal_modern_error_rounding">Введите корректное число не меньше нуля.</string>
+
+    <string name="meal_modern_new_item_title">Добавить ингредиент</string>
+    <string name="meal_modern_edit_item_title">Изменить ингредиент</string>
+    <string name="meal_modern_item_intro">Выберите ингредиент и укажите количество. Рассчитанные значения также можно скорректировать.</string>
+    <string name="meal_modern_ingredient_section">Ингредиент</string>
+    <string name="meal_modern_choose_ingredient">Выбрать ингредиент</string>
+    <string name="meal_modern_no_ingredient">Ингредиент не выбран</string>
+    <string name="meal_modern_carb_value">%1$.1f углеводов на %2$s</string>
+    <string name="meal_modern_quantity_section">Количество</string>
+    <string name="meal_modern_computed_section">Расчёт углеводов</string>
+    <string name="meal_modern_item_total">Этот ингредиент</string>
+    <string name="meal_modern_meal_total">Весь приём пищи</string>
+    <string name="meal_modern_error_ingredient">Перед сохранением выберите ингредиент.</string>
+    <string name="meal_modern_error_quantity">Введите количество больше нуля.</string>
+
+    <string name="meal_modern_ingredients_title">Ингредиенты</string>
+    <string name="meal_modern_ingredients_intro">Нажмите на ингредиент, чтобы выбрать его, или включите режим редактирования.</string>
+    <string name="meal_modern_search_section">Поиск</string>
+    <string name="meal_modern_search_hint">Название или шаблон</string>
+    <string name="meal_modern_available_section">Доступные ингредиенты</string>
+    <string name="meal_modern_define_ingredient">Создать ингредиент</string>
+    <string name="meal_modern_edit_mode">Редактировать ингредиенты</string>
+    <string name="meal_modern_done_editing">Завершить редактирование</string>
+    <string name="meal_modern_search_title">Поиск ингредиентов</string>
+    <string name="meal_modern_search_intro">Отфильтруйте список по названию. Пустой запрос вернёт полный список.</string>
+    <string name="meal_modern_search_error">Некорректный шаблон поиска. Проверьте запрос и повторите.</string>
+
+    <string name="meal_modern_new_ingredient_title">Новый ингредиент</string>
+    <string name="meal_modern_edit_ingredient_title">Редактирование ингредиента</string>
+    <string name="meal_modern_ingredient_intro">Укажите название, единицу измерения и количество углеводов на единицу.</string>
+    <string name="meal_modern_details_section">Параметры ингредиента</string>
+    <string name="meal_modern_name_hint">Название ингредиента</string>
+    <string name="meal_modern_unit_hint">Единица порции</string>
+    <string name="meal_modern_carb_hint">Углеводы на единицу</string>
+    <string name="meal_modern_reference_section">Справочные данные</string>
+    <string name="meal_modern_database_hint">Найти пищевую ценность на 100 г</string>
+    <string name="meal_modern_error_name">Введите название ингредиента.</string>
+    <string name="meal_modern_error_unit">Введите или выберите единицу порции.</string>
+    <string name="meal_modern_error_carb">Введите корректное значение углеводов не меньше нуля.</string>
+
+    <string name="meal_modern_food_database_title">База продуктов</string>
+    <string name="meal_modern_food_database_intro">Найдите продукт, изучите пищевую ценность и используйте его количество углеводов.</string>
+    <string name="meal_modern_food_search_hint">Поиск продуктов</string>
+    <string name="meal_modern_food_results_section">Результаты</string>
+    <string name="meal_modern_nutrients_title">Пищевая ценность</string>
+    <string name="meal_modern_nutrients_intro">Значения из базы указаны на 100 граммов продукта.</string>
+    <string name="meal_modern_per_100g">На 100 г</string>
+    <string name="meal_modern_options_section">Параметры отображения</string>
+    <string name="meal_modern_show_zero_hint">Показывать нутриенты с нулевым значением</string>
+    <string name="meal_modern_use_food">Использовать этот продукт</string>
+</resources>

@@ -60,7 +60,9 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.widget.AdapterView;
+import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Space;
@@ -384,6 +386,10 @@ public  static boolean istalking() {
         return SuperGattCallback.talker!=null;
     }
 public static void config(MainActivity context) {
+    config(context,true);
+}
+
+public static void config(MainActivity context,boolean restoreStandaloneUi) {
     if(!DontTalk) {
         if(!istalking()) {
              SuperGattCallback.newtalker(context);
@@ -403,9 +409,11 @@ public static void config(MainActivity context) {
         var speeds=slider(context,curspeed);
 
         var pitchs=slider(context,curpitch);
-        var cancel=getbutton(context,R.string.cancel);
+        Button cancel=isWearable?getbutton(context,R.string.cancel):ClinicalUi.button(
+                context,context.getString(R.string.cancel),ClinicalUi.ButtonRole.SECONDARY);
 
-        var save=getbutton(context,R.string.save);
+        Button save=isWearable?getbutton(context,R.string.save):ClinicalUi.button(
+                context,context.getString(R.string.save),ClinicalUi.ButtonRole.PRIMARY);
         var width= GlucoseCurve.getwidth();
         var speedlabel=getlabel(context,context.getString(R.string.speed));
         speedlabel.setPaddingRelative(pad,0,pad*2,0);
@@ -429,7 +437,9 @@ public static void config(MainActivity context) {
                         
 
 
-        var test=getbutton(context,context.getString(R.string.test));
+        Button test=isWearable?getbutton(context,context.getString(R.string.test)):
+                ClinicalUi.button(context,context.getString(R.string.test),
+                        ClinicalUi.ButtonRole.SECONDARY);
         if(spinner!=null) {
                 {if(doLog) {Log.i(LOG_ID, "Talker.config spinner=!null");};};
                 try {
@@ -486,7 +496,8 @@ public static void config(MainActivity context) {
             spinpos[0]=-1;
             }
         ViewGroup layout;
-    var schedules=getbutton(context,R.string.schedules);
+    Button schedules=isWearable?getbutton(context,R.string.schedules):ClinicalUi.button(
+            context,context.getString(R.string.schedules),ClinicalUi.ButtonRole.SECONDARY);
 
         if(isWearable) {
             int marg=(int)(width*.1f);
@@ -509,25 +520,66 @@ public static void config(MainActivity context) {
             layout=scroll;
            }
         else {
-            View[]  firstrow; 
-            if(android.os.Build.VERSION.SDK_INT >= minandroid) { 
-                 firstrow=new View[]{active,seplabel,separation,voicelabel,spin};
-                 }
-            else {
-                var space=new Space(context);
-                space.setMinimumWidth((int)(width*0.4));
-                firstrow=new View[]{active,seplabel,separation,space};
-              }
-            var secondrow=new View[]{touchtalk, speakmessages, speakalarms };
-            var marghor= (int)(width*.05f);
-
-            Layout.getMargins(cancel).setMarginStart(marghor);
-            Layout.getMargins(save).setMarginEnd(marghor);
-            var helpview=getbutton(context,R.string.helpname);
+            Button helpview=ClinicalUi.button(context,context.getString(R.string.helpname),
+                    ClinicalUi.ButtonRole.SECONDARY);
             helpview.setOnClickListener(v-> help.help(R.string.talkhelp,context));
-            layout= new Layout(context,(l,w,h)-> {
-                return new int[] {w,h};
-                },firstrow,secondrow,new View[]{speedlabel,speeds[1],speeds[0],pro},new View[]{pitchlabel,pitchs[1],pitchs[0],mediasound}, new View[]{cancel,helpview,schedules,test,save});
+            LinearLayout content=ClinicalUi.verticalContent(context);
+            content.setPaddingRelative(MainActivity.systembarStart+ClinicalUi.dp(context,20),
+                    MainActivity.systembarTop+ClinicalUi.dp(context,8),
+                    MainActivity.systembarEnd+ClinicalUi.dp(context,20),
+                    MainActivity.systembarBottom+ClinicalUi.dp(context,24));
+            content.addView(ClinicalUi.header(context,
+                    context.getString(R.string.clinical_talker_title),cancel));
+            TextView intro=ClinicalUi.body(context,
+                    context.getString(R.string.clinical_talker_intro));
+            intro.setPaddingRelative(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
+                    ClinicalUi.dp(context,6));
+            content.addView(intro);
+            content.addView(ClinicalUi.sectionLabel(context,
+                    context.getString(R.string.clinical_talker_when_section)));
+            content.addView(ClinicalUi.card(context,
+                    ClinicalUi.toggleRow(context,active,
+                            context.getString(R.string.clinical_talker_live_hint)),
+                    ClinicalUi.toggleRow(context,touchtalk,
+                            context.getString(R.string.clinical_talker_touch_hint)),
+                    ClinicalUi.toggleRow(context,speakmessages,
+                            context.getString(R.string.clinical_talker_messages_hint)),
+                    ClinicalUi.toggleRow(context,speakalarms,
+                            context.getString(R.string.clinical_talker_alarms_hint))));
+            content.addView(ClinicalUi.sectionLabel(context,
+                    context.getString(R.string.clinical_talker_voice_section)));
+            LinearLayout voiceCard=new LinearLayout(context);
+            voiceCard.setOrientation(LinearLayout.VERTICAL);
+            if(spin!=null)
+                voiceCard.addView(ClinicalUi.fieldRow(context,
+                        context.getString(R.string.talker),spin));
+            voiceCard.addView(ClinicalUi.fieldRow(context,
+                    context.getString(R.string.profile),pro));
+            voiceCard.addView(ClinicalUi.fieldRow(context,
+                    context.getString(R.string.secondsbetween),separation));
+            voiceCard.setBackground(ClinicalUi.surface(context,false,false));
+            content.addView(voiceCard);
+            content.addView(ClinicalUi.sectionLabel(context,
+                    context.getString(R.string.clinical_talker_tuning_section)));
+            content.addView(ClinicalUi.card(context,
+                    ClinicalUi.fieldRow(context,context.getString(R.string.speed),speeds[1]),
+                    speeds[0],
+                    ClinicalUi.fieldRow(context,context.getString(R.string.pitch),pitchs[1]),
+                    pitchs[0],
+                    ClinicalUi.toggleRow(context,mediasound,
+                            context.getString(R.string.clinical_talker_media_hint))));
+            LinearLayout quick=new LinearLayout(context);
+            quick.setOrientation(LinearLayout.HORIZONTAL);
+            quick.setPadding(0,ClinicalUi.dp(context,22),0,0);
+            quick.addView(helpview,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1f));
+            quick.addView(schedules,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1f));
+            quick.addView(test,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1f));
+            content.addView(quick);
+            LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(MATCH_PARENT,
+                    WRAP_CONTENT);
+            saveParams.topMargin=ClinicalUi.dp(context,12);
+            content.addView(save,saveParams);
+            layout=ClinicalUi.scrollScreen(context,content);
             }
 
         final var lay=layout;
@@ -541,7 +593,7 @@ public static void config(MainActivity context) {
             tk.glucodata.help.hidekeyboard(context);
             removeContentView(lay);
             spinner=null;
-            if(Menus.on)
+            if(restoreStandaloneUi&&Menus.on)
                 Menus.show(context);
 
                context.lightBars(!getInvertColors( ));
@@ -619,10 +671,12 @@ public static void config(MainActivity context) {
 
     //      layout.setPadding(MainActivity.systembarLeft,MainActivity.systembarTop/2,MainActivity.systembarRight,0);
     //    context.addMyContentView(layout, new ViewGroup.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
-        var top=MainActivity.systembarTop;
-         
-        var left=MainActivity.systembarStart;
-          layout.setPaddingRelative(left+(int)(density*5.0),top,MainActivity.systembarEnd+(int)(density*8.0),MainActivity.systembarBottom);
+        if(isWearable) {
+            var top=MainActivity.systembarTop;
+            var left=MainActivity.systembarStart;
+            layout.setPaddingRelative(left+(int)(density*5.0),top,
+                    MainActivity.systembarEnd+(int)(density*8.0),MainActivity.systembarBottom);
+            }
     /*    var layheight=GlucoseCurve.getheight()-MainActivity.systembarBottom;
         var laywidth=GlucoseCurve.getwidth()-left-MainActivity.systembarRight;
         layout.setX(left); */

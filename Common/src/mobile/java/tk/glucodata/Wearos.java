@@ -38,8 +38,12 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Spinner;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AlertDialog;
@@ -143,7 +147,162 @@ static void remake(CheckDirectionRadio[] sensordirect, CheckDirectionRadio[] nsw
     }
 
 
+static boolean validWatchNodePosition(int position,int count) {
+    return position>=0&&position<count;
+    }
+
 static public void show(MainActivity context,View parent) {
+    int[] selectedNode={-1};
+    Button cancel=ConnectionUi.headerButton(context,R.string.cancel);
+    Button save=ClinicalUi.button(context,context.getString(R.string.save),
+          ClinicalUi.ButtonRole.PRIMARY);
+    Button defaults=ClinicalUi.button(context,context.getString(R.string.defaults),
+          ClinicalUi.ButtonRole.SECONDARY);
+    CheckDirectionRadio sensorPhone=getradiobutton(context,R.string.phone);
+    CheckDirectionRadio sensorWatch=getradiobutton(context,R.string.watch);
+    CheckDirectionRadio numbersPhone=getradiobutton(context,R.string.phone);
+    CheckDirectionRadio numbersWatch=getradiobutton(context,R.string.watch);
+    CheckDirectionRadio[] sensorDirection={sensorPhone,sensorWatch};
+    CheckDirectionRadio[] numberDirection={numbersPhone,numbersWatch};
+    for(CheckDirectionRadio choice:new CheckDirectionRadio[]{sensorPhone,sensorWatch,
+          numbersPhone,numbersWatch})
+        ConnectionUi.choice(context,choice);
+
+    ArrayList<Node> available=getnodeslist();
+    if(available==null)
+        available=new ArrayList<>();
+    if(available.isEmpty())
+        Applic.argToaster(context,R.string.nowatchesfound,Toast.LENGTH_LONG);
+    final ArrayList<Node> nodes=available;
+    boolean[] watchSensor={false};
+    IntConsumer setPosition=position-> {
+        try {
+            selectedNode[0]=position;
+            Node node=validWatchNodePosition(position,nodes.size())?nodes.get(position):null;
+            remake(sensorDirection,numberDirection,node,watchSensor);
+            defaults.setEnabled(node!=null);
+            if(node!=null) {
+                Consumer<View> changed=view->defaults.setEnabled(false);
+                Object[] callbacks={changed};
+                Backup.setradiotest(numberDirection,callbacks);
+                Backup.setradiotest(sensorDirection,callbacks);
+                }
+            }
+        catch(Throwable error) {
+            Log.stack(LOG_ID,error);
+            }
+        };
+    Spinner watches=mkspinner(context,nodes,setPosition);
+    watches.setMinimumHeight(ClinicalUi.dp(context,54));
+    watches.setPaddingRelative(ClinicalUi.dp(context,12),0,
+          ClinicalUi.dp(context,12),0);
+    watches.setBackground(ClinicalUi.surface(context,false,true));
+    setPosition.accept(selectedNode[0]);
+    if(nodes.isEmpty())
+        defaults.setVisibility(GONE);
+
+    LinearLayout helpRow=ClinicalUi.actionRow(context,context.getString(R.string.helpname),
+          context.getString(R.string.clinical_wear_help_hint));
+    LinearLayout content=ConnectionUi.content(context);
+    content.addView(ClinicalUi.header(context,
+          context.getString(R.string.clinical_wear_title),cancel));
+    content.addView(ConnectionUi.intro(context,R.string.clinical_wear_intro));
+    content.addView(ClinicalUi.sectionLabel(context,
+          context.getString(R.string.clinical_wear_device_section)));
+    content.addView(ClinicalUi.card(context,
+          ClinicalUi.fieldRow(context,context.getString(R.string.clinical_wear_device),watches)));
+    content.addView(ClinicalUi.sectionLabel(context,
+          context.getString(R.string.clinical_wear_numbers_section)));
+    content.addView(ClinicalUi.card(context,numbersPhone,numbersWatch));
+    String directLabel=context.getString(R.string.directsensor);
+    TextView directSection=ClinicalUi.sectionLabel(context,
+          context.getString(R.string.clinical_wear_sensor_section));
+    LinearLayout directCard=ClinicalUi.card(context,sensorPhone,sensorWatch);
+    if(directLabel.isEmpty()) {
+        directSection.setVisibility(GONE);
+        directCard.setVisibility(GONE);
+        }
+    content.addView(directSection);
+    content.addView(directCard);
+    LinearLayout.LayoutParams defaultsParams=new LinearLayout.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+    defaultsParams.topMargin=ClinicalUi.dp(context,16);
+    defaults.setLayoutParams(defaultsParams);
+    content.addView(defaults);
+    content.addView(ClinicalUi.sectionLabel(context,
+          context.getString(R.string.connection_support_section)));
+    content.addView(ClinicalUi.card(context,helpRow));
+    LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);
+    saveParams.topMargin=ClinicalUi.dp(context,20);
+    save.setLayoutParams(saveParams);
+    content.addView(save);
+    ScrollView screen=ConnectionUi.screen(context,content);
+    EnableControls(parent,false);
+    ConnectionUi.fullScreen(context,screen);
+
+    helpRow.setOnClickListener(view->help.helplight(R.string.wearosinfo,context));
+    cancel.setOnClickListener(view->context.doonback());
+    save.setOnClickListener(view-> {
+        if(sensorWatch.isEnabled()&&!defaults.isEnabled()
+              &&validWatchNodePosition(selectedNode[0],nodes.size())) {
+            boolean watchNumbers=numbersWatch.isChecked();
+            boolean watchDirect=sensorWatch.isChecked();
+            Node node=nodes.get(selectedNode[0]);
+            String name=makenodename(node);
+            boolean wasDirect=watchSensor[0];
+            byte[] network=Natives.getmynetinfo(name,true,watchDirect?1:-1,
+                  isGalaxy(node),watchNumbers?1:-1);
+            Runnable switchDirection=()->Applic.switchbluetooth(name,network,watchDirect);
+            if(Natives.hasAidexX()) {
+                if(!wasDirect&&watchDirect)
+                    SensorBluetooth.afterUnpair(context,result->switchDirection.run());
+                else if(wasDirect&&!watchDirect) {
+                    if(sendbluetooth(name,network,false)) {
+                        UnpairOverlayHost unpair=new UnpairOverlayHost(context,
+                              R.string.releasingsensor);
+                        unpair.postMessage(context.getString(R.string.unpairingwatch));
+                        context.unpairer=unpair;
+                        context.doswitch=()->Applic.setbluetooth(context,true);
+                        }
+                    }
+                else
+                    switchDirection.run();
+                }
+            else
+                switchDirection.run();
+            }
+        context.doonback();
+        });
+    defaults.setOnClickListener(view-> {
+        if(!validWatchNodePosition(selectedNode[0],nodes.size()))
+            return;
+        MessageSender sender=MessageSender.getMessageSender();
+        if(sender==null)
+            return;
+        Node node=nodes.get(selectedNode[0]);
+        String name=makenodename(node);
+        Runnable applyDefaults=()-> {
+            sender.toDefaults(node);
+            Natives.setWearosdefaults(name,isGalaxy(node));
+            MainActivity main=MainActivity.thisone;
+            Applic.setbluetooth(main==null?Applic.app:main,true);
+            context.doonback();
+            };
+        if(Natives.directsensorwatch(name)<0)
+            confirmunsynced(context,screen,applyDefaults);
+        else
+            applyDefaults.run();
+        });
+    context.setonback(()-> {
+        EnableControls(parent,true);
+        removeContentView(screen);
+        context.hideSystemUI();
+        });
+    }
+
+@SuppressWarnings("unused")
+private static void legacyShow(MainActivity context,View parent) {
    final int[] nodenumptr={-1};
 //    var start=getbutton(context,R.string.initwatchapp);
     var defaults=getbutton(context,context.getString(R.string.defaults));
@@ -332,6 +491,13 @@ static String makenodename(Node node) {
     }
 
 
+
+private static void confirmunsynced(MainActivity act,View parent,Runnable save) {
+    ConnectionUi.confirmSheet(act,parent,
+          act.getString(R.string.clinical_wear_unsynced_title),
+          act.getString(R.string.clinical_wear_unsynced_message),
+          act.getString(R.string.defaults),ClinicalUi.ButtonRole.DANGER,save);
+    }
 
 private static void confirmunsynced(MainActivity act,Runnable save) {
     AlertDialog.Builder builder = new AlertDialog.Builder(act);

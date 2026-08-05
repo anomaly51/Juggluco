@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="export_modern_title">Экспорт данных</string>
+    <string name="export_modern_intro">Выберите период и набор данных. Затем Android предложит место для сохранения файла.</string>
+    <string name="export_modern_period_section">Период</string>
+    <string name="export_modern_period_label">Последние</string>
+    <string name="export_modern_days_unit">дней</string>
+    <string name="export_modern_period_helper">Можно использовать дробное значение. Период заканчивается на последнем доступном измерении.</string>
+    <string name="export_modern_calibrated_helper">Использовать откалиброванные значения глюкозы в поддерживаемых форматах.</string>
+    <string name="export_modern_type_section">Выберите тип данных</string>
+    <string name="export_modern_amounts_helper">Инсулин, углеводы, заметки и другие введённые значения.</string>
+    <string name="export_modern_scans_helper">Измерения глюкозы, полученные ручным сканированием сенсора.</string>
+    <string name="export_modern_stream_helper">Непрерывные измерения глюкозы, полученные от сенсора.</string>
+    <string name="export_modern_history_helper">Исторические измерения, сохранённые в памяти сенсора.</string>
+    <string name="export_modern_meals_helper">Записи о приёмах пищи в отчёте, который открывается в браузере.</string>
+    <string name="export_modern_libreview_helper">CSV для совместимых сценариев работы с LibreView.</string>
+    <string name="export_modern_card_description">Экспортировать %1$s в формате %2$s</string>
+    <string name="export_modern_error_empty">Введите количество предыдущих дней для экспорта.</string>
+    <string name="export_modern_error_number">Введите корректное количество дней.</string>
+    <string name="export_modern_error_positive">Период экспорта должен быть больше нуля.</string>
+
+    <string name="stats_modern_title">Статистика</string>
+    <string name="stats_modern_controls_section">Период и источник</string>
+    <string name="stats_modern_period_value">Последние %1$d дней</string>
+    <string name="stats_modern_history_helper">Использовать историю сенсора вместо потока измерений.</string>
+    <string name="stats_modern_loading">Рассчитываем статистику…</string>
+    <string name="stats_modern_ready">Статистика готова · целевой диапазон выделен клиническим зелёным цветом.</string>
+    <string name="stats_modern_no_stream_data">За этот период нет потоковых измерений. Показана история сенсора.</string>
+    <string name="stats_modern_no_history_data">За этот период нет истории сенсора. Показан поток измерений.</string>
+    <string name="stats_modern_no_period_data">За этот период нет измерений. Выберите другой период.</string>
+    <string name="stats_modern_report">Открыть отчёт</string>
+    <string name="stats_modern_period_title">Период статистики</string>
+    <string name="stats_modern_period_intro">Выберите глубину периода для расчёта статистики.</string>
+    <string name="stats_modern_period_section">Период анализа</string>
+    <string name="stats_modern_period_label">Последние</string>
+    <string name="stats_modern_days_unit">дней</string>
+    <string name="stats_modern_quick_period">%1$d дн.</string>
+    <string name="stats_modern_actions_section">Действия</string>
+    <string name="stats_modern_apply_period">Применить период</string>
+    <string name="stats_modern_error_empty">Введите количество дней для анализа.</string>
+    <string name="stats_modern_error_number">Используйте целое количество дней.</string>
+    <string name="stats_modern_error_positive">Период должен быть не меньше одного дня.</string>
+    <string name="stats_modern_error_large">Выбран слишком большой период.</string>
+</resources>

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="clinical_search_title">Поиск записей</string>
+    <string name="clinical_search_back">Назад</string>
+    <string name="clinical_search_help">Справка</string>
+    <string name="clinical_search_intro">Находите показатели глюкозы, сканы, инсулин, блюда или активность, не покидая график.</string>
+
+    <string name="clinical_search_type_section">Что искать</string>
+    <string name="clinical_search_record_type">Тип записи</string>
+    <string name="clinical_search_sources_section">Источники глюкозы</string>
+    <string name="clinical_search_sources_hint">Выберите один или несколько источников. При выборе сохранённого типа записи источники сбрасываются.</string>
+
+    <string name="clinical_search_range_section">Диапазон значений</string>
+    <string name="clinical_search_lower_value">Нижняя граница</string>
+    <string name="clinical_search_upper_value">Верхняя граница</string>
+    <string name="clinical_search_lower_hint">0</string>
+    <string name="clinical_search_upper_hint">999</string>
+    <string name="clinical_search_record_amount_unit">значение</string>
+
+    <string name="clinical_search_time_section">Время суток</string>
+    <string name="clinical_search_from_time">С</string>
+    <string name="clinical_search_to_time">До</string>
+    <string name="clinical_search_any_time">Любое время</string>
+
+    <string name="clinical_search_meal_section">Условия блюда</string>
+    <string name="clinical_search_ingredient">Ингредиент</string>
+    <string name="clinical_search_ingredient_hint">например, рис</string>
+    <string name="clinical_search_minimum_amount">Минимальное количество</string>
+    <string name="clinical_search_optional">Необязательно</string>
+    <string name="clinical_search_ingredient_unit">г</string>
+
+    <string name="clinical_search_direction_section">Направление поиска</string>
+    <string name="clinical_search_direction_hint">Ищите до или после текущей позиции на графике.</string>
+    <string name="clinical_search_earlier">Раньше</string>
+    <string name="clinical_search_later">Позже</string>
+
+    <string name="clinical_search_reset">Сбросить</string>
+    <string name="clinical_search_action">Найти</string>
+    <string name="clinical_search_result">Результат поиска</string>
+    <string name="clinical_search_previous_result">Предыдущий результат</string>
+    <string name="clinical_search_next_result">Следующий результат</string>
+    <string name="clinical_search_close_results">Закрыть результаты поиска</string>
+
+    <string name="clinical_search_error_limits_required">Укажите обе границы диапазона.</string>
+    <string name="clinical_search_error_limits_number">Для обеих границ укажите корректные числа.</string>
+    <string name="clinical_search_error_range_order">Нижняя граница не должна превышать верхнюю.</string>
+    <string name="clinical_search_error_amount_number">Укажите корректное минимальное количество ингредиента.</string>
+    <string name="clinical_search_error_amount_negative">Минимальное количество ингредиента не может быть отрицательным.</string>
+    <string name="clinical_search_error_ingredient_required">Сначала укажите ингредиент, затем его минимальное количество.</string>
+    <string name="clinical_search_no_results">Подходящих записей нет. Измените фильтры и повторите поиск.</string>
+</resources>
