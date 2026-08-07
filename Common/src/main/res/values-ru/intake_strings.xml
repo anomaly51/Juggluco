@@ -51,7 +51,7 @@
     <string name="intake_backend_checking">Проверяем backend…</string>
     <string name="intake_backend_online">Backend подключён</string>
     <string name="intake_backend_ai_missing">Backend готов · ИИ не настроен</string>
-    <string name="intake_backend_offline">Backend недоступен · нажмите для настройки</string>
+    <string name="intake_backend_offline">Офлайн · сохраняем локально</string>
     <string name="intake_backend_required">Перед сохранением запустите или настройте backend.</string>
     <string name="intake_backend_error">Backend: %1$s</string>
     <string name="intake_analysis_error">Не удалось распознать: %1$s</string>

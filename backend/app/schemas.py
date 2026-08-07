@@ -78,6 +78,7 @@ class IntakeCreate(BaseModel):
     occurred_at_ms: int = Field(gt=0)
     meal_text: str | None = Field(default=None, max_length=4_000)
     carbs_g: float | None = Field(default=None, ge=0, le=1_000)
+    portion_g: float | None = Field(default=None, gt=0, le=10_000)
     carbs_source: str | None = Field(default=None, max_length=64)
     insulin_units: float | None = Field(default=None, gt=0, le=500)
     insulin_type: str | None = Field(default=None, max_length=80)
@@ -108,6 +109,8 @@ class IntakeCreate(BaseModel):
             raise ValueError("an intake needs a meal or insulin")
         if has_meal and has_insulin:
             raise ValueError("meal and insulin must be separate events")
+        if self.portion_g is not None and not has_meal:
+            raise ValueError("portion_g is only valid for a meal event")
         if self.carbs_g is not None and self.carbs_source is None:
             raise ValueError("carbs_source is required when carbs_g is present")
         if self.carbs_g is None and self.carbs_source is not None:
@@ -128,6 +131,25 @@ class IntakeCreate(BaseModel):
                     "insulin must be NovoRapid/rapid or Tresiba/long"
                 )
         return self
+
+
+class ManualMealEventCreate(BaseModel):
+    """Structured meal command that remains usable without an AI session."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    client_event_id: UUID
+    occurred_at_ms: int = Field(gt=0)
+    meal_text: str = Field(min_length=1, max_length=4_000)
+    carbs_g: float = Field(ge=0, le=1_000)
+    portion_g: float | None = Field(default=None, gt=0, le=10_000)
+
+    @field_validator("occurred_at_ms")
+    @classmethod
+    def validate_occurred_at_ms(cls, value: int) -> int:
+        if value > int(time.time() * 1_000) + 10 * 60 * 1_000:
+            raise ValueError("occurred_at_ms cannot be more than 10 minutes in the future")
+        return value
 
 
 class InsulinEventCreate(BaseModel):
@@ -156,6 +178,9 @@ class IntakeEvent(BaseModel):
     occurred_at_ms: int
     meal_text: str | None
     carbs_g: float | None
+    portion_g: float | None = Field(default=None, ge=0, le=10_000)
+    original_portion_g: float | None = Field(default=None, ge=0, le=10_000)
+    original_carbs_g: float | None = Field(default=None, ge=0, le=1_000)
     carbs_source: str | None
     insulin_units: float | None
     insulin_type: str | None
@@ -175,6 +200,14 @@ class IntakeEvent(BaseModel):
     deleted_at_ms: int | None
     deleted: bool
     sync_version: int
+
+
+class MealPortionUpdate(BaseModel):
+    """Idempotent correction of how much of an analyzed meal was consumed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    portion_g: float = Field(ge=0, le=10_000)
 
 
 class IntakeListResponse(BaseModel):

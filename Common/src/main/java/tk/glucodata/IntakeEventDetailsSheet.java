@@ -6,11 +6,14 @@ import static android.view.View.VISIBLE;
 import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 
 import android.text.TextUtils;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -27,7 +30,7 @@ import java.util.Locale;
 final class IntakeEventDetailsSheet {
     private final MainActivity activity;
     private final IntakeRepository repository;
-    private final IntakeEvent event;
+    private IntakeEvent event;
 
     private View root;
     private View sheet;
@@ -37,6 +40,14 @@ final class IntakeEventDetailsSheet {
     private View confirmDelete;
     private ProgressBar deleteProgress;
     private TextView error;
+    private View portionEditor;
+    private EditText portionInput;
+    private TextView portionSummary;
+    private TextView portionPreview;
+    private TextView portionError;
+    private Button portionSave;
+    private ProgressBar portionProgress;
+    private View[] portionQuickActions;
     private Insets safeInsets = Insets.NONE;
     private boolean busy;
     private boolean closed;
@@ -63,6 +74,20 @@ final class IntakeEventDetailsSheet {
         confirmDelete = root.findViewById(R.id.intake_event_delete_confirm);
         deleteProgress = root.findViewById(R.id.intake_event_delete_progress);
         error = root.findViewById(R.id.intake_event_details_error);
+        portionEditor = root.findViewById(R.id.intake_event_portion_editor);
+        portionInput = root.findViewById(R.id.intake_event_portion_input);
+        portionSummary = root.findViewById(R.id.intake_event_portion_summary);
+        portionPreview = root.findViewById(R.id.intake_event_portion_preview);
+        portionError = root.findViewById(R.id.intake_event_portion_error);
+        portionSave = root.findViewById(R.id.intake_event_portion_save);
+        portionProgress = root.findViewById(
+                R.id.intake_event_portion_progress);
+        portionQuickActions = new View[] {
+                root.findViewById(R.id.intake_event_portion_25),
+                root.findViewById(R.id.intake_event_portion_50),
+                root.findViewById(R.id.intake_event_portion_75),
+                root.findViewById(R.id.intake_event_portion_100),
+        };
 
         renderEvent();
         root.setOnClickListener(view -> close(true));
@@ -72,6 +97,24 @@ final class IntakeEventDetailsSheet {
         deleteAction.setOnClickListener(view -> showDeleteConfirmation());
         cancelDelete.setOnClickListener(view -> hideDeleteConfirmation());
         confirmDelete.setOnClickListener(view -> deleteConfirmed());
+        portionQuickActions[0].setOnClickListener(
+                view -> setPortionFraction(0.25f));
+        portionQuickActions[1].setOnClickListener(
+                view -> setPortionFraction(0.50f));
+        portionQuickActions[2].setOnClickListener(
+                view -> setPortionFraction(0.75f));
+        portionQuickActions[3].setOnClickListener(
+                view -> setPortionFraction(1.00f));
+        portionSave.setOnClickListener(view -> savePortion());
+        portionInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence value,
+                    int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence value,
+                    int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable value) {
+                updatePortionPreview();
+            }
+        });
 
         ViewCompat.setAccessibilityPaneTitle(sheet,
                 activity.getString(titleResource()));
@@ -119,6 +162,9 @@ final class IntakeEventDetailsSheet {
         type.setText(typeResource(meal, insulin));
         name.setText(displayName(meal, insulin));
         amount.setText(displayAmount(meal, insulin));
+        deleteAction.setEnabled(!event.pendingSync);
+        deleteAction.setAlpha(event.pendingSync ? 0.45f : 1.0f);
+        renderPortionEditor(meal);
 
         if (meal) {
             AbsorptionEstimate estimate = absorptionEstimate();
@@ -130,7 +176,10 @@ final class IntakeEventDetailsSheet {
             absorption.setVisibility(GONE);
         }
 
-        if (meal && "ai_estimate".equalsIgnoreCase(event.carbsSource)) {
+        if (event.pendingSync) {
+            source.setVisibility(VISIBLE);
+            source.setText(R.string.intake_event_details_pending_sync);
+        } else if (meal && "ai_estimate".equalsIgnoreCase(event.carbsSource)) {
             source.setVisibility(VISIBLE);
             source.setText(event.aiConfidence > 0f
                     ? activity.getString(R.string.intake_event_details_ai_source,
@@ -140,6 +189,96 @@ final class IntakeEventDetailsSheet {
         } else {
             source.setVisibility(GONE);
         }
+    }
+
+    private void renderPortionEditor(boolean meal) {
+        if (!meal || !event.hasEditablePortion()) {
+            portionEditor.setVisibility(GONE);
+            return;
+        }
+        portionEditor.setVisibility(VISIBLE);
+        portionError.setVisibility(GONE);
+        portionSummary.setText(activity.getString(
+                R.string.intake_event_portion_summary,
+                formatNumber(event.portionGrams),
+                formatNumber(event.originalPortionGrams)));
+        portionInput.setText(formatNumber(event.portionGrams));
+        updatePortionPreview();
+    }
+
+    private void setPortionFraction(float fraction) {
+        if (busy || !event.hasEditablePortion()) return;
+        float value = event.originalPortionGrams * fraction;
+        portionInput.setText(formatNumber(value));
+        portionInput.setSelection(portionInput.length());
+        portionError.setVisibility(GONE);
+    }
+
+    private Float enteredPortion() {
+        String value = IntakeEvent.clean(portionInput.getText().toString())
+                .replace(',', '.');
+        if (value.isEmpty()) return null;
+        try {
+            float parsed = Float.parseFloat(value);
+            return Float.isFinite(parsed) ? parsed : null;
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private void updatePortionPreview() {
+        if (portionPreview == null || event == null
+                || !event.hasEditablePortion()) return;
+        Float entered = enteredPortion();
+        if (entered == null || entered < 0.0f
+                || entered > event.originalPortionGrams) {
+            portionPreview.setText("");
+            return;
+        }
+        float carbs = event.originalCarbsGrams * entered
+                / event.originalPortionGrams;
+        portionPreview.setText(activity.getString(
+                R.string.intake_event_portion_preview,
+                formatNumber(carbs)));
+    }
+
+    private void savePortion() {
+        if (busy || closed || !event.hasEditablePortion()) return;
+        Float entered = enteredPortion();
+        if (entered == null || entered < 0.0f
+                || entered > event.originalPortionGrams) {
+            portionInput.setError(activity.getString(
+                    R.string.intake_event_portion_invalid,
+                    formatNumber(event.originalPortionGrams)));
+            portionInput.requestFocus();
+            return;
+        }
+        portionInput.setError(null);
+        portionError.setVisibility(GONE);
+        setBusy(true);
+        repository.updateMealPortion(event, entered,
+                new IntakeRepository.Callback<IntakeEvent>() {
+                    @Override
+                    public void onSuccess(IntakeEvent updated) {
+                        if (closed) return;
+                        event = updated;
+                        setBusy(false);
+                        renderEvent();
+                        activity.requestRender();
+                        portionSummary.announceForAccessibility(
+                                activity.getString(
+                                        R.string.intake_event_portion_saved));
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        if (closed) return;
+                        setBusy(false);
+                        portionError.setVisibility(VISIBLE);
+                        portionError.announceForAccessibility(
+                                portionError.getText());
+                    }
+                });
     }
 
     /** Prefer the durable intake payload, then fill older cached records from
@@ -305,6 +444,10 @@ final class IntakeEventDetailsSheet {
         deleteProgress.setVisibility(value ? VISIBLE : GONE);
         cancelDelete.setEnabled(!value);
         deleteAction.setEnabled(!value);
+        portionInput.setEnabled(!value);
+        portionSave.setVisibility(value ? INVISIBLE : VISIBLE);
+        portionProgress.setVisibility(value ? VISIBLE : GONE);
+        for (View action : portionQuickActions) action.setEnabled(!value);
         root.findViewById(R.id.intake_event_details_close)
                 .setEnabled(!value);
     }

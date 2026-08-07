@@ -83,6 +83,50 @@ def test_client_event_id_is_idempotent_and_conflicts_on_changed_data(
     assert conflict.status_code == 409
 
 
+def test_manual_meal_is_idempotent_and_keeps_an_editable_portion_baseline(
+    client, auth_headers
+):
+    payload = {
+        "client_event_id": str(uuid4()),
+        "occurred_at_ms": int(time.time() * 1000) - 30_000,
+        "meal_text": "Buckwheat with chicken",
+        "carbs_g": 48.0,
+        "portion_g": 300.0,
+    }
+    first = client.post("/v1/meal-events", headers=auth_headers, json=payload)
+    retry = client.post("/v1/meal-events", headers=auth_headers, json=payload)
+    assert first.status_code == retry.status_code == 200
+    assert first.json() == retry.json()
+    event = first.json()
+    assert event["carbs_source"] == "manual"
+    assert event["portion_g"] == event["original_portion_g"] == 300.0
+    assert event["original_carbs_g"] == 48.0
+
+    changed = client.put(
+        f"/v1/intakes/{event['id']}/meal-portion",
+        headers=auth_headers,
+        json={"portion_g": 150.0},
+    )
+    assert changed.status_code == 200
+    assert changed.json()["portion_g"] == 150.0
+    assert changed.json()["carbs_g"] == 24.0
+    assert changed.json()["original_carbs_g"] == 48.0
+
+
+def test_manual_meal_rejects_missing_description(client, auth_headers):
+    response = client.post(
+        "/v1/meal-events",
+        headers=auth_headers,
+        json={
+            "client_event_id": str(uuid4()),
+            "occurred_at_ms": int(time.time() * 1000),
+            "meal_text": " ",
+            "carbs_g": 20,
+        },
+    )
+    assert response.status_code == 422
+
+
 def test_validation_prevents_incomplete_or_unsafe_records(client, auth_headers):
     empty = valid_payload(insulin_units=None)
     assert client.post(

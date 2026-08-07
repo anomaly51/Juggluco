@@ -51,7 +51,7 @@
     <string name="intake_backend_checking">Checking backend…</string>
     <string name="intake_backend_online">Backend connected</string>
     <string name="intake_backend_ai_missing">Backend ready · AI not configured</string>
-    <string name="intake_backend_offline">Backend unavailable · tap to configure</string>
+    <string name="intake_backend_offline">Offline · saves locally</string>
     <string name="intake_backend_required">Start or configure the backend before saving.</string>
     <string name="intake_backend_error">Backend: %1$s</string>
     <string name="intake_analysis_error">Could not analyze: %1$s</string>

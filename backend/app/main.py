@@ -62,6 +62,8 @@ from .schemas import (
     IntakeCreate,
     IntakeEvent,
     IntakeListResponse,
+    ManualMealEventCreate,
+    MealPortionUpdate,
     MealChatMessage,
     MealChatProposal,
     MealChatSessionCreate,
@@ -98,7 +100,11 @@ def _begin_immediate(session: Session, operation: str) -> None:
 
 
 def _payload_hash(payload: IntakeCreate) -> str:
-    canonical = payload.model_dump_json(exclude_none=False)
+    # Preserve hashes created before manual portion support was added. A null
+    # portion is semantically the old payload and must keep byte-for-byte
+    # idempotency across an in-place backend upgrade.
+    exclude = {"portion_g"} if payload.portion_g is None else None
+    canonical = payload.model_dump_json(exclude_none=False, exclude=exclude)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -157,6 +163,38 @@ def _analysis_absorption(
     )
 
 
+def _analysis_nutrition(
+    result_json: str | None,
+) -> tuple[float | None, float | None]:
+    """Return the immutable analyzed full portion and carbohydrate baseline."""
+
+    if not result_json:
+        return None, None
+    try:
+        payload = json.loads(result_json)
+    except (TypeError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+
+    def bounded_number(key: str, maximum: float) -> float | None:
+        value = payload.get(key)
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed) or parsed < 0 or parsed > maximum:
+            return None
+        return parsed
+
+    return (
+        bounded_number("total_portion_g", 10_000.0),
+        bounded_number("estimated_carbs_g", 1_000.0),
+    )
+
+
 def _event_response(
     record: IntakeEventRecord,
     analysis_result_json: str | None = None,
@@ -167,12 +205,29 @@ def _event_response(
         absorption_duration_minutes,
         absorption_confidence,
     ) = _analysis_absorption(analysis_result_json)
+    analysis_portion_g, analysis_carbs_g = _analysis_nutrition(
+        analysis_result_json
+    )
+    original_portion_g = record.original_portion_g
+    original_carbs_g = record.original_carbs_g
+    if original_portion_g is None:
+        original_portion_g = analysis_portion_g
+    if original_carbs_g is None:
+        original_carbs_g = analysis_carbs_g
+    portion_g = record.portion_g
+    if portion_g is None and original_portion_g is not None:
+        # Existing confirmed meals predate the consumed-portion column. Treat
+        # them as fully eaten until the user explicitly corrects the record.
+        portion_g = original_portion_g
     return IntakeEvent(
         id=UUID(record.id),
         client_event_id=UUID(record.client_event_id),
         occurred_at_ms=record.occurred_at_ms,
         meal_text=record.meal_text,
         carbs_g=record.carbs_g,
+        portion_g=portion_g,
+        original_portion_g=original_portion_g,
+        original_carbs_g=original_carbs_g,
         carbs_source=record.carbs_source,
         insulin_units=record.insulin_units,
         insulin_type=record.insulin_type,
@@ -298,6 +353,14 @@ def _store_intake(
                 detail="analysis_id does not exist",
             )
 
+    analyzed_portion_g, analyzed_carbs_g = _analysis_nutrition(
+        analysis.result_json if analysis is not None else None
+    )
+    original_portion_g = payload.portion_g or analyzed_portion_g
+    original_carbs_g = (
+        payload.carbs_g if payload.portion_g is not None else analyzed_carbs_g
+    )
+
     now = _now_ms()
     record = IntakeEventRecord(
         id=str(uuid4()),
@@ -305,6 +368,9 @@ def _store_intake(
         occurred_at_ms=payload.occurred_at_ms,
         meal_text=payload.meal_text,
         carbs_g=payload.carbs_g,
+        portion_g=original_portion_g,
+        original_portion_g=original_portion_g,
+        original_carbs_g=original_carbs_g,
         carbs_source=payload.carbs_source,
         insulin_units=payload.insulin_units,
         insulin_type=payload.insulin_type,
@@ -1080,10 +1146,32 @@ def create_app(
                 occurred_at_ms=payload.occurred_at_ms,
                 meal_text=None,
                 carbs_g=None,
+                portion_g=None,
                 carbs_source=None,
                 insulin_units=payload.insulin_units,
                 insulin_type=insulin_type,
                 insulin_name=payload.insulin_name,
+                analysis_id=None,
+            ),
+            session,
+        )
+
+    @router.post("/meal-events", response_model=IntakeEvent)
+    def create_manual_meal_event(
+        payload: ManualMealEventCreate,
+        session: SessionDependency,
+    ) -> IntakeEvent:
+        return _store_intake(
+            IntakeCreate(
+                client_event_id=payload.client_event_id,
+                occurred_at_ms=payload.occurred_at_ms,
+                meal_text=payload.meal_text,
+                carbs_g=payload.carbs_g,
+                portion_g=payload.portion_g,
+                carbs_source="manual",
+                insulin_units=None,
+                insulin_type=None,
+                insulin_name=None,
                 analysis_id=None,
             ),
             session,
@@ -1160,6 +1248,114 @@ def create_app(
             record,
             analysis.result_json if analysis is not None else None,
         )
+
+    @router.put(
+        "/intakes/{event_id}/meal-portion",
+        response_model=IntakeEvent,
+    )
+    def update_meal_portion(
+        event_id: UUID,
+        payload: MealPortionUpdate,
+        request: Request,
+        session: SessionDependency,
+    ) -> IntakeEvent:
+        _begin_immediate(session, "meal portion update")
+        record = session.get(IntakeEventRecord, str(event_id))
+        if record is None:
+            session.rollback()
+            raise HTTPException(status_code=404, detail="intake event not found")
+        if record.deleted_at_ms is not None:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="deleted intake event cannot be edited",
+            )
+        if record.meal_text is None and record.carbs_g is None:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="only meal events have an editable portion",
+            )
+        analysis = (
+            session.get(AnalysisRecord, record.analysis_id)
+            if record.analysis_id
+            else None
+        )
+        analysis_json = analysis.result_json if analysis is not None else None
+        original_portion_g = record.original_portion_g
+        original_carbs_g = record.original_carbs_g
+        if original_portion_g is None or original_carbs_g is None:
+            original_portion_g, original_carbs_g = _analysis_nutrition(analysis_json)
+        if (
+            original_portion_g is None
+            or original_portion_g <= 0
+            or original_carbs_g is None
+        ):
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="meal has no analyzed portion baseline",
+            )
+        if payload.portion_g > original_portion_g + 0.01:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="consumed portion cannot exceed the recorded full portion",
+            )
+
+        consumed = min(payload.portion_g, original_portion_g)
+        recalculated_carbs = round(
+            original_carbs_g * consumed / original_portion_g,
+            2,
+        )
+        effective_portion = (
+            record.portion_g
+            if record.portion_g is not None
+            else original_portion_g
+        )
+        if (
+            math.isclose(effective_portion, consumed, abs_tol=0.005)
+            and record.carbs_g is not None
+            and math.isclose(record.carbs_g, recalculated_carbs, abs_tol=0.005)
+        ):
+            session.rollback()
+            return _event_response(record, analysis_json)
+
+        now = _now_ms()
+        record.portion_g = consumed
+        record.carbs_g = recalculated_carbs
+        record.updated_at_ms = now
+        change = SyncChangeRecord(
+            event_id=record.id,
+            operation="upsert",
+            changed_at_ms=now,
+        )
+        session.add(change)
+        session.flush()
+        record.sync_version = change.id
+        dirty_insert = sqlite_insert(ForecastMaintenanceRecord).values(
+            key="training_dirty_since", value_ms=record.occurred_at_ms
+        )
+        session.execute(
+            dirty_insert.on_conflict_do_update(
+                index_elements=[ForecastMaintenanceRecord.key],
+                set_={
+                    "value_ms": func.min(
+                        ForecastMaintenanceRecord.value_ms,
+                        dirty_insert.excluded.value_ms,
+                    )
+                },
+            )
+        )
+        session.commit()
+        try:
+            request.app.state.forecast_service.current(session)
+        except Exception:
+            session.rollback()
+            logger.exception(
+                "could not regenerate current forecast after meal portion update"
+            )
+        return _event_response(record, analysis_json)
 
     @router.delete("/intakes/{event_id}", response_model=IntakeEvent)
     def delete_intake(

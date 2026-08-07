@@ -41,7 +41,7 @@
     <string name="insulin_save">Save insulin</string>
     <string name="insulin_saving">Saving insulin…</string>
     <string name="insulin_invalid_dose">Enter an insulin dose greater than zero.</string>
-    <string name="insulin_saved">Insulin saved</string>
+    <string name="insulin_saved">Saved on phone · synchronization is automatic</string>
 
     <string name="meal_chat_title">Meal assistant</string>
     <string name="meal_chat_subtitle">A conversation before anything is recorded</string>
@@ -96,4 +96,22 @@
     <string name="intake_details_meal_title">Meal event</string>
     <string name="intake_details_insulin_title">Insulin event</string>
     <string name="intake_details_combined_title">Food &amp; insulin event</string>
+    <string name="intake_choose_manual_meal_title">Enter meal manually</string>
+    <string name="intake_choose_manual_meal_subtitle">Works without internet · saves on this phone first</string>
+    <string name="manual_meal_title">Manual meal</string>
+    <string name="manual_meal_subtitle">A quick offline-capable record</string>
+    <string name="manual_meal_name_label">What did you eat?</string>
+    <string name="manual_meal_name_hint">For example, buckwheat with chicken</string>
+    <string name="manual_meal_carbs_label">Carbohydrates, g</string>
+    <string name="manual_meal_carbs_hint">0</string>
+    <string name="manual_meal_portion_label">Full portion, g (optional)</string>
+    <string name="manual_meal_portion_hint">For example, 250</string>
+    <string name="manual_meal_offline_hint">The record is stored in app-private phone storage immediately. It will sync automatically when the backend is available.</string>
+    <string name="manual_meal_save">Save on phone</string>
+    <string name="manual_meal_saving">Saving…</string>
+    <string name="manual_meal_saved_locally">Saved on phone · synchronization is automatic</string>
+    <string name="manual_meal_invalid_name">Describe the meal</string>
+    <string name="manual_meal_invalid_carbs">Enter carbohydrates from 0 to 1000 g</string>
+    <string name="manual_meal_invalid_portion">Enter a portion from 0 to 10000 g</string>
+    <string name="intake_local_save_error">Could not save locally: %1$s</string>
 </resources>

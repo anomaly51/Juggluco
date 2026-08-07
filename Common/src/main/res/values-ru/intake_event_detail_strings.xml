@@ -34,4 +34,19 @@
     <string name="intake_event_delete_confirm_accessibility">Безвозвратно удалить эту запись</string>
     <string name="intake_event_deleting">Удаляем запись</string>
     <string name="intake_event_delete_error">Не удалось удалить запись. Проверьте подключение к backend и повторите попытку.</string>
+    <string name="intake_event_portion_label">ФАКТИЧЕСКИ СЪЕДЕНО</string>
+    <string name="intake_event_portion_summary">%1$s из %2$s г</string>
+    <string name="intake_event_portion_input_hint">Съеденная порция, г</string>
+    <string name="intake_event_portion_25" formatted="false">25%</string>
+    <string name="intake_event_portion_50" formatted="false">50%</string>
+    <string name="intake_event_portion_75" formatted="false">75%</string>
+    <string name="intake_event_portion_100">Всё</string>
+    <string name="intake_event_portion_preview">На графике и в прогнозе будет учтено %1$s г углеводов</string>
+    <string name="intake_event_portion_save">Сохранить съеденную порцию</string>
+    <string name="intake_event_portion_save_accessibility">Сохранить фактически съеденное количество еды</string>
+    <string name="intake_event_portion_saving">Сохраняем съеденную порцию</string>
+    <string name="intake_event_portion_saved">Съеденная порция обновлена</string>
+    <string name="intake_event_portion_invalid">Введите значение от 0 до %1$s г.</string>
+    <string name="intake_event_portion_error">Не удалось обновить порцию. Проверьте подключение к backend и попробуйте снова.</string>
+    <string name="intake_event_details_pending_sync">Сохранено на этом телефоне. Ожидаем backend; синхронизация повторится автоматически.</string>
 </resources>

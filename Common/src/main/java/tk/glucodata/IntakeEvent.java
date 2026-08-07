@@ -13,11 +13,18 @@ import org.json.JSONObject;
 
 public final class IntakeEvent {
     public final String id;
+    public final String clientEventId;
+    /** True while the durable phone outbox is waiting for backend confirmation. */
+    public final boolean pendingSync;
     public final long occurredAtMs;
     public final String mealText;
     public final float carbsGrams;
     /** True when the backend explicitly supplied {@code carbs_g}, including 0 g. */
     public final boolean carbsPresent;
+    /** Actual consumed mass plus the immutable analyzed full-meal baseline. */
+    public final Float portionGrams;
+    public final Float originalPortionGrams;
+    public final Float originalCarbsGrams;
     public final String carbsSource;
     public final float insulinUnits;
     public final String insulinType;
@@ -37,7 +44,8 @@ public final class IntakeEvent {
         this(id, occurredAtMs, mealText, carbsGrams,
                 carbsGrams > 0.0f, carbsSource,
                 insulinUnits, insulinType, insulinName, analysisId,
-                aiConfidence, null, null, null, null);
+                aiConfidence, null, null, null, null,
+                null, null, null, "", false);
     }
 
     IntakeEvent(String id, long occurredAtMs, String mealText,
@@ -50,7 +58,7 @@ public final class IntakeEvent {
                 carbsSource, insulinUnits, insulinType, insulinName,
                 analysisId, aiConfidence, absorptionSpeed,
                 absorptionPeakMinutes, absorptionDurationMinutes,
-                absorptionConfidence);
+                absorptionConfidence, null, null, null, "", false);
     }
 
     private IntakeEvent(String id, long occurredAtMs, String mealText,
@@ -58,12 +66,20 @@ public final class IntakeEvent {
             float insulinUnits, String insulinType, String insulinName,
             String analysisId, float aiConfidence, Float absorptionSpeed,
             Integer absorptionPeakMinutes, Integer absorptionDurationMinutes,
-            Float absorptionConfidence) {
+            Float absorptionConfidence, Float portionGrams,
+            Float originalPortionGrams, Float originalCarbsGrams,
+            String clientEventId, boolean pendingSync) {
         this.id = clean(id);
+        this.clientEventId = clean(clientEventId);
+        this.pendingSync = pendingSync;
         this.occurredAtMs = occurredAtMs;
         this.mealText = clean(mealText);
         this.carbsGrams = nonNegative(carbsGrams);
         this.carbsPresent = carbsPresent;
+        this.portionGrams = optionalNonNegative(portionGrams);
+        this.originalPortionGrams = optionalNonNegative(
+                originalPortionGrams);
+        this.originalCarbsGrams = optionalNonNegative(originalCarbsGrams);
         this.carbsSource = clean(carbsSource);
         this.insulinUnits = nonNegative(insulinUnits);
         this.insulinType = clean(insulinType);
@@ -96,7 +112,12 @@ public final class IntakeEvent {
                 optionalFloat(json, "absorption_speed"),
                 optionalInteger(json, "absorption_peak_minutes"),
                 optionalInteger(json, "absorption_duration_minutes"),
-                optionalFloat(json, "absorption_confidence"));
+                optionalFloat(json, "absorption_confidence"),
+                optionalFloat(json, "portion_g"),
+                optionalFloat(json, "original_portion_g"),
+                optionalFloat(json, "original_carbs_g"),
+                nullableString(json, "client_event_id", ""),
+                json.optBoolean("pending_sync", false));
     }
 
     private static String nullableString(JSONObject json, String key,
@@ -108,10 +129,23 @@ public final class IntakeEvent {
     JSONObject toJson() throws JSONException {
         JSONObject json = new JSONObject();
         json.put("id", id);
+        if (!clientEventId.isEmpty()) {
+            json.put("client_event_id", clientEventId);
+        }
+        if (pendingSync) json.put("pending_sync", true);
         json.put("occurred_at_ms", occurredAtMs);
         json.put("meal_text", mealText);
         if (carbsPresent) {
             json.put("carbs_g", carbsGrams);
+        }
+        if (portionGrams != null) {
+            json.put("portion_g", portionGrams);
+        }
+        if (originalPortionGrams != null) {
+            json.put("original_portion_g", originalPortionGrams);
+        }
+        if (originalCarbsGrams != null) {
+            json.put("original_carbs_g", originalCarbsGrams);
         }
         json.put("carbs_source", carbsSource);
         json.put("insulin_units", insulinUnits);
@@ -151,6 +185,19 @@ public final class IntakeEvent {
         return absorptionSpeed != null;
     }
 
+    public boolean hasEditablePortion() {
+        return !pendingSync && hasMeal() && portionGrams != null
+                && originalPortionGrams != null
+                && originalPortionGrams > 0.0f
+                && originalCarbsGrams != null;
+    }
+
+    public float consumedFraction() {
+        if (!hasEditablePortion()) return 1.0f;
+        return Math.max(0.0f, Math.min(1.0f,
+                portionGrams / originalPortionGrams));
+    }
+
     public String insulinDisplayName() {
         if (!insulinName.isEmpty()) {
             return insulinName;
@@ -181,6 +228,11 @@ public final class IntakeEvent {
     private static Float optionalUnitValue(Float value) {
         return value != null && Float.isFinite(value)
                 && value >= 0.0f && value <= 1.0f ? value : null;
+    }
+
+    private static Float optionalNonNegative(Float value) {
+        return value != null && Float.isFinite(value) && value >= 0.0f
+                ? value : null;
     }
 
     private static Integer optionalPositive(Integer value) {

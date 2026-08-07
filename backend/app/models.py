@@ -25,6 +25,14 @@ class IntakeEventRecord(Base):
     occurred_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     meal_text: Mapped[str | None] = mapped_column(Text)
     carbs_g: Mapped[float | None] = mapped_column(Float)
+    # Actual consumed mass. The immutable linked analysis retains the originally
+    # estimated full portion and carbohydrate amount, so later edits can always
+    # be recalculated from the same baseline instead of compounding rounding.
+    portion_g: Mapped[float | None] = mapped_column(Float)
+    # Manual meals have no linked immutable AI analysis. Persist their initial
+    # full-portion baseline so later consumed-portion edits never compound.
+    original_portion_g: Mapped[float | None] = mapped_column(Float)
+    original_carbs_g: Mapped[float | None] = mapped_column(Float)
     carbs_source: Mapped[str | None] = mapped_column(String(64))
     insulin_units: Mapped[float | None] = mapped_column(Float)
     insulin_type: Mapped[str | None] = mapped_column(String(80))

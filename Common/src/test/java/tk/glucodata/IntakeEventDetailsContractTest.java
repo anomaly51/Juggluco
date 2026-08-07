@@ -15,6 +15,7 @@ import android.widget.TextView;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.json.JSONObject;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
@@ -40,8 +41,14 @@ public class IntakeEventDetailsContractTest {
                 R.id.intake_event_delete_confirmation);
         View progress = root.findViewById(
                 R.id.intake_event_delete_progress);
+        View portionEditor = root.findViewById(
+                R.id.intake_event_portion_editor);
+        View portionProgress = root.findViewById(
+                R.id.intake_event_portion_progress);
         assertEquals(GONE, confirmation.getVisibility());
         assertEquals(GONE, progress.getVisibility());
+        assertEquals(GONE, portionEditor.getVisibility());
+        assertEquals(GONE, portionProgress.getVisibility());
 
         assertTouchTarget(context, root.findViewById(
                 R.id.intake_event_details_close));
@@ -51,6 +58,16 @@ public class IntakeEventDetailsContractTest {
                 R.id.intake_event_delete_cancel));
         assertTouchTarget(context, root.findViewById(
                 R.id.intake_event_delete_confirm));
+        assertTouchTarget(context, root.findViewById(
+                R.id.intake_event_portion_save));
+        assertTouchTarget(context, root.findViewById(
+                R.id.intake_event_portion_25));
+        assertTouchTarget(context, root.findViewById(
+                R.id.intake_event_portion_50));
+        assertTouchTarget(context, root.findViewById(
+                R.id.intake_event_portion_75));
+        assertTouchTarget(context, root.findViewById(
+                R.id.intake_event_portion_100));
 
         assertHasAccessibleLabel(root.findViewById(
                 R.id.intake_event_details_close));
@@ -60,7 +77,35 @@ public class IntakeEventDetailsContractTest {
                 R.id.intake_event_delete_cancel));
         assertHasAccessibleLabel(root.findViewById(
                 R.id.intake_event_delete_confirm));
+        assertHasAccessibleLabel(root.findViewById(
+                R.id.intake_event_portion_save));
+        assertHasAccessibleLabel(root.findViewById(
+                R.id.intake_event_portion_input));
         assertHasAccessibleLabel(progress);
+        assertHasAccessibleLabel(portionProgress);
+    }
+
+    @Test
+    public void mealKeepsConsumedAndOriginalPortionBaseline() throws Exception {
+        IntakeEvent event = IntakeEvent.fromJson(new JSONObject()
+                .put("id", "meal-id")
+                .put("occurred_at_ms", 123L)
+                .put("meal_text", "Rice bowl")
+                .put("carbs_g", 26.0)
+                .put("carbs_source", "ai_estimate")
+                .put("portion_g", 175.0)
+                .put("original_portion_g", 350.0)
+                .put("original_carbs_g", 52.0));
+
+        assertTrue(event.hasEditablePortion());
+        assertEquals(175f, event.portionGrams, 0.001f);
+        assertEquals(350f, event.originalPortionGrams, 0.001f);
+        assertEquals(52f, event.originalCarbsGrams, 0.001f);
+        assertEquals(0.5f, event.consumedFraction(), 0.001f);
+        JSONObject cached = event.toJson();
+        assertEquals(175.0, cached.getDouble("portion_g"), 0.001);
+        assertEquals(350.0, cached.getDouble("original_portion_g"), 0.001);
+        assertEquals(52.0, cached.getDouble("original_carbs_g"), 0.001);
     }
 
     @Test
@@ -118,6 +163,24 @@ public class IntakeEventDetailsContractTest {
         assertTrue(deleteUi.contains("error.setVisibility(VISIBLE)"));
         assertFalse("Raw backend errors must not be rendered to the user",
                 deleteUi.contains("error.setText(message)"));
+
+        String portionTransport = between(client,
+                "IntakeEvent updateMealPortion", "private JSONObject requestJson");
+        assertTrue(portionTransport.contains("request.put(\"portion_g\""));
+        assertTrue(portionTransport.contains("/meal-portion"));
+        assertTrue(portionTransport.contains("requestJson(\"PUT\""));
+
+        String portionUpdate = between(repository,
+                "void updateMealPortion", "private void mergeConfirmedEvent");
+        assertTrue(portionUpdate.contains("api.updateMealPortion"));
+        assertTrue(portionUpdate.contains("mergeConfirmedEvent(updated)"));
+
+        String portionUi = between(sheet, "private void savePortion()",
+                "private AbsorptionEstimate absorptionEstimate()");
+        assertTrue(portionUi.contains("repository.updateMealPortion"));
+        assertTrue(portionUi.contains("event = updated"));
+        assertTrue(portionUi.contains("activity.requestRender()"));
+        assertFalse(portionUi.contains("setText(message)"));
     }
 
     private static void assertTouchTarget(Context context, View view) {

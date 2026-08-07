@@ -25,11 +25,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Backend-first intake repository.
+ * Local-first intake repository.
  *
- * <p>Writes are never queued into the legacy native record database. A create is
- * considered successful only after the backend confirms it. The small local JSON
- * cache is read-only fallback presentation data for the graph.</p>
+ * <p>Structured meal and insulin creates are committed to app-private phone
+ * storage before the UI reports success. A durable idempotent outbox then sends
+ * them to the configured backend and replaces the local graph item with the
+ * server-confirmed item without creating a duplicate.</p>
  */
 public final class IntakeRepository {
     public static final String DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
@@ -37,7 +38,9 @@ public final class IntakeRepository {
     private static final String KEY_URL = "url";
     private static final String KEY_TOKEN = "token";
     private static final String KEY_CACHE = "event_cache";
+    private static final String KEY_PENDING = "pending_creates";
     private static final int MAX_CACHE_ITEMS = 500;
+    private static final long SYNC_RETRY_MS = 30_000L;
     private static final String CONFIGURATION_CHANGED =
             "Backend configuration changed. Try again.";
 
@@ -66,17 +69,22 @@ public final class IntakeRepository {
     private final CopyOnWriteArrayList<Runnable> configurationListeners =
             new CopyOnWriteArrayList<>();
     private volatile List<IntakeEvent> events;
+    private final ArrayList<PendingIntakeOperation> pendingCreates;
     private volatile Map<Integer, IntakeEvent> renderedEvents =
             Collections.emptyMap();
     private final Map<String, Integer> knownRenderKeys = new HashMap<>();
     private final Set<Integer> allocatedRenderKeys = new HashSet<>();
     private int nextRenderKey = 1;
     private volatile long configurationGeneration;
+    private boolean syncScheduled;
 
     private IntakeRepository(Context context) {
         preferences = context.getApplicationContext().getSharedPreferences(
                 PREFS, Context.MODE_PRIVATE);
+        pendingCreates = readPendingCreates();
         events = Collections.unmodifiableList(readCache());
+        mergeMissingPendingIntoCache();
+        if (!pendingCreates.isEmpty()) schedulePendingSync(1_000L);
     }
 
     public static IntakeRepository get(Context context) {
@@ -112,8 +120,9 @@ public final class IntakeRepository {
             configurationGeneration++;
             // Cached events belong to one backend identity. Never show health
             // data from the previous service/account under new credentials.
-            replaceEvents(Collections.emptyList());
+            replaceEvents(pendingLocalEvents());
             notifyConfigurationChanged();
+            schedulePendingSync(250L);
         }
     }
 
@@ -150,7 +159,29 @@ public final class IntakeRepository {
         return "localhost".equalsIgnoreCase(host)
                 || "127.0.0.1".equals(host)
                 || "::1".equals(host)
-                || "10.0.2.2".equals(host);
+                || "10.0.2.2".equals(host)
+                || isPrivateIpv4(host);
+    }
+
+    /** Allow cleartext only for RFC1918 addresses that cannot be routed on the internet. */
+    private static boolean isPrivateIpv4(String host) {
+        if (host == null) return false;
+        String[] parts = host.split("\\.", -1);
+        if (parts.length != 4) return false;
+        int[] octets = new int[4];
+        try {
+            for (int index = 0; index < parts.length; index++) {
+                if (parts[index].isEmpty()) return false;
+                octets[index] = Integer.parseInt(parts[index]);
+                if (octets[index] < 0 || octets[index] > 255) return false;
+            }
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+        return octets[0] == 10
+                || (octets[0] == 172 && octets[1] >= 16
+                        && octets[1] <= 31)
+                || (octets[0] == 192 && octets[1] == 168);
     }
 
     public List<IntakeEvent> snapshot() {
@@ -234,7 +265,16 @@ public final class IntakeRepository {
     }
 
     public void health(Callback<JSONObject> callback) {
-        executeForCurrentBackend(callback, api -> {
+        executeForCurrentBackend(new Callback<JSONObject>() {
+            @Override public void onSuccess(JSONObject value) {
+                schedulePendingSync(0L);
+                if (callback != null) callback.onSuccess(value);
+            }
+
+            @Override public void onError(String message) {
+                if (callback != null) callback.onError(message);
+            }
+        }, api -> {
             JSONObject health = api.health();
             if (health.optBoolean("auth_configured", false)) {
                 // Health is intentionally public. Verify the configured Android
@@ -252,7 +292,7 @@ public final class IntakeRepository {
                 // This callback runs on main only after the request generation
                 // has been checked, so configure() cannot interleave an old
                 // backend result with the new backend's cache.
-                replaceEvents(fresh);
+                reconcileFreshEvents(fresh);
                 if (callback != null) callback.onSuccess(events);
             }
 
@@ -264,18 +304,14 @@ public final class IntakeRepository {
     }
 
     void createInsulin(IntakeDraft draft, Callback<IntakeEvent> callback) {
-        executeForCurrentBackend(new Callback<IntakeEvent>() {
-            @Override
-            public void onSuccess(IntakeEvent created) {
-                mergeConfirmedEvent(created);
-                if (callback != null) callback.onSuccess(created);
-            }
+        enqueueCreate(PendingIntakeOperation.insulin(draft), callback);
+    }
 
-            @Override
-            public void onError(String message) {
-                if (callback != null) callback.onError(message);
-            }
-        }, api -> api.createInsulin(draft));
+    void createManualMeal(String clientEventId, long occurredAtMs,
+            String mealText, float carbsGrams, Float portionGrams,
+            Callback<IntakeEvent> callback) {
+        enqueueCreate(PendingIntakeOperation.meal(clientEventId,
+                occurredAtMs, mealText, carbsGrams, portionGrams), callback);
     }
 
     void startMealChat(String clientEventId, long occurredAtMs,
@@ -413,6 +449,28 @@ public final class IntakeRepository {
         });
     }
 
+    void updateMealPortion(IntakeEvent event, float portionGrams,
+            Callback<IntakeEvent> callback) {
+        if (event == null || event.id.isEmpty()
+                || !event.hasEditablePortion()) {
+            if (callback != null) callback.onError(
+                    "Meal portion is not editable");
+            return;
+        }
+        executeForCurrentBackend(new Callback<IntakeEvent>() {
+            @Override
+            public void onSuccess(IntakeEvent updated) {
+                mergeConfirmedEvent(updated);
+                if (callback != null) callback.onSuccess(updated);
+            }
+
+            @Override
+            public void onError(String message) {
+                if (callback != null) callback.onError(message);
+            }
+        }, api -> api.updateMealPortion(event.id, portionGrams));
+    }
+
     private void mergeConfirmedEvent(IntakeEvent confirmed) {
         ArrayList<IntakeEvent> merged = new ArrayList<>(events);
         for (int index = merged.size() - 1; index >= 0; index--) {
@@ -422,6 +480,152 @@ public final class IntakeRepository {
         }
         merged.add(confirmed);
         replaceEvents(merged);
+    }
+
+    int pendingCreateCount() {
+        synchronized (this) {
+            return pendingCreates.size();
+        }
+    }
+
+    private void enqueueCreate(PendingIntakeOperation operation,
+            Callback<IntakeEvent> callback) {
+        final IntakeEvent local;
+        try {
+            local = operation.localEvent();
+        } catch (JSONException error) {
+            if (callback != null) callback.onError("Could not create local record");
+            return;
+        }
+        boolean stored;
+        synchronized (this) {
+            for (PendingIntakeOperation item : pendingCreates) {
+                if (item.clientEventId.equals(operation.clientEventId)) {
+                    if (callback != null) callback.onSuccess(itemLocalEvent(item));
+                    schedulePendingSync(0L);
+                    return;
+                }
+            }
+            pendingCreates.add(operation);
+            ArrayList<IntakeEvent> merged = new ArrayList<>(events);
+            merged.add(local);
+            setSortedEvents(merged);
+            stored = persistStateLocked();
+            if (!stored) {
+                pendingCreates.remove(operation);
+                merged.remove(local);
+                setSortedEvents(merged);
+            }
+        }
+        if (!stored) {
+            if (callback != null) callback.onError(
+                    "Could not save the record on this phone");
+            return;
+        }
+        notifyEventListeners();
+        if (callback != null) callback.onSuccess(local);
+        schedulePendingSync(0L);
+    }
+
+    private IntakeEvent itemLocalEvent(PendingIntakeOperation item) {
+        try {
+            return item.localEvent();
+        } catch (JSONException impossible) {
+            return null;
+        }
+    }
+
+    private void schedulePendingSync(long delayMs) {
+        synchronized (this) {
+            if (pendingCreates.isEmpty() || syncScheduled) return;
+            syncScheduled = true;
+        }
+        main.postDelayed(() -> {
+            synchronized (IntakeRepository.this) {
+                syncScheduled = false;
+                if (pendingCreates.isEmpty()) return;
+            }
+            executor.execute(this::synchronizePendingCreates);
+        }, Math.max(0L, delayMs));
+    }
+
+    private void synchronizePendingCreates() {
+        final long generation = configurationGeneration;
+        final IntakeApiClient api = client();
+        while (generation == configurationGeneration) {
+            PendingIntakeOperation operation;
+            synchronized (this) {
+                if (pendingCreates.isEmpty()) return;
+                operation = pendingCreates.get(0);
+            }
+            try {
+                IntakeEvent confirmed = operation.upload(api);
+                if (generation != configurationGeneration) return;
+                acknowledgeCreate(operation, confirmed);
+            } catch (Exception error) {
+                // HTTP validation/auth errors and network failures both remain
+                // in the durable outbox. A later health check or timed retry can
+                // safely repeat the idempotent command.
+                schedulePendingSync(SYNC_RETRY_MS);
+                return;
+            }
+        }
+    }
+
+    private void acknowledgeCreate(PendingIntakeOperation operation,
+            IntakeEvent confirmed) {
+        synchronized (this) {
+            List<IntakeEvent> previousEvents = events;
+            boolean removed = pendingCreates.remove(operation);
+            if (!removed) return;
+            ArrayList<IntakeEvent> merged = new ArrayList<>(events.size());
+            for (IntakeEvent event : events) {
+                if (!event.clientEventId.equals(operation.clientEventId)
+                        && !event.id.equals(confirmed.id)) {
+                    merged.add(event);
+                }
+            }
+            merged.add(confirmed);
+            setSortedEvents(merged);
+            // commit(), not apply(): never discard an outbox command until the
+            // confirmed replacement and updated queue are durable together.
+            if (!persistStateLocked()) {
+                pendingCreates.add(0, operation);
+                events = previousEvents;
+                schedulePendingSync(SYNC_RETRY_MS);
+                return;
+            }
+        }
+        notifyEventListeners();
+    }
+
+    private void reconcileFreshEvents(List<IntakeEvent> fresh) {
+        synchronized (this) {
+            ArrayList<PendingIntakeOperation> previousPending =
+                    new ArrayList<>(pendingCreates);
+            List<IntakeEvent> previousEvents = events;
+            Set<String> confirmedClientIds = new HashSet<>();
+            for (IntakeEvent event : fresh) {
+                if (!event.clientEventId.isEmpty()) {
+                    confirmedClientIds.add(event.clientEventId);
+                }
+            }
+            pendingCreates.removeIf(item ->
+                    confirmedClientIds.contains(item.clientEventId));
+            ArrayList<IntakeEvent> merged = new ArrayList<>(fresh);
+            for (PendingIntakeOperation operation : pendingCreates) {
+                IntakeEvent local = itemLocalEvent(operation);
+                if (local != null) merged.add(local);
+            }
+            setSortedEvents(merged);
+            if (!persistStateLocked()) {
+                pendingCreates.clear();
+                pendingCreates.addAll(previousPending);
+                events = previousEvents;
+            }
+        }
+        notifyEventListeners();
+        schedulePendingSync(0L);
     }
 
     private void removeConfirmedEvent(String eventId) {
@@ -474,18 +678,96 @@ public final class IntakeRepository {
 
     private void replaceEvents(List<IntakeEvent> replacement) {
         ArrayList<IntakeEvent> sorted = new ArrayList<>(replacement);
+        setSortedEvents(sorted);
+        writeCache(events);
+        notifyEventListeners();
+    }
+
+    private void setSortedEvents(List<IntakeEvent> replacement) {
+        ArrayList<IntakeEvent> sorted = new ArrayList<>(replacement);
         sorted.sort(Comparator.comparingLong(event -> event.occurredAtMs));
         if (sorted.size() > MAX_CACHE_ITEMS) {
-            sorted = new ArrayList<>(sorted.subList(
-                    sorted.size() - MAX_CACHE_ITEMS, sorted.size()));
+            ArrayList<IntakeEvent> pending = new ArrayList<>();
+            ArrayList<IntakeEvent> confirmed = new ArrayList<>();
+            for (IntakeEvent event : sorted) {
+                (event.pendingSync ? pending : confirmed).add(event);
+            }
+            int confirmedLimit = Math.max(0, MAX_CACHE_ITEMS - pending.size());
+            int confirmedStart = Math.max(0,
+                    confirmed.size() - confirmedLimit);
+            sorted = new ArrayList<>(confirmed.subList(
+                    confirmedStart, confirmed.size()));
+            sorted.addAll(pending);
+            sorted.sort(Comparator.comparingLong(event -> event.occurredAtMs));
         }
         events = Collections.unmodifiableList(sorted);
-        writeCache(sorted);
+    }
+
+    private void notifyEventListeners() {
         main.post(() -> {
             for (Listener listener : listeners) {
                 listener.onIntakeEventsChanged(events);
             }
         });
+    }
+
+    private ArrayList<PendingIntakeOperation> readPendingCreates() {
+        ArrayList<PendingIntakeOperation> result = new ArrayList<>();
+        String raw = preferences.getString(KEY_PENDING, "");
+        if (raw == null || raw.isEmpty()) return result;
+        try {
+            JSONArray json = new JSONArray(raw);
+            for (int index = 0; index < json.length(); index++) {
+                JSONObject item = json.optJSONObject(index);
+                if (item != null) result.add(PendingIntakeOperation.fromJson(item));
+            }
+        } catch (JSONException ignored) {
+            preferences.edit().remove(KEY_PENDING).apply();
+        }
+        return result;
+    }
+
+    private List<IntakeEvent> pendingLocalEvents() {
+        ArrayList<IntakeEvent> result = new ArrayList<>();
+        synchronized (this) {
+            for (PendingIntakeOperation operation : pendingCreates) {
+                IntakeEvent event = itemLocalEvent(operation);
+                if (event != null) result.add(event);
+            }
+        }
+        return result;
+    }
+
+    private synchronized void mergeMissingPendingIntoCache() {
+        Set<String> cachedClientIds = new HashSet<>();
+        ArrayList<IntakeEvent> merged = new ArrayList<>(events);
+        for (IntakeEvent event : events) {
+            cachedClientIds.add(event.clientEventId);
+        }
+        for (PendingIntakeOperation operation : pendingCreates) {
+            if (!cachedClientIds.contains(operation.clientEventId)) {
+                IntakeEvent local = itemLocalEvent(operation);
+                if (local != null) merged.add(local);
+            }
+        }
+        setSortedEvents(merged);
+    }
+
+    private boolean persistStateLocked() {
+        JSONArray queue = new JSONArray();
+        JSONArray cache = new JSONArray();
+        try {
+            for (PendingIntakeOperation operation : pendingCreates) {
+                queue.put(operation.toJson());
+            }
+            for (IntakeEvent event : events) cache.put(event.toJson());
+        } catch (JSONException error) {
+            return false;
+        }
+        return preferences.edit()
+                .putString(KEY_PENDING, queue.toString())
+                .putString(KEY_CACHE, cache.toString())
+                .commit();
     }
 
     private ArrayList<IntakeEvent> readCache() {

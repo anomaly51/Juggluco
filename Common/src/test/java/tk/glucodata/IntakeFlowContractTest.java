@@ -29,21 +29,23 @@ public class IntakeFlowContractTest {
             "\\bNatives\\s*\\.\\s*saveNum\\s*\\(");
 
     @Test
-    public void createIsBackendConfirmedBeforeTheLocalGraphCacheChanges()
+    public void createIsDurableOnPhoneBeforeBackgroundSynchronization()
             throws Exception {
         String repository = mainJava("tk/glucodata/IntakeRepository.java");
         String create = methodBody(repository,
                 "void createInsulin(IntakeDraft draft",
                 "private IntakeApiClient client");
 
-        assertTrue("Intake create must call the backend",
-                create.contains("api -> api.createInsulin(draft)"));
-        assertTrue("Local graph state may change only in the checked success callback",
-                create.contains("onSuccess(IntakeEvent created)")
-                        && create.contains("mergeConfirmedEvent(created)"));
-        assertTrue("Backend changes must invalidate in-flight results",
-                create.contains("executeForCurrentBackend"));
-        assertFalse("The backend-first flow must not contain a native fallback",
+        assertTrue("Intake create must enter the durable phone outbox",
+                create.contains("enqueueCreate(PendingIntakeOperation.insulin"));
+        assertTrue("Outbox and graph cache must be committed together",
+                repository.contains("persistStateLocked()")
+                        && repository.contains(".commit()"));
+        assertTrue("Pending commands must later reach the backend",
+                repository.contains("operation.upload(api)"));
+        assertTrue("Backend acknowledgement must replace the pending marker",
+                repository.contains("acknowledgeCreate(operation, confirmed)"));
+        assertFalse("The local-first flow must not contain a native fallback",
                 create.contains("Natives."));
     }
 
@@ -59,6 +61,17 @@ public class IntakeFlowContractTest {
         assertFalse(client.contains("\"POST\", \"/v1/intakes\""));
         assertTrue(client.contains("draft.clientEventId"));
         assertTrue(client.contains("\"Idempotency-Key\", idempotencyKey"));
+    }
+
+    @Test
+    public void backendUrlAllowsPrivateWifiButStillRequiresHttpsOnTheInternet()
+            throws Exception {
+        String repository = mainJava("tk/glucodata/IntakeRepository.java");
+        assertTrue(repository.contains("isPrivateIpv4(host)"));
+        assertTrue(repository.contains("octets[0] == 10"));
+        assertTrue(repository.contains("octets[0] == 172"));
+        assertTrue(repository.contains("octets[0] == 192 && octets[1] == 168"));
+        assertTrue(repository.contains("Use HTTPS for a non-local backend URL"));
     }
 
     @Test
@@ -139,7 +152,7 @@ public class IntakeFlowContractTest {
         assertTrue(repository.contains("generation != configurationGeneration"));
         assertTrue(repository.contains("CONFIGURATION_CHANGED"));
         assertTrue(repository.contains("onSuccess(List<IntakeEvent> fresh)"));
-        assertTrue(repository.contains("replaceEvents(fresh)"));
+        assertTrue(repository.contains("reconcileFreshEvents(fresh)"));
         assertTrue(repository.contains("onSuccess(IntakeEvent confirmed)"));
         assertTrue(repository.contains("mergeConfirmedEvent(confirmed)"));
     }

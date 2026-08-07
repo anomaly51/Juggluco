@@ -41,7 +41,7 @@
     <string name="insulin_save">Сохранить инсулин</string>
     <string name="insulin_saving">Сохраняем инсулин…</string>
     <string name="insulin_invalid_dose">Введите дозу инсулина больше нуля.</string>
-    <string name="insulin_saved">Инсулин сохранён</string>
+    <string name="insulin_saved">Сохранено на телефоне · синхронизация автоматическая</string>
 
     <string name="meal_chat_title">Ассистент еды</string>
     <string name="meal_chat_subtitle">Сначала диалог — запись только после подтверждения</string>
@@ -98,4 +98,22 @@
     <string name="intake_details_meal_title">Событие еды</string>
     <string name="intake_details_insulin_title">Событие инсулина</string>
     <string name="intake_details_combined_title">Событие еды и инсулина</string>
+    <string name="intake_choose_manual_meal_title">Ввести еду вручную</string>
+    <string name="intake_choose_manual_meal_subtitle">Работает без интернета · сначала сохраняет на телефоне</string>
+    <string name="manual_meal_title">Еда вручную</string>
+    <string name="manual_meal_subtitle">Быстрая запись, доступная офлайн</string>
+    <string name="manual_meal_name_label">Что вы съели?</string>
+    <string name="manual_meal_name_hint">Например, гречка с курицей</string>
+    <string name="manual_meal_carbs_label">Углеводы, г</string>
+    <string name="manual_meal_carbs_hint">0</string>
+    <string name="manual_meal_portion_label">Полная порция, г (необязательно)</string>
+    <string name="manual_meal_portion_hint">Например, 250</string>
+    <string name="manual_meal_offline_hint">Запись сразу сохраняется в закрытом хранилище приложения на телефоне. Когда backend станет доступен, синхронизация произойдёт автоматически.</string>
+    <string name="manual_meal_save">Сохранить на телефоне</string>
+    <string name="manual_meal_saving">Сохранение…</string>
+    <string name="manual_meal_saved_locally">Сохранено на телефоне · синхронизация автоматическая</string>
+    <string name="manual_meal_invalid_name">Опишите, что вы съели</string>
+    <string name="manual_meal_invalid_carbs">Укажите от 0 до 1000 г углеводов</string>
+    <string name="manual_meal_invalid_portion">Укажите порцию от 0 до 10000 г</string>
+    <string name="intake_local_save_error">Не удалось сохранить на телефоне: %1$s</string>
 </resources>

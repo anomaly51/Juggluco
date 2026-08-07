@@ -85,7 +85,7 @@ import java.util.concurrent.Executors;
  * proposal is persisted only after an explicit confirmation.</p>
  */
 final class IntakeComposer {
-    private enum Mode { CHOOSER, INSULIN, MEAL }
+    private enum Mode { CHOOSER, INSULIN, MEAL, MANUAL_MEAL }
 
     private static final int REQUEST_MEAL_CAMERA = 0x6F41;
     private static final int REQUEST_MEAL_GALLERY = 0x6F42;
@@ -133,6 +133,14 @@ final class IntakeComposer {
     private Button insulinSave;
     private TextView insulinTime;
     private int insulinProductIndex;
+
+    // Offline-capable structured meal screen state.
+    private long manualMealOccurredAtMs = System.currentTimeMillis();
+    private EditText manualMealName;
+    private EditText manualMealCarbs;
+    private EditText manualMealPortion;
+    private TextView manualMealTime;
+    private Button manualMealSave;
 
     // Meal conversation state.
     private final String mealClientEventId = UUID.randomUUID().toString();
@@ -213,6 +221,8 @@ final class IntakeComposer {
                 .setOnClickListener(view -> showInsulin());
         root.findViewById(R.id.intake_choose_meal)
                 .setOnClickListener(view -> showMeal());
+        root.findViewById(R.id.intake_choose_manual_meal)
+                .setOnClickListener(view -> showManualMeal());
         bindBackendStatus();
     }
 
@@ -344,6 +354,107 @@ final class IntakeComposer {
         insulinTime.setEnabled(!value);
         root.findViewById(R.id.intake_back_button).setEnabled(!value);
         if (backendStatus != null) backendStatus.setEnabled(!value);
+    }
+
+    private void showManualMeal() {
+        if (busy || closed) return;
+        mode = Mode.MANUAL_MEAL;
+        manualMealOccurredAtMs = System.currentTimeMillis();
+        replaceRoot(R.layout.modern_manual_meal_composer);
+        root.findViewById(R.id.intake_back_button)
+                .setOnClickListener(view -> childBack());
+        manualMealName = root.findViewById(R.id.manual_meal_name);
+        manualMealCarbs = root.findViewById(R.id.manual_meal_carbs);
+        manualMealPortion = root.findViewById(R.id.manual_meal_portion);
+        manualMealTime = root.findViewById(R.id.manual_meal_time);
+        manualMealSave = root.findViewById(R.id.manual_meal_save);
+        manualMealTime.setOnClickListener(view -> pickTime(true));
+        manualMealSave.setOnClickListener(view -> saveManualMeal());
+        manualMealPortion.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                saveManualMeal();
+                return true;
+            }
+            return false;
+        });
+        bindBackendStatus();
+        updateManualMealTime();
+        manualMealName.postDelayed(() -> {
+            if (closed || mode != Mode.MANUAL_MEAL || busy) return;
+            manualMealName.requestFocus();
+            InputMethodManager keyboard = (InputMethodManager)
+                    activity.getSystemService(MainActivity.INPUT_METHOD_SERVICE);
+            if (keyboard != null) keyboard.showSoftInput(manualMealName,
+                    InputMethodManager.SHOW_IMPLICIT);
+        }, 180L);
+    }
+
+    private void saveManualMeal() {
+        if (busy || mode != Mode.MANUAL_MEAL) return;
+        String name = IntakeEvent.clean(manualMealName.getText().toString());
+        if (name.isEmpty()) {
+            toast(R.string.manual_meal_invalid_name);
+            manualMealName.requestFocus();
+            return;
+        }
+        float carbs;
+        try {
+            carbs = parseNumber(manualMealCarbs.getText().toString());
+        } catch (NumberFormatException error) {
+            carbs = -1.0f;
+        }
+        if (carbs < 0.0f || carbs > 1_000.0f) {
+            toast(R.string.manual_meal_invalid_carbs);
+            manualMealCarbs.requestFocus();
+            return;
+        }
+        String portionText = IntakeEvent.clean(
+                manualMealPortion.getText().toString());
+        Float portion = null;
+        if (!portionText.isEmpty()) {
+            try {
+                portion = parseNumber(portionText);
+            } catch (NumberFormatException error) {
+                portion = -1.0f;
+            }
+            if (portion <= 0.0f || portion > 10_000.0f) {
+                toast(R.string.manual_meal_invalid_portion);
+                manualMealPortion.requestFocus();
+                return;
+            }
+        }
+        setManualMealBusy(true);
+        repository.createManualMeal(UUID.randomUUID().toString(),
+                manualMealOccurredAtMs, name, carbs, portion,
+                new IntakeRepository.Callback<IntakeEvent>() {
+            @Override public void onSuccess(IntakeEvent value) {
+                if (closed) return;
+                toast(R.string.manual_meal_saved_locally);
+                activity.requestRender();
+                setManualMealBusy(false);
+                close(true);
+            }
+
+            @Override public void onError(String message) {
+                if (closed) return;
+                setManualMealBusy(false);
+                toast(activity.getString(R.string.intake_local_save_error,
+                        message));
+            }
+        });
+    }
+
+    private void setManualMealBusy(boolean value) {
+        busy = value;
+        if (manualMealSave == null) return;
+        manualMealSave.setEnabled(!value);
+        manualMealSave.setText(value ? R.string.manual_meal_saving
+                : R.string.manual_meal_save);
+        manualMealName.setEnabled(!value);
+        manualMealCarbs.setEnabled(!value);
+        manualMealPortion.setEnabled(!value);
+        manualMealTime.setEnabled(!value);
+        root.findViewById(R.id.intake_back_button).setEnabled(!value);
     }
 
     private void showMeal() {
@@ -1187,7 +1298,8 @@ final class IntakeComposer {
         if (busy) return;
         hideKeyboard();
         if (root != null) root.clearFocus();
-        final long current = meal ? mealOccurredAtMs
+        final long current = mode == Mode.MANUAL_MEAL
+                ? manualMealOccurredAtMs : meal ? mealOccurredAtMs
                 : insulinDraft.occurredAtMs;
         View content = LayoutInflater.from(activity).inflate(
                 R.layout.modern_intake_time_chooser, null, false);
@@ -1286,7 +1398,10 @@ final class IntakeComposer {
 
     private void applySelectedTime(boolean meal, long selectedAtMs) {
         long value = Math.min(selectedAtMs, System.currentTimeMillis());
-        if (meal) {
+        if (mode == Mode.MANUAL_MEAL) {
+            manualMealOccurredAtMs = value;
+            updateManualMealTime();
+        } else if (meal) {
             applySelectedMealTime(value);
         } else {
             insulinDraft.occurredAtMs = value;
@@ -1410,6 +1525,12 @@ final class IntakeComposer {
         if (insulinTime == null) return;
         insulinTime.setText(activity.getString(R.string.intake_time_selected,
                 formatOccurredAt(insulinDraft.occurredAtMs)));
+    }
+
+    private void updateManualMealTime() {
+        if (manualMealTime == null) return;
+        manualMealTime.setText(activity.getString(R.string.intake_time_selected,
+                formatOccurredAt(manualMealOccurredAtMs)));
     }
 
     private void updateMealTime() {

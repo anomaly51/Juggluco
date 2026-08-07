@@ -137,6 +137,21 @@ final class IntakeApiClient {
         return IntakeEvent.fromJson(event == null ? response : event);
     }
 
+    IntakeEvent createManualMeal(String clientEventId, long occurredAtMs,
+            String mealText, float carbsGrams, Float portionGrams)
+            throws IOException, JSONException {
+        JSONObject request = new JSONObject();
+        request.put("client_event_id", clientEventId);
+        request.put("occurred_at_ms", occurredAtMs);
+        request.put("meal_text", IntakeEvent.clean(mealText));
+        request.put("carbs_g", carbsGrams);
+        if (portionGrams != null) request.put("portion_g", portionGrams);
+        JSONObject response = requestJson("POST", "/v1/meal-events",
+                request, REQUEST_TIMEOUT_MS, clientEventId);
+        JSONObject event = response.optJSONObject("item");
+        return IntakeEvent.fromJson(event == null ? response : event);
+    }
+
     MealChatSession createMealChatSession(String clientEventId,
             long occurredAtMs) throws IOException, JSONException {
         JSONObject request = new JSONObject();
@@ -255,6 +270,25 @@ final class IntakeApiClient {
                 StandardCharsets.UTF_8.name()).replace("+", "%20");
         return requestJson("DELETE", "/v1/intakes/" + encoded, null,
                 REQUEST_TIMEOUT_MS, null);
+    }
+
+    IntakeEvent updateMealPortion(String eventId, float portionGrams)
+            throws IOException, JSONException {
+        String cleanId = IntakeEvent.clean(eventId);
+        if (cleanId.isEmpty()) {
+            throw new IOException("Intake event ID is missing");
+        }
+        if (!Float.isFinite(portionGrams) || portionGrams < 0.0f) {
+            throw new IOException("Consumed portion is invalid");
+        }
+        String encoded = URLEncoder.encode(cleanId,
+                StandardCharsets.UTF_8.name()).replace("+", "%20");
+        JSONObject request = new JSONObject();
+        request.put("portion_g", portionGrams);
+        JSONObject response = requestJson("PUT", "/v1/intakes/" + encoded
+                        + "/meal-portion", request, REQUEST_TIMEOUT_MS, null);
+        JSONObject item = response.optJSONObject("item");
+        return IntakeEvent.fromJson(item == null ? response : item);
     }
 
     private JSONObject requestJson(String method, String path, JSONObject body,

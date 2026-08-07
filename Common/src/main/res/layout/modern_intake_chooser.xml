@@ -206,6 +206,57 @@
                         android:textSize="30sp" />
                 </LinearLayout>
 
+                <LinearLayout
+                    android:id="@+id/intake_choose_manual_meal"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/intake_choice_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="104dp"
+                    android:orientation="horizontal"
+                    android:padding="18dp">
+                    <TextView
+                        android:layout_width="56dp"
+                        android:layout_height="56dp"
+                        android:background="@drawable/intake_choice_icon"
+                        android:gravity="center"
+                        android:text="≡"
+                        android:textColor="@color/modern_secondary_accent"
+                        android:textSize="28sp"
+                        android:textStyle="bold" />
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="16dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/intake_choose_manual_meal_title"
+                            android:textColor="@color/modern_secondary_text_primary"
+                            android:textSize="19sp"
+                            android:textStyle="bold" />
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:text="@string/intake_choose_manual_meal_subtitle"
+                            android:textColor="@color/modern_secondary_text_secondary"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+                    <TextView
+                        android:layout_width="32dp"
+                        android:layout_height="48dp"
+                        android:gravity="center"
+                        android:text="›"
+                        android:textColor="@color/modern_secondary_text_muted"
+                        android:textSize="30sp" />
+                </LinearLayout>
+
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

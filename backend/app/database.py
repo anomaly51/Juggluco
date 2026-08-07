@@ -42,6 +42,29 @@ class Database:
         from . import models  # noqa: F401
 
         Base.metadata.create_all(self.engine)
+        # create_all() intentionally does not alter existing SQLite tables. Keep
+        # the local-first database forward compatible with small additive
+        # migrations so an installed backend can be upgraded without losing
+        # intake or glucose history.
+        with self.engine.begin() as connection:
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    text("PRAGMA table_info(intake_events)")
+                )
+            }
+            if "portion_g" not in columns:
+                connection.execute(
+                    text("ALTER TABLE intake_events ADD COLUMN portion_g FLOAT")
+                )
+            if "original_portion_g" not in columns:
+                connection.execute(
+                    text("ALTER TABLE intake_events ADD COLUMN original_portion_g FLOAT")
+                )
+            if "original_carbs_g" not in columns:
+                connection.execute(
+                    text("ALTER TABLE intake_events ADD COLUMN original_carbs_g FLOAT")
+                )
 
     def sessions(self) -> Iterator[Session]:
         with self.session_factory() as session:

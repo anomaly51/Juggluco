@@ -4,9 +4,9 @@ This service is the authoritative write path for the redesigned phone intake flo
 It stores confirmed meal/insulin events in SQLite and sends only meal-analysis inputs
 to OpenRouter. The Android app must never contain an OpenRouter key.
 
-The service is intentionally bound to the computer's loopback interface and reached
-from a USB-connected Android device with `adb reverse`. It is not designed to be
-exposed directly to a LAN or the public internet.
+The service can be reached either through USB `adb reverse` or directly from a phone
+on the same trusted Wi-Fi subnet. It is not designed to be exposed to the public
+internet.
 
 ## Important security note
 
@@ -54,7 +54,7 @@ fallback. There is no silent fallback that could weaken privacy/provider constra
 Voice transcription defaults to the lower-cost `google/gemini-2.5-flash-lite`, and
 the legacy single-request vision endpoint now uses the same Qwen vision default.
 
-Start the backend on loopback only:
+For USB-only access, start the backend on loopback:
 
 ```powershell
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
@@ -71,9 +71,24 @@ The Android base URL is then `http://127.0.0.1:8765`. The emulator can use the s
 `adb reverse` command by replacing the serial with `emulator-5554`. The Android client
 must send `Authorization: Bearer <JUGGLUCO_API_TOKEN>` on every endpoint except health.
 
-Do not start Uvicorn with `--host 0.0.0.0`. A future remote deployment needs TLS,
-per-device credentials, backups, migrations, rate limiting at the edge, and an explicit
-privacy/compliance review.
+For a physical phone on the same trusted Wi-Fi network, use the LAN launcher:
+
+```powershell
+.\run_lan.ps1
+```
+
+It detects the computer's active LAN address, adds that address to the backend's host
+allowlist, and listens on port 8765. Set the Android base URL to the address printed by
+the script, for example `http://192.168.1.121:8765`. If Windows Firewall prompts, allow
+TCP 8765 only for the local/private subnet. No `adb reverse` rule is needed.
+
+The phone and computer must remain on the same network. A DHCP address can change after
+reconnecting or rebooting; use a DHCP reservation in the router for a stable address.
+Private RFC1918 HTTP addresses are accepted by the Android development client, while
+non-local backend URLs still require HTTPS. Never forward port 8765 from the router or
+expose this development listener publicly. A remote deployment needs TLS, per-device
+credentials, backups, migrations, edge rate limiting, and an explicit privacy/compliance
+review.
 
 ## API contract
 
@@ -229,9 +244,11 @@ field is `null`. Repeating confirmation returns the same event.
 
 ### Create an insulin-only event
 
-`POST /v1/insulin-events` is the only direct write endpoint. `client_event_id` is the
-idempotency key: retrying the same payload returns the same event, while reusing the UUID
-for different data returns HTTP 409.
+`POST /v1/insulin-events` is the structured insulin write endpoint. `client_event_id` is
+the idempotency key: retrying the same payload returns the same event, while reusing the
+UUID for different data returns HTTP 409. Android writes this command to its app-private
+durable outbox first, so it can display the record immediately and retry after an offline
+period without producing a duplicate.
 
 ```json
 {
@@ -243,9 +260,29 @@ for different data returns HTTP 409.
 ```
 
 `insulin_name` is restricted to `NovoRapid` or `Tresiba`; the backend derives the
-corresponding `rapid` or `long` type. Meal and insulin data cannot be combined. There is
-deliberately no generic `POST /v1/intakes`: a meal can be written only by the explicit
-meal-chat confirmation endpoint above. Confirmed meal responses include response-only
+corresponding `rapid` or `long` type. Meal and insulin data cannot be combined.
+
+### Create a manual/offline meal event
+
+`POST /v1/meal-events` accepts a structured meal that does not require an AI session:
+
+```json
+{
+  "client_event_id": "87f35008-6782-493c-a95f-49353dfbdf07",
+  "occurred_at_ms": 1785870000000,
+  "meal_text": "Buckwheat with chicken",
+  "carbs_g": 48.0,
+  "portion_g": 300.0
+}
+```
+
+`portion_g` is optional. When present, the backend persists the original portion and
+carbohydrate baseline so later consumed-portion edits remain proportional and never
+compound rounding. This command uses the same idempotent `client_event_id` contract as
+insulin and is the synchronization target for Android's offline meal outbox. There is
+still deliberately no generic `POST /v1/intakes` bypass.
+
+Confirmed AI meal responses include response-only
 `ai_confidence` and the nullable `absorption_speed`, `absorption_peak_minutes`,
 `absorption_duration_minutes`, and `absorption_confidence`, all derived from the persisted
 analysis. The same fields are preserved by full and incremental intake sync.
@@ -392,6 +429,21 @@ Delta sync always includes soft-deleted tombstones (`deleted=true`) so Android c
 remove markers. Use the returned `next_sync_version` as the next cursor. Event details
 and soft deletion are available at `GET /v1/intakes/{id}` and
 `DELETE /v1/intakes/{id}`.
+
+For a confirmed AI meal with a known full portion, the event also exposes
+`portion_g`, `original_portion_g`, and `original_carbs_g`. Correct the amount actually
+eaten with the authenticated idempotent endpoint:
+
+`PUT /v1/intakes/{id}/meal-portion`
+
+```json
+{"portion_g": 175}
+```
+
+The consumed portion cannot exceed the analyzed full portion. The backend always
+recalculates `carbs_g` from the immutable original portion/carbohydrate baseline, creates
+one new sync revision when the value changes, invalidates the affected forecast history,
+and regenerates the current forecast. Repeating the same value is a no-op.
 
 `occurred_at_ms` is a physiological timestamp, not an event identifier. Any number of meals,
 NovoRapid doses, and Tresiba doses may share the same millisecond. Each confirmation keeps

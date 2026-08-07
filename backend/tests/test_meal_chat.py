@@ -240,6 +240,62 @@ def test_confirm_is_explicit_idempotent_and_creates_meal_only_intake(
     assert after_confirm.status_code == 409
 
 
+def test_confirmed_meal_portion_can_be_corrected_without_compounding(
+    client, auth_headers
+):
+    chat, _ = create_session(client, auth_headers)
+    turn = client.post(
+        f"/v1/meal-chat/sessions/{chat['id']}/messages",
+        headers=auth_headers,
+        data={"text": "A rice bowl"},
+    )
+    assert turn.status_code == 200
+    confirmed = client.post(
+        f"/v1/meal-chat/sessions/{chat['id']}/confirm",
+        headers=auth_headers,
+    )
+    assert confirmed.status_code == 200
+    original = confirmed.json()
+    assert original["portion_g"] == 350
+    assert original["original_portion_g"] == 350
+    assert original["original_carbs_g"] == 52
+    assert original["carbs_g"] == 52
+
+    path = f"/v1/intakes/{original['id']}/meal-portion"
+    unauthorized = client.put(path, json={"portion_g": 175})
+    assert unauthorized.status_code == 401
+
+    half = client.put(path, headers=auth_headers, json={"portion_g": 175})
+    assert half.status_code == 200, half.text
+    edited = half.json()
+    assert edited["portion_g"] == 175
+    assert edited["original_portion_g"] == 350
+    assert edited["original_carbs_g"] == 52
+    assert edited["carbs_g"] == 26
+    assert edited["sync_version"] > original["sync_version"]
+    assert edited["updated_at_ms"] >= original["updated_at_ms"]
+
+    # Repeating the idempotent command must not create another sync revision.
+    repeated = client.put(path, headers=auth_headers, json={"portion_g": 175})
+    assert repeated.status_code == 200
+    assert repeated.json() == edited
+
+    # Every correction uses the immutable 350 g / 52 g baseline, not the
+    # already rounded 175 g / 26 g result.
+    quarter = client.put(path, headers=auth_headers, json={"portion_g": 87.5})
+    assert quarter.status_code == 200
+    assert quarter.json()["carbs_g"] == 13
+    assert quarter.json()["portion_g"] == 87.5
+
+    too_much = client.put(path, headers=auth_headers, json={"portion_g": 351})
+    assert too_much.status_code == 422
+    fetched = client.get(
+        f"/v1/intakes/{original['id']}", headers=auth_headers
+    )
+    assert fetched.status_code == 200
+    assert fetched.json() == quarter.json()
+
+
 def test_ready_draft_time_can_change_before_confirm_without_losing_proposal_or_history(
     client, auth_headers
 ):
