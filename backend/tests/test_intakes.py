@@ -47,7 +47,7 @@ def test_create_list_and_get_intake(client, auth_headers):
     assert fetched.json() == event
 
 
-def test_creation_marks_earliest_forecast_training_boundary(
+def test_creation_does_not_schedule_or_mark_forecast_training(
     app, client, auth_headers
 ):
     now_ms = int(time.time() * 1_000)
@@ -64,9 +64,7 @@ def test_creation_marks_earliest_forecast_training_boundary(
         )
         assert response.status_code == 200
     with app.state.database.session_factory() as session:
-        marker = session.get(ForecastMaintenanceRecord, "training_dirty_since")
-        assert marker is not None
-        assert marker.value_ms == earlier
+        assert session.get(ForecastMaintenanceRecord, "training_dirty_since") is None
 
 
 def test_client_event_id_is_idempotent_and_conflicts_on_changed_data(
@@ -242,11 +240,7 @@ def test_concurrent_delete_creates_exactly_one_tombstone_revision(
         )
         assert len(delete_changes) == 1
         assert delete_changes[0].id == results[0][3]
-        assert session.scalar(
-            select(func.count(ForecastMaintenanceRecord.key)).where(
-                ForecastMaintenanceRecord.key == "training_dirty_since"
-            )
-        ) == 1
+        assert session.get(ForecastMaintenanceRecord, "training_dirty_since") is None
 
 
 def test_list_filters_intakes_by_inclusive_occurred_time_window(

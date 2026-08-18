@@ -99,6 +99,11 @@
     <string name="forecast_training_insufficient">Building history</string>
     <string name="forecast_training_trained">Trained</string>
     <string name="forecast_training_in_progress">Training</string>
+    <string name="forecast_training_frozen">Frozen model version</string>
+    <string name="forecast_training_manual_only">Manual retraining only</string>
+    <string name="forecast_training_manual_mode">Automatic retraining is off. A new model version is activated manually.</string>
+    <string name="forecast_training_samples">Training samples: %1$d</string>
+    <string name="forecast_training_data_changed">New data has arrived since this version was trained. Forecasts continue to use the pinned model until the next manual retraining.</string>
     <string name="forecast_last_trained">Last trained %1$s</string>
     <string name="forecast_not_trained">Not trained yet</string>
     <string name="forecast_model_version">Model %1$s</string>

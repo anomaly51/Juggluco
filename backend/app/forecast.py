@@ -12,7 +12,7 @@ from typing import Any, Sequence
 from uuid import UUID, uuid4
 
 import numpy as np
-from sqlalchemy import Integer, and_, cast, delete, func, select
+from sqlalchemy import Integer, and_, cast, delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -54,8 +54,6 @@ MINIMUM_TRAIN_WINDOWS = 48
 VALIDATION_WINDOWS = 16
 EMBARGO_WINDOWS = HORIZON_STEPS
 MINIMUM_TRAINING_WINDOWS = MINIMUM_TRAIN_WINDOWS + VALIDATION_WINDOWS + EMBARGO_WINDOWS
-MINIMUM_PERSONALIZATION_DAYS = 3.0
-READY_PERSONALIZATION_DAYS = 7.0
 MINIMUM_CLEAN_EVENT_SAMPLES = 3
 MINIMUM_CONTEXTUAL_EVENT_SAMPLES = 8
 MINIMUM_CONTEXTUAL_VALIDATION_EVENTS = 5
@@ -70,11 +68,42 @@ V3_FEATURE_SCHEMA = "context-sequence-v3"
 V3_NETWORK_KIND = "contextual_gated_v3"
 PERSONAL_ARCHITECTURE = "personalized-contextual-gated-mlp-direct-24-v3"
 LEGACY_PERSONAL_ARCHITECTURE = "personalized-hybrid-mlp-direct-24-v2"
-FORECAST_ENGINE_VERSION = "forecast-engine-v4"
+STATIC_PERSONAL_ARCHITECTURE = "personalized-static-generic-residual-v1"
+FORECAST_ENGINE_VERSION = "forecast-engine-v5-static"
+ACTIVE_MODEL_METADATA_KEY = "active_forecast_model"
+ACTIVATION_HISTORY_METADATA_KEY = "forecast_model_activation_history"
+STATIC_TRAINING_MODE = "manual"
+STATIC_INTERVAL_LEVEL = 0.80
+STATIC_TRAINING_SEED = 20_260_805
+STATIC_FEATURE_SCHEMA = "generic-glucose-context-v1"
+STATIC_NETWORK_KIND = "static_generic_tanh_v1"
+STATIC_FEATURE_COUNT = 138
+STATIC_HIDDEN_SIZE = 12
+STATIC_PURGE_MINUTES = HORIZON_MINUTES
+STATIC_PURGE_WINDOWS = STATIC_PURGE_MINUTES // STEP_MINUTES
+STATIC_PROMOTION_GATE_VERSION = "independent-day-block-v2"
+STATIC_MIN_TRAIN_DAYS = 8
+STATIC_TUNING_DAYS = 1
+STATIC_CALIBRATION_DAYS = 2
+STATIC_TEST_DAYS = 4
+STATIC_REQUIRED_DAYS = float(
+    STATIC_MIN_TRAIN_DAYS
+    + STATIC_TUNING_DAYS
+    + STATIC_CALIBRATION_DAYS
+    + STATIC_TEST_DAYS
+)
+STATIC_MIN_USABLE_DAY_HOURS = 16
+STATIC_MIN_DAY_DENSITY = 0.80
+STATIC_BANDS: tuple[tuple[int, int], ...] = (
+    (5, 30),
+    (35, 60),
+    (65, 90),
+    (95, 120),
+)
 # Bumps immutable current-run identity when explanation semantics change without
 # pretending that the median predictor itself is a new trained model.
 ACTION_PROFILE_CONTRACT_VERSION = 2
-BASELINE_VERSION = "hybrid-baseline-v2"
+BASELINE_VERSION = "event-aware-persistence-v3"
 CONDITIONAL_NOTICE = (
     "Experimental estimate only. It assumes no unrecorded food, insulin, exercise, "
     "illness, or sensor error. Never use this forecast to calculate a dose."
@@ -161,6 +190,272 @@ def _json_dict(raw: str | None) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _validated_vector(value: Any, *, positive: bool = False) -> np.ndarray | None:
+    try:
+        result = np.asarray(value, dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if (
+        result.shape != (HORIZON_STEPS,)
+        or not np.isfinite(result).all()
+        or (positive and np.any(result <= 0.0))
+    ):
+        return None
+    return result
+
+
+def _apply_static_predictor(
+    prediction: np.ndarray,
+    reference_prediction: np.ndarray,
+    sigma: np.ndarray,
+    parameters: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply immutable persistence shrinkage and frozen calibration."""
+
+    blend = _validated_vector(parameters.get("persistence_blend_weights"))
+    calibration = parameters.get("frozen_calibration")
+    if blend is None or np.any(blend < 0.0) or np.any(blend > 1.0):
+        return prediction, sigma
+    if not isinstance(calibration, dict):
+        return prediction, sigma
+    bias = _validated_vector(calibration.get("bias_mg_dl"))
+    frozen_sigma = _validated_vector(calibration.get("sigma_mg_dl"), positive=True)
+    if bias is None or frozen_sigma is None:
+        return prediction, sigma
+    reference = np.asarray(reference_prediction, dtype=np.float64)
+    if prediction.ndim == 1:
+        if reference.shape != (HORIZON_STEPS,):
+            return prediction, sigma
+        shrunk = reference + blend * (prediction - reference)
+        return np.clip(shrunk + bias, 20.0, 600.0), np.maximum(frozen_sigma, 6.0)
+    if reference.shape != prediction.shape:
+        return prediction, sigma
+    shrunk = reference + blend.reshape(1, -1) * (prediction - reference)
+    return (
+        np.clip(shrunk + bias.reshape(1, -1), 20.0, 600.0),
+        np.maximum(frozen_sigma, 6.0),
+    )
+
+
+def _artifact_content_hash(parameters: dict[str, Any]) -> str:
+    """Hash the complete immutable parameter/evaluation envelope.
+
+    Static artifacts embed their record identity, split manifest, frozen
+    calibration, comparator metrics, and promotion decision inside ``artifact``.
+    Removing only the digest itself avoids a circular hash while ensuring that a
+    changed weight, split, metric, or approval bit invalidates the artifact.
+    """
+
+    payload = dict(parameters)
+    artifact = payload.get("artifact")
+    if isinstance(artifact, dict):
+        artifact_without_hash = dict(artifact)
+        artifact_without_hash.pop("content_sha256", None)
+        payload["artifact"] = artifact_without_hash
+    canonical = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _static_artifact_is_valid(parameters: dict[str, Any]) -> bool:
+    artifact = parameters.get("artifact")
+    network = parameters.get("network")
+    calibration = parameters.get("frozen_calibration")
+    reliability = artifact.get("reliability") if isinstance(artifact, dict) else None
+    evaluation = artifact.get("evaluation") if isinstance(artifact, dict) else None
+    split = artifact.get("split") if isinstance(artifact, dict) else None
+    if not all(
+        isinstance(item, dict)
+        for item in (artifact, network, calibration, reliability, evaluation, split)
+    ):
+        return False
+    expected = artifact.get("content_sha256")
+    try:
+        computed_hash = _artifact_content_hash(parameters)
+    except (TypeError, ValueError, OverflowError):
+        # ``json.loads`` accepts non-standard NaN/Infinity tokens. A corrupt
+        # persisted artifact must fail closed instead of breaking status/current.
+        return False
+    blend = _validated_vector(parameters.get("persistence_blend_weights"))
+    bias = _validated_vector(calibration.get("bias_mg_dl"))
+    sigma = _validated_vector(calibration.get("sigma_mg_dl"), positive=True)
+    residual_sigma = _validated_vector(parameters.get("residual_sigma"), positive=True)
+    if not (
+        isinstance(expected, str)
+        and len(expected) == 64
+        and expected == computed_hash
+        and parameters.get("architecture") == STATIC_PERSONAL_ARCHITECTURE
+        and parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA
+        and parameters.get("kind") == "personalized_static_generic_residual"
+        and artifact.get("artifact_version") == 3
+        and artifact.get("engine_version") == FORECAST_ENGINE_VERSION
+        and artifact.get("architecture") == STATIC_PERSONAL_ARCHITECTURE
+        and artifact.get("feature_schema") == STATIC_FEATURE_SCHEMA
+        and artifact.get("network_kind") == STATIC_NETWORK_KIND
+        and artifact.get("training_mode") == STATIC_TRAINING_MODE
+        and artifact.get("promotion_gate_version")
+        == STATIC_PROMOTION_GATE_VERSION
+        and artifact.get("accepted") is True
+        and isinstance(artifact.get("model_version"), str)
+        and 0 < len(artifact["model_version"]) <= 96
+        and math.isclose(
+            _finite(artifact.get("interval_level"), -1.0),
+            STATIC_INTERVAL_LEVEL,
+            abs_tol=1e-9,
+        )
+        and isinstance(artifact.get("dataset_sha256"), str)
+        and len(artifact["dataset_sha256"]) == 64
+        and int(_finite(artifact.get("feature_count"), 0)) == STATIC_FEATURE_COUNT
+        and int(_finite(artifact.get("parameter_count"), 0)) > 0
+        and int(_finite(artifact.get("parameter_count"), 0)) <= 5_000
+        and int(_finite(split.get("train_days"), 0)) >= STATIC_MIN_TRAIN_DAYS
+        and int(_finite(split.get("tuning_days"), 0)) >= STATIC_TUNING_DAYS
+        and int(_finite(split.get("calibration_days"), 0))
+        >= STATIC_CALIBRATION_DAYS
+        and int(_finite(split.get("test_days"), 0)) >= STATIC_TEST_DAYS
+        and int(_finite(split.get("purge_minutes"), 0)) >= HORIZON_MINUTES
+        and int(_finite(split.get("test_independent_anchors"), 0)) >= 32
+        and network.get("kind") == STATIC_NETWORK_KIND
+        and network.get("feature_schema") == STATIC_FEATURE_SCHEMA
+        and blend is not None
+        and np.all((blend >= 0.0) & (blend <= 1.0))
+        and bias is not None
+        and sigma is not None
+        and residual_sigma is not None
+        and np.allclose(sigma, residual_sigma, rtol=0.0, atol=1e-9)
+        and calibration.get("method") == "frozen-day-block-conformal-v1"
+        and math.isclose(
+            _finite(calibration.get("interval_level"), -1.0),
+            STATIC_INTERVAL_LEVEL,
+            abs_tol=1e-9,
+        )
+        and int(_finite(calibration.get("sample_count"), 0)) >= VALIDATION_WINDOWS
+        and parameters.get("network_disabled_event_channels")
+        == ["meal", "rapid", "long"]
+    ):
+        return False
+    expected_band_values: list[float] = []
+    for band_index, (start, end) in enumerate(STATIC_BANDS):
+        band_value = float(blend[(start // STEP_MINUTES) - 1])
+        expected_band_values.extend(
+            [band_value] * (((end - start) // STEP_MINUTES) + 1)
+        )
+        declared = artifact.get("band_definitions")
+        if not isinstance(declared, list) or len(declared) != len(STATIC_BANDS):
+            return False
+        band = declared[band_index]
+        if not isinstance(band, dict) or (
+            int(_finite(band.get("start_minutes"), -1)) != start
+            or int(_finite(band.get("end_minutes"), -1)) != end
+            or not math.isclose(
+                _finite(band.get("weight"), -1.0), band_value, abs_tol=1e-9
+            )
+        ):
+            return False
+    if not np.allclose(blend, np.asarray(expected_band_values), atol=1e-9, rtol=0.0):
+        return False
+    try:
+        x_mean = np.asarray(network["x_mean"], dtype=np.float64)
+        x_scale = np.asarray(network["x_scale"], dtype=np.float64)
+        w1 = np.asarray(network["w1"], dtype=np.float64)
+        b1 = np.asarray(network["b1"], dtype=np.float64)
+        w2 = np.asarray(network["w2"], dtype=np.float64)
+        b2 = np.asarray(network["b2"], dtype=np.float64)
+    except (KeyError, TypeError, ValueError):
+        return False
+    hidden = w1.shape[1] if w1.ndim == 2 else 0
+    tensors = (x_mean, x_scale, w1, b1, w2, b2)
+    parameter_count = int(sum(tensor.size for tensor in (w1, b1, w2, b2)))
+    if (
+        x_mean.shape != (STATIC_FEATURE_COUNT,)
+        or x_scale.shape != (STATIC_FEATURE_COUNT,)
+        or np.any(x_scale <= 1e-8)
+        or hidden != STATIC_HIDDEN_SIZE
+        or w1.shape != (STATIC_FEATURE_COUNT, hidden)
+        or b1.shape != (hidden,)
+        or w2.shape != (hidden, HORIZON_STEPS)
+        or b2.shape != (HORIZON_STEPS,)
+        or parameter_count != int(artifact.get("parameter_count"))
+        or any(not np.isfinite(tensor).all() for tensor in tensors)
+    ):
+        return False
+    required_evaluation = (
+        "accepted",
+        "candidate_equal_day_mae",
+        "reference_equal_day_mae",
+        "pinned_equal_day_mae",
+        "candidate_anchor_mae",
+        "reference_anchor_mae",
+        "candidate_coverage_80",
+        "candidate_interval_score_80",
+        "reference_interval_score_80",
+        "test_days",
+        "test_independent_anchors",
+    )
+    if evaluation.get("accepted") != 1 or any(
+        key not in evaluation or not math.isfinite(_finite(evaluation.get(key), math.nan))
+        for key in required_evaluation
+        if key != "accepted"
+    ):
+        return False
+    overall = _finite(reliability.get("overall"), -1.0)
+    by_horizon = reliability.get("by_horizon")
+    return bool(
+        0.0 <= overall <= 0.35
+        and reliability.get("clinical_validation") is False
+        and isinstance(by_horizon, list)
+        and len(by_horizon) == HORIZON_STEPS
+        and all(0.0 <= _finite(item, -1.0) <= 0.35 for item in by_horizon)
+    )
+
+
+def _dataset_fingerprint(
+    readings: Sequence[GlucoseReadingRecord], events: Sequence[_Event]
+) -> str:
+    digest = hashlib.sha256()
+    for row in readings:
+        digest.update(
+            json.dumps(
+                (
+                    row.reading_id,
+                    row.payload_hash,
+                    row.quality,
+                    row.utc_offset_minutes,
+                ),
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        digest.update(b"\n")
+    for event in events:
+        digest.update(
+            json.dumps(
+                (
+                    event.event_id,
+                    event.occurred_at_ms,
+                    _event_known_at(event),
+                    event.kind,
+                    event.amount,
+                    event.carbs_low_g,
+                    event.carbs_high_g,
+                    event.absorption_speed,
+                    event.absorption_peak_minutes,
+                    event.absorption_duration_minutes,
+                    event.absorption_confidence,
+                    event.protein_g,
+                    event.fat_g,
+                    event.fiber_g,
+                    event.ai_confidence,
+                ),
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
 def _default_parameters() -> dict[str, Any]:
     # These are deliberately broad warm-start shapes, not patient-specific claims.
     # Personal training replaces the response timing and sensitivities when data supports it.
@@ -187,6 +482,15 @@ def _default_parameters() -> dict[str, Any]:
         },
         "residual_sigma": [8.0 + 0.22 * (index * STEP_MINUTES) for index in range(1, 25)],
     }
+
+
+def _baseline_parameters() -> dict[str, Any]:
+    """Return the code-owned safe baseline, never mutable database parameters."""
+
+    parameters = _default_parameters()
+    parameters["kind"] = "event_aware_persistence_baseline"
+    parameters["prediction_reference"] = "event_aware_persistence"
+    return parameters
 
 
 def _reading_payload_hash(reading: Any, _utc_offset_minutes: int | None) -> str:
@@ -584,6 +888,25 @@ def _baseline_prediction(
     return np.clip(current + trend_delta + event_delta, 20.0, 600.0)
 
 
+def _event_reference_prediction(
+    readings: Sequence[GlucoseReadingRecord],
+    events: Sequence[_Event],
+    anchor_ms: int,
+    parameters: dict[str, Any],
+) -> np.ndarray:
+    """Persistence reference that preserves bounded known-event priors."""
+
+    current = float(readings[-1].glucose_mg_dl)
+    meal, rapid, long = _event_basis(events, anchor_ms, parameters)
+    sensitivity = parameters.get("sensitivities", {})
+    event_delta = (
+        meal * _finite(sensitivity.get("carb_mg_dl_per_g"), 0.85)
+        - rapid * _finite(sensitivity.get("rapid_mg_dl_per_unit"), 7.0)
+        - long * _finite(sensitivity.get("long_mg_dl_per_unit"), 2.0)
+    )
+    return np.clip(current + event_delta, 20.0, 600.0)
+
+
 def _nearest_value(
     readings: Sequence[GlucoseReadingRecord],
     target_ms: int,
@@ -760,9 +1083,16 @@ def _multiscale_history_features(
     ]
 
     meal, rapid, long = _event_basis(events, anchor_ms, parameters)
-    meal_n = meal / 50.0
-    rapid_n = rapid / 5.0
-    long_n = long / 20.0
+    disabled_event_channels = {
+        str(item)
+        for item in parameters.get("network_disabled_event_channels", [])
+        if str(item) in {"meal", "rapid", "long"}
+    }
+    meal_n = np.zeros_like(meal) if "meal" in disabled_event_channels else meal / 50.0
+    rapid_n = (
+        np.zeros_like(rapid) if "rapid" in disabled_event_channels else rapid / 5.0
+    )
+    long_n = np.zeros_like(long) if "long" in disabled_event_channels else long / 20.0
     event_curves = list(meal_n) + list(rapid_n) + list(long_n)
     event_interactions = (
         list(meal_n * rapid_n)
@@ -772,7 +1102,11 @@ def _multiscale_history_features(
 
     event_summaries: list[float] = []
     for kind, scale in (("meal", 50.0), ("rapid", 5.0), ("long", 20.0)):
-        matching = [event for event in events if event.kind == kind]
+        matching = (
+            []
+            if kind in disabled_event_channels
+            else [event for event in events if event.kind == kind]
+        )
         active = 0.0
         for event in matching:
             peak, duration, _confidence = _profile_for_event(event, parameters)
@@ -811,6 +1145,17 @@ def _history_features(
     anchor_ms: int,
     parameters: dict[str, Any],
 ) -> np.ndarray:
+    if parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA:
+        # The first 138 v3 features are glucose history, masks, dynamics, and
+        # clock/state only. Event curves start at index 138 and are deliberately
+        # excluded because this snapshot cannot identify separate personal meal,
+        # rapid-, and long-insulin effects.
+        generic = _multiscale_history_features(
+            readings, (), anchor_ms, parameters
+        )[:STATIC_FEATURE_COUNT]
+        if generic.shape != (STATIC_FEATURE_COUNT,):
+            raise ValueError("invalid static generic feature vector")
+        return generic
     if parameters.get("feature_schema") == V3_FEATURE_SCHEMA:
         return _multiscale_history_features(readings, events, anchor_ms, parameters)
     return _history_features_v2(readings, events, anchor_ms, parameters)
@@ -827,7 +1172,18 @@ def _forecast_arrays(
     parameters: dict[str, Any],
 ) -> tuple[np.ndarray, np.ndarray]:
     def raw_prediction(causal_events: Sequence[_Event]) -> np.ndarray:
-        baseline = _baseline_prediction(readings, causal_events, anchor_ms, parameters)
+        if (
+            parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA
+            or parameters.get("prediction_reference")
+            == "event_aware_persistence"
+        ):
+            baseline = _event_reference_prediction(
+                readings, causal_events, anchor_ms, parameters
+            )
+        else:
+            baseline = _baseline_prediction(
+                readings, causal_events, anchor_ms, parameters
+            )
         features = _history_features(readings, causal_events, anchor_ms, parameters)
         prediction = baseline + _network_predict(features, parameters)
         if prediction.shape != (HORIZON_STEPS,) or not np.isfinite(prediction).all():
@@ -1318,31 +1674,42 @@ def _basal_context_amplitude(
 
 
 def _fit_network(x_train: np.ndarray, residual_train: np.ndarray) -> dict[str, Any]:
+    """Fit the deterministic, deliberately small static residual head."""
+
     x_mean = x_train.mean(axis=0)
     x_scale = x_train.std(axis=0)
     x_scale[x_scale < 0.05] = 1.0
     x = np.clip((x_train - x_mean) / x_scale, -8.0, 8.0)
     y = np.clip(residual_train, -180.0, 180.0)
-    rng = np.random.default_rng(20_260_805)
-    hidden_size = 32
+    rng = np.random.default_rng(STATIC_TRAINING_SEED)
+    hidden_size = STATIC_HIDDEN_SIZE
     w1 = rng.normal(0.0, 0.08, size=(x.shape[1], hidden_size))
     b1 = np.zeros(hidden_size)
     w2 = rng.normal(0.0, 0.04, size=(hidden_size, HORIZON_STEPS))
     b2 = np.zeros(HORIZON_STEPS)
     moment1 = [np.zeros_like(value) for value in (w1, b1, w2, b2)]
     moment2 = [np.zeros_like(value) for value in (w1, b1, w2, b2)]
-    learning_rate = 0.008
-    for iteration in range(1, 241):
+    learning_rate = 0.006
+    regularization = 0.0008
+    smoothness = 0.035
+    for iteration in range(1, 321):
         hidden = np.tanh(x @ w1 + b1)
         prediction = hidden @ w2 + b2
         error = prediction - y
         # Huber loss limits the influence of sensor errors and unrecorded meals.
         gradient_output = np.where(np.abs(error) <= 30.0, error, 30.0 * np.sign(error))
         gradient_output /= max(1, x.shape[0] * HORIZON_STEPS)
-        gradients_w2 = hidden.T @ gradient_output + 0.0005 * w2
+        second_difference = prediction[:, 2:] - 2.0 * prediction[:, 1:-1] + prediction[:, :-2]
+        smooth_gradient = np.zeros_like(prediction)
+        smooth_scale = 2.0 * smoothness / max(1, x.shape[0] * (HORIZON_STEPS - 2))
+        smooth_gradient[:, :-2] += smooth_scale * second_difference
+        smooth_gradient[:, 1:-1] -= 2.0 * smooth_scale * second_difference
+        smooth_gradient[:, 2:] += smooth_scale * second_difference
+        gradient_output += smooth_gradient
+        gradients_w2 = hidden.T @ gradient_output + regularization * w2
         gradients_b2 = gradient_output.sum(axis=0)
         gradient_hidden = (gradient_output @ w2.T) * (1.0 - hidden * hidden)
-        gradients_w1 = x.T @ gradient_hidden + 0.0005 * w1
+        gradients_w1 = x.T @ gradient_hidden + regularization * w1
         gradients_b1 = gradient_hidden.sum(axis=0)
         gradients = [gradients_w1, gradients_b1, gradients_w2, gradients_b2]
         values = [w1, b1, w2, b2]
@@ -1354,6 +1721,8 @@ def _fit_network(x_train: np.ndarray, residual_train: np.ndarray) -> dict[str, A
             corrected2 = moment2[index] / (1.0 - 0.999**iteration)
             value -= learning_rate * corrected1 / (np.sqrt(corrected2) + 1e-8)
     return {
+        "kind": STATIC_NETWORK_KIND,
+        "feature_schema": STATIC_FEATURE_SCHEMA,
         "x_mean": x_mean.tolist(),
         "x_scale": x_scale.tolist(),
         "w1": w1.tolist(),
@@ -1485,21 +1854,45 @@ class ForecastService:
     def __init__(self) -> None:
         self._training_lock = threading.Lock()
 
+    @staticmethod
+    def _runtime_model_is_valid(record: ForecastModelRecord) -> bool:
+        if record.version == BASELINE_VERSION:
+            return True
+        if record.architecture != STATIC_PERSONAL_ARCHITECTURE:
+            return False
+        parameters = _json_dict(record.parameters_json)
+        if not _static_artifact_is_valid(parameters):
+            return False
+        artifact = parameters.get("artifact", {})
+        evaluation = artifact.get("evaluation", {})
+        metrics = _json_dict(record.metrics_json)
+        return bool(
+            artifact.get("model_version") == record.version
+            and int(_finite(artifact.get("trained_at_ms"), -1))
+            == int(record.trained_at_ms or -1)
+            and int(_finite(artifact.get("data_cutoff_ms"), -1))
+            == int(record.training_cutoff_ms or -1)
+            and int(_finite(artifact.get("sample_count"), -1))
+            == int(record.sample_count)
+            and evaluation == metrics
+        )
+
     def _ensure_baseline(self, session: Session) -> ForecastModelRecord:
         record = session.get(ForecastModelRecord, BASELINE_VERSION)
         if record is not None:
             return record
         now = _now_ms()
+        baseline_parameters = _baseline_parameters()
         record = ForecastModelRecord(
             version=BASELINE_VERSION,
             status="champion",
-            architecture="hybrid-trend-event-prior-v2",
+            architecture="event-aware-persistence-prior-v3",
             created_at_ms=now,
             trained_at_ms=None,
             promoted_at_ms=now,
             training_cutoff_ms=None,
             sample_count=0,
-            parameters_json=json.dumps(_default_parameters(), separators=(",", ":")),
+            parameters_json=json.dumps(baseline_parameters, separators=(",", ":")),
             metrics_json="{}",
             decision_reason="Safe cold-start model",
         )
@@ -1535,35 +1928,131 @@ class ForecastService:
             session.commit()
             return UUID(record.value_text)
 
-    def _champion(self, session: Session) -> ForecastModelRecord:
-        baseline = self._ensure_baseline(session)
-        champions = list(
-            session.scalars(
-                select(ForecastModelRecord)
-                .where(ForecastModelRecord.status == "champion")
-                .order_by(ForecastModelRecord.promoted_at_ms.desc())
-            )
+    @staticmethod
+    def _source_revision(session: Session) -> tuple[int, int, int, int, int]:
+        """One-statement fingerprint for source data concurrency guards."""
+
+        event_revision = (
+            select(func.max(SyncChangeRecord.id)).scalar_subquery()
         )
-        compatible = [
-            record
-            for record in champions
-            if record.version == BASELINE_VERSION
-            or record.architecture
-            in {LEGACY_PERSONAL_ARCHITECTURE, PERSONAL_ARCHITECTURE}
-        ]
-        selected = compatible[0] if compatible else baseline
-        changed = False
-        for record in champions:
-            if record.version != selected.version:
+        active_events = (
+            select(func.count(IntakeEventRecord.id))
+            .where(IntakeEventRecord.deleted_at_ms.is_(None))
+            .scalar_subquery()
+        )
+        reading_count, last_reading, max_received, sync_revision, event_count = (
+            session.execute(
+                select(
+                    func.count(GlucoseReadingRecord.reading_id),
+                    func.max(GlucoseReadingRecord.measured_at_ms),
+                    func.max(GlucoseReadingRecord.received_at_ms),
+                    event_revision,
+                    active_events,
+                )
+            ).one()
+        )
+        return (
+            int(reading_count or 0),
+            int(last_reading or 0),
+            int(max_received or 0),
+            int(sync_revision or 0),
+            int(event_count or 0),
+        )
+    def _champion(self, session: Session) -> ForecastModelRecord:
+        """Return only the explicit valid pin; otherwise fail closed to baseline."""
+
+        baseline = self._ensure_baseline(session)
+        pin = session.get(BackendMetadataRecord, ACTIVE_MODEL_METADATA_KEY)
+        if pin is not None:
+            selected = session.get(ForecastModelRecord, pin.value_text)
+            if selected is not None and self._runtime_model_is_valid(selected):
+                return selected
+        if pin is None:
+            session.add(
+                BackendMetadataRecord(
+                    key=ACTIVE_MODEL_METADATA_KEY, value_text=baseline.version
+                )
+            )
+        else:
+            pin.value_text = baseline.version
+        session.commit()
+        return baseline
+
+    @staticmethod
+    def _activation_history(session: Session) -> list[str]:
+        record = session.get(BackendMetadataRecord, ACTIVATION_HISTORY_METADATA_KEY)
+        if record is None:
+            return []
+        try:
+            parsed = json.loads(record.value_text)
+        except (TypeError, json.JSONDecodeError):
+            return []
+        return [str(item) for item in parsed if isinstance(item, str)] if isinstance(parsed, list) else []
+
+    @staticmethod
+    def _store_activation_history(session: Session, history: Sequence[str]) -> None:
+        compact = list(history)[-50:]
+        value = json.dumps(compact, separators=(",", ":"))
+        record = session.get(BackendMetadataRecord, ACTIVATION_HISTORY_METADATA_KEY)
+        if record is None:
+            session.add(
+                BackendMetadataRecord(
+                    key=ACTIVATION_HISTORY_METADATA_KEY, value_text=value
+                )
+            )
+        else:
+            record.value_text = value
+
+    def activate_model(self, session: Session, version: str) -> ForecastModelRecord:
+        selected = session.get(ForecastModelRecord, version)
+        if selected is None:
+            raise ValueError(f"unknown forecast model version: {version}")
+        if not self._runtime_model_is_valid(selected):
+            raise ValueError(
+                "only the baseline or an approved, checksummed static model can be activated"
+            )
+        if selected.status not in {"candidate", "champion", "retired"}:
+            raise ValueError(f"forecast model {version} is not eligible for activation")
+        pin = session.get(BackendMetadataRecord, ACTIVE_MODEL_METADATA_KEY)
+        if pin is None:
+            session.add(
+                BackendMetadataRecord(key=ACTIVE_MODEL_METADATA_KEY, value_text=version)
+            )
+        else:
+            pin.value_text = version
+        history = self._activation_history(session)
+        if not history:
+            history.append(BASELINE_VERSION)
+        if not history or history[-1] != version:
+            history.append(version)
+        self._store_activation_history(session, history)
+        now = _now_ms()
+        for record in session.scalars(
+            select(ForecastModelRecord).where(ForecastModelRecord.status == "champion")
+        ):
+            if record.version != version:
                 record.status = "retired"
-                changed = True
-        if selected.status != "champion":
-            selected.status = "champion"
-            selected.promoted_at_ms = _now_ms()
-            changed = True
-        if changed:
-            session.commit()
+        selected.status = "champion"
+        selected.promoted_at_ms = now
+        session.commit()
         return selected
+
+    def rollback_model(
+        self, session: Session, version: str | None = None
+    ) -> ForecastModelRecord:
+        if version is None:
+            current = self._champion(session)
+            version = BASELINE_VERSION
+            for candidate_version in reversed(self._activation_history(session)[:-1]):
+                selected = session.get(ForecastModelRecord, candidate_version)
+                if (
+                    candidate_version != current.version
+                    and selected is not None
+                    and self._runtime_model_is_valid(selected)
+                ):
+                    version = candidate_version
+                    break
+        return self.activate_model(session, version)
 
     @staticmethod
     def _load_readings(
@@ -1687,6 +2176,7 @@ class ForecastService:
         inserted = 0
         unchanged = 0
         updated = 0
+        context_updated = 0
         corrected_ids: list[str] = []
         now = _now_ms()
         unique_payload: dict[str, Any] = {}
@@ -1734,6 +2224,7 @@ class ForecastService:
                     unchanged += 1
                     if existing.payload_hash != digest:
                         existing.payload_hash = digest
+                metadata_changed = False
                 for name, value in (
                     ("sensor_id", reading.sensor_id),
                     ("sensor_generation", reading.sensor_generation),
@@ -1742,6 +2233,10 @@ class ForecastService:
                 ):
                     if value is not None and getattr(existing, name) != value:
                         setattr(existing, name, value)
+                        metadata_changed = True
+                if metadata_changed:
+                    existing.received_at_ms = now
+                    context_updated += 1
                 continue
             session.add(
                 GlucoseReadingRecord(
@@ -1760,19 +2255,6 @@ class ForecastService:
             inserted += 1
         try:
             if updated:
-                corrected_at = min(
-                    unique_payload[reading_id].measured_at_ms
-                    for reading_id in corrected_ids
-                )
-                dirty = session.get(ForecastMaintenanceRecord, "training_dirty_since")
-                if dirty is None:
-                    session.add(
-                        ForecastMaintenanceRecord(
-                            key="training_dirty_since", value_ms=corrected_at
-                        )
-                    )
-                else:
-                    dirty.value_ms = min(dirty.value_ms, corrected_at)
                 session.execute(
                     delete(ForecastScoreRecord).where(
                         ForecastScoreRecord.reading_id.in_(corrected_ids)
@@ -1784,13 +2266,9 @@ class ForecastService:
             raise ValueError("a reading identity conflicted during ingestion") from error
 
         latest_at = session.scalar(select(func.max(GlucoseReadingRecord.measured_at_ms)))
-        if inserted or updated:
+        if inserted or updated or context_updated:
             try:
                 self.score_available(session)
-                if updated:
-                    # Rebuild after the corrected actual has been rescored so the
-                    # derived online state is exactly reproducible from retained scores.
-                    self.rebuild_calibration(session)
             except Exception:
                 session.rollback()
                 logger.exception("forecast scoring failed after durable glucose ingestion")
@@ -1814,49 +2292,14 @@ class ForecastService:
         )
 
     def rebuild_calibration(self, session: Session) -> None:
-        """Deterministically rebuild derived calibration after actual-data correction."""
+        """Compatibility no-op: runtime scoring never changes inference state."""
 
-        session.execute(delete(ForecastCalibrationRecord))
-        grouped = list(
-            session.execute(
-                select(
-                    ForecastScoreRecord.model_version,
-                    ForecastScoreRecord.step_minutes,
-                    func.count(ForecastScoreRecord.run_id),
-                    func.avg(ForecastScoreRecord.residual_mg_dl),
-                    func.avg(
-                        ForecastScoreRecord.residual_mg_dl
-                        * ForecastScoreRecord.residual_mg_dl
-                    ),
-                    func.max(ForecastScoreRecord.scored_at_ms),
-                ).group_by(
-                    ForecastScoreRecord.model_version,
-                    ForecastScoreRecord.step_minutes,
-                )
-            )
-        )
-        for model_version, step, count, bias, mean_square, updated_at in grouped:
-            bias_value = _finite(bias)
-            variance = max(16.0, _finite(mean_square, 400.0) - bias_value * bias_value)
-            session.add(
-                ForecastCalibrationRecord(
-                    model_version=model_version,
-                    step_minutes=step,
-                    residual_bias_mg_dl=bias_value,
-                    residual_variance=variance,
-                    sample_count=int(count),
-                    updated_at_ms=int(updated_at),
-                )
-            )
-        session.commit()
+        del session
 
     @staticmethod
     def should_schedule_training(payload: GlucoseReadingsCreate) -> bool:
-        # Android's live path deliberately omits this field and never advances the
-        # history cursor. The next dashboard sync replays it and ends with an explicit
-        # completion boundary. Training only on that boundary makes a 45-day import
-        # atomic even when several 1,000-row requests and live callbacks interleave.
-        return payload.backfill_complete is True
+        del payload
+        return False
 
     def prune(self, session: Session, now_ms: int | None = None) -> int:
         """Bound immutable forecast audit storage while retaining 30-day metrics."""
@@ -1886,115 +2329,10 @@ class ForecastService:
         return int(old_count)
 
     def maybe_train(self, session: Session) -> None:
-        if not self._training_lock.acquire(blocking=False):
-            return
-        try:
-            self._maybe_train_unlocked(session)
-        finally:
-            self._training_lock.release()
+        """Backward-compatible no-op; training is an explicit local admin action."""
 
-    def _maybe_train_unlocked(self, session: Session) -> None:
-        """Run at most one bounded candidate training attempt per 24 hours.
-
-        This synchronous local worker is intentionally failure-isolated: CGM persistence
-        and the conservative forecast remain available even if candidate training fails.
-        """
-
-        reading_count, first_at, last_at = session.execute(
-            select(
-                func.count(GlucoseReadingRecord.reading_id),
-                func.min(GlucoseReadingRecord.measured_at_ms),
-                func.max(GlucoseReadingRecord.measured_at_ms),
-            )
-        ).one()
-        minimum_readings = HISTORY_STEPS + HORIZON_STEPS - 1 + MINIMUM_TRAINING_WINDOWS
-        minimum_span = (minimum_readings - 1) * STEP_MS
-        occupied_bins = self._occupied_bin_count(session, through_ms=last_at)
-        if (
-            reading_count < minimum_readings
-            or first_at is None
-            or last_at is None
-            or last_at - first_at < minimum_span
-            or occupied_bins / (24 * 60 / STEP_MINUTES) < MINIMUM_PERSONALIZATION_DAYS
-        ):
-            return
-        last_attempt = session.scalar(select(func.max(ForecastModelRecord.trained_at_ms)))
-        correction_pending = session.get(
-            ForecastMaintenanceRecord, "training_dirty_since"
-        ) is not None
-        if (
-            not correction_pending
-            and last_attempt is not None
-            and _now_ms() - last_attempt < 24 * 60 * 60_000
-        ):
-            return
-        try:
-            result = self.train(session)
-            if result.status == "skipped":
-                # A high raw reading count can still yield too few complete windows
-                # because of gaps. Persist the attempt so every five-minute upload does
-                # not rescan the entire history until the 24-hour eligibility boundary.
-                self._record_failed_attempt(
-                    session,
-                    prefix="skipped",
-                    sample_count=result.sample_count,
-                    reason=result.reason,
-                )
-            self._clear_training_dirty(session)
-        except Exception:
-            # Training is an optional candidate path, never part of the durable ingest
-            # transaction. A later upload or explicit debug request can retry it.
-            session.rollback()
-            logger.exception("automatic forecast candidate training failed")
-            self._record_failed_attempt(
-                session,
-                prefix="failed",
-                sample_count=0,
-                reason="Automatic candidate training failed; retry deferred",
-            )
-            self._clear_training_dirty(session)
-
-    @staticmethod
-    def _clear_training_dirty(session: Session) -> None:
-        marker = session.get(ForecastMaintenanceRecord, "training_dirty_since")
-        if marker is None:
-            return
-        try:
-            session.delete(marker)
-            session.commit()
-        except Exception:
-            session.rollback()
-            logger.exception("could not clear forecast correction-training marker")
-
-    @staticmethod
-    def _record_failed_attempt(
-        session: Session,
-        *,
-        prefix: str,
-        sample_count: int,
-        reason: str,
-    ) -> None:
-        now = _now_ms()
-        try:
-            session.add(
-                ForecastModelRecord(
-                    version=f"{prefix}-{now}-{uuid4().hex[:8]}",
-                    status="rejected",
-                    architecture="training-attempt-v1",
-                    created_at_ms=now,
-                    trained_at_ms=now,
-                    promoted_at_ms=None,
-                    training_cutoff_ms=None,
-                    sample_count=sample_count,
-                    parameters_json="{}",
-                    metrics_json="{}",
-                    decision_reason=reason,
-                )
-            )
-            session.commit()
-        except Exception:
-            session.rollback()
-            logger.exception("could not persist forecast training-attempt marker")
+        del session
+        return None
 
     @staticmethod
     def _calibration(
@@ -2045,10 +2383,6 @@ class ForecastService:
             )
         )
         reading_times = [item.measured_at_ms for item in readings]
-        calibration = {
-            (row.model_version, row.step_minutes): row
-            for row in session.scalars(select(ForecastCalibrationRecord))
-        }
         now = _now_ms()
         scored = 0
         for point, run in candidates:
@@ -2075,29 +2409,6 @@ class ForecastService:
                     scored_at_ms=now,
                 )
             )
-            calibration_key = (run.model_version, point.step_minutes)
-            state = calibration.get(calibration_key)
-            if state is None:
-                state = ForecastCalibrationRecord(
-                    model_version=run.model_version,
-                    step_minutes=point.step_minutes,
-                    residual_bias_mg_dl=0.0,
-                    residual_variance=400.0,
-                    sample_count=0,
-                    updated_at_ms=now,
-                )
-                session.add(state)
-                calibration[calibration_key] = state
-            alpha = max(0.025, min(0.18, 1.0 / (state.sample_count + 1)))
-            previous_bias = state.residual_bias_mg_dl
-            state.residual_bias_mg_dl = (1.0 - alpha) * previous_bias + alpha * residual
-            innovation = residual - previous_bias
-            state.residual_variance = max(
-                16.0,
-                (1.0 - alpha) * state.residual_variance + alpha * innovation * innovation,
-            )
-            state.sample_count += 1
-            state.updated_at_ms = now
             scored += 1
         if scored:
             session.commit()
@@ -2108,16 +2419,22 @@ class ForecastService:
         readings: Sequence[GlucoseReadingRecord],
         events: Sequence[_Event],
         model_version: str,
-        calibration: dict[int, ForecastCalibrationRecord],
+        calibration: dict[int, ForecastCalibrationRecord] | None = None,
         event_revision: int = 0,
     ) -> str:
+        del calibration
         content = {
             "engine": FORECAST_ENGINE_VERSION,
             "action_profile_contract": ACTION_PROFILE_CONTRACT_VERSION,
             "model": model_version,
             "event_revision": event_revision,
             "readings": [
-                (row.reading_id, row.payload_hash)
+                (
+                    row.reading_id,
+                    row.payload_hash,
+                    row.quality,
+                    row.utc_offset_minutes,
+                )
                 for row in readings
             ],
             "events": [
@@ -2139,10 +2456,6 @@ class ForecastService:
                     event.ai_confidence,
                 )
                 for event in events
-            ],
-            "calibration": [
-                (step, state.sample_count, state.updated_at_ms)
-                for step, state in sorted(calibration.items())
             ],
         }
         return hashlib.sha256(
@@ -2527,7 +2840,11 @@ class ForecastService:
                 conditional_notice=CONDITIONAL_NOTICE,
             )
         anchor_ms = latest.measured_at_ms
-        parameters = _json_dict(champion.parameters_json) or _default_parameters()
+        parameters = (
+            _baseline_parameters()
+            if champion.version == BASELINE_VERSION
+            else (_json_dict(champion.parameters_json) or _default_parameters())
+        )
         events = self._load_events(
             # A confirmed event recorded after the last CGM sample but before this
             # request is known causal information. Its negative age makes its curve
@@ -2569,27 +2886,17 @@ class ForecastService:
         status_value = quality_status
         if status_value == "ok":
             if champion.version == BASELINE_VERSION:
-                status_value = (
-                    "learning"
-                    if personalization_days >= MINIMUM_PERSONALIZATION_DAYS
-                    else "cold_start"
-                )
+                status_value = "cold_start"
             else:
-                status_value = (
-                    "ready"
-                    if personalization_days >= READY_PERSONALIZATION_DAYS
-                    else "learning"
-                )
+                status_value = "ready"
         if champion.version == BASELINE_VERSION:
             model_confidence = 0.34
         else:
-            champion_metrics = _json_dict(champion.metrics_json)
-            validation_coverage = _clamp(
-                _finite(champion_metrics.get("candidate_coverage_80"), 0.65), 0, 1
+            artifact = parameters.get("artifact", {})
+            reliability = artifact.get("reliability", {}) if isinstance(artifact, dict) else {}
+            model_confidence = _clamp(
+                _finite(reliability.get("overall"), 0.30), 0.12, 0.65
             )
-            calibration_quality = _clamp(1.0 - abs(validation_coverage - 0.8), 0.35, 1)
-            maturity = _clamp(personalization_days / READY_PERSONALIZATION_DAYS, 0.35, 1)
-            model_confidence = (0.45 + 0.3 * calibration_quality) * maturity
         meal_uncertainty_sigma, event_confidence_multiplier = _meal_event_uncertainty(
             events, anchor_ms, parameters
         )
@@ -2598,10 +2905,9 @@ class ForecastService:
             0.05,
             0.9,
         )
-        calibration = self._calibration(session, champion.version)
         event_revision = int(session.scalar(select(func.max(SyncChangeRecord.id))) or 0)
         input_hash = self._input_hash(
-            readings, events, champion.version, calibration, event_revision
+            readings, events, champion.version, None, event_revision
         )
         existing = session.scalar(
             select(ForecastRunRecord)
@@ -2616,25 +2922,19 @@ class ForecastService:
             return self._run_response(session, existing)
 
         median, sigma = _forecast_arrays(readings, events, anchor_ms, parameters)
+        if champion.architecture == STATIC_PERSONAL_ARCHITECTURE:
+            reference = _event_reference_prediction(
+                readings, events, anchor_ms, parameters
+            )
+            median, sigma = _apply_static_predictor(
+                median, reference, sigma, parameters
+            )
         # Activity explanations use the same complete causal context and v3
         # median model as the trajectory.  Legacy/baseline champions still use
         # the prior curves through the guarded fallback in `_activities`.
         activities = self._activities(
             events, anchor_ms, parameters, readings=readings
         )
-        for index, step in enumerate(range(STEP_MINUTES, HORIZON_MINUTES + 1, STEP_MINUTES)):
-            state = calibration.get(step)
-            if state is None:
-                continue
-            if state.sample_count >= 3:
-                median[index] += _clamp(
-                    _finite(state.residual_bias_mg_dl), -25.0, 25.0
-                )
-                variance = max(
-                    16.0,
-                    _finite(state.residual_variance, float(sigma[index] ** 2)),
-                )
-                sigma[index] = max(sigma[index], math.sqrt(variance))
         if champion.version == BASELINE_VERSION:
             sigma *= 1.25
         if status_value == "low_confidence":
@@ -2687,6 +2987,8 @@ class ForecastService:
     @staticmethod
     def _training_windows(
         readings: Sequence[GlucoseReadingRecord],
+        *,
+        max_windows: int | None = MAX_TRAINING_WINDOWS,
     ) -> list[tuple[int, np.ndarray]]:
         windows: list[tuple[int, np.ndarray]] = []
         if not readings:
@@ -2737,8 +3039,8 @@ class ForecastService:
                 [row.glucose_mg_dl for row in concrete_future], dtype=np.float64
             )
             windows.append((anchor_index, target))
-        if len(windows) > MAX_TRAINING_WINDOWS:
-            indexes = np.linspace(0, len(windows) - 1, MAX_TRAINING_WINDOWS, dtype=int)
+        if max_windows is not None and len(windows) > max_windows:
+            indexes = np.linspace(0, len(windows) - 1, max_windows, dtype=int)
             windows = [windows[index] for index in indexes]
         return windows
 
@@ -2921,7 +3223,8 @@ class ForecastService:
         reading_times = [row.measured_at_ms for row in readings]
         history_minutes = (
             CONTEXT_HISTORY_MINUTES
-            if parameters.get("feature_schema") == V3_FEATURE_SCHEMA
+            if parameters.get("feature_schema")
+            in {V3_FEATURE_SCHEMA, STATIC_FEATURE_SCHEMA}
             else (HISTORY_STEPS - 1) * STEP_MINUTES
         )
         for anchor_index, target in windows:
@@ -2944,11 +3247,51 @@ class ForecastService:
             features.append(
                 _history_features(causal_readings, causal_recent, anchor.measured_at_ms, parameters)
             )
+            reference_function = (
+                _event_reference_prediction
+                if (
+                    parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA
+                    or parameters.get("prediction_reference")
+                    == "event_aware_persistence"
+                )
+                else _baseline_prediction
+            )
             baselines.append(
-                _baseline_prediction(causal_readings, causal_recent, anchor.measured_at_ms, parameters)
+                reference_function(
+                    causal_readings,
+                    causal_recent,
+                    anchor.measured_at_ms,
+                    parameters,
+                )
             )
             targets.append(target)
         return np.vstack(features), np.vstack(baselines), np.vstack(targets)
+
+    @staticmethod
+    def _reference_for_windows(
+        readings: Sequence[GlucoseReadingRecord],
+        events: Sequence[_Event],
+        windows: Sequence[tuple[int, np.ndarray]],
+        parameters: dict[str, Any],
+    ) -> np.ndarray:
+        sorted_events = sorted(events, key=lambda item: item.occurred_at_ms)
+        references: list[np.ndarray] = []
+        for anchor_index, _target in windows:
+            anchor = readings[anchor_index]
+            causal_events = [
+                event
+                for event in sorted_events
+                if event.occurred_at_ms <= anchor.measured_at_ms
+                and _event_known_at(event) <= anchor.measured_at_ms
+                and event.occurred_at_ms
+                >= anchor.measured_at_ms - 96 * 60 * 60_000
+            ]
+            references.append(
+                _event_reference_prediction(
+                    [anchor], causal_events, anchor.measured_at_ms, parameters
+                )
+            )
+        return np.vstack(references)
 
     @staticmethod
     def _metrics(prediction: np.ndarray, target: np.ndarray) -> dict[str, float]:
@@ -2971,17 +3314,345 @@ class ForecastService:
         low = prediction - half_width
         high = prediction + half_width
         inside = (target >= low) & (target <= high)
+        interval_score = (
+            (high - low)
+            + (2.0 / (1.0 - STATIC_INTERVAL_LEVEL))
+            * np.maximum(0.0, low - target)
+            + (2.0 / (1.0 - STATIC_INTERVAL_LEVEL))
+            * np.maximum(0.0, target - high)
+        )
         hypo = target < 70.0
         hypo_count = int(np.sum(hypo))
         hypo_misses = int(np.sum(hypo & (low > 70.0)))
-        return {
+        result: dict[str, float | None] = {
             "coverage_80": float(np.mean(inside)),
             "mean_interval_width": float(np.mean(2.0 * half_width)),
+            "interval_score_80": float(np.mean(interval_score)),
             "hypo_samples": float(hypo_count),
             "hypo_miss_rate": (
                 float(hypo_misses / hypo_count) if hypo_count else None
             ),
         }
+        for band_index, (start, end) in enumerate(STATIC_BANDS):
+            start_index = (start // STEP_MINUTES) - 1
+            end_index = end // STEP_MINUTES
+            result[f"coverage_band_{band_index}"] = float(
+                np.mean(inside[:, start_index:end_index])
+            )
+        return result
+
+    @staticmethod
+    def _window_local_day(
+        readings: Sequence[GlucoseReadingRecord], window: tuple[int, np.ndarray]
+    ) -> int:
+        reading = readings[window[0]]
+        offset_ms = int(reading.utc_offset_minutes or 0) * 60_000
+        return (reading.measured_at_ms + offset_ms) // 86_400_000
+
+    @classmethod
+    def _static_day_split(
+        cls,
+        readings: Sequence[GlucoseReadingRecord],
+        windows: Sequence[tuple[int, np.ndarray]],
+    ) -> tuple[
+        list[tuple[int, np.ndarray]],
+        list[tuple[int, np.ndarray]],
+        list[tuple[int, np.ndarray]],
+        list[tuple[int, np.ndarray]],
+        dict[str, Any],
+    ] | None:
+        """Partition complete windows by whole local days before downsampling."""
+
+        grouped: dict[int, list[tuple[int, np.ndarray]]] = {}
+        for window in windows:
+            grouped.setdefault(cls._window_local_day(readings, window), []).append(window)
+        eligible: list[tuple[int, list[tuple[int, np.ndarray]], float]] = []
+        for day, day_windows in sorted(grouped.items()):
+            day_windows.sort(key=lambda item: readings[item[0]].measured_at_ms)
+            times = [readings[item[0]].measured_at_ms for item in day_windows]
+            if len(times) < 2:
+                continue
+            span_hours = (times[-1] - times[0]) / 3_600_000.0
+            expected = max(1, int(round((times[-1] - times[0]) / STEP_MS)) + 1)
+            occupied = len({value // STEP_MS for value in times})
+            density = occupied / expected
+            if (
+                span_hours >= STATIC_MIN_USABLE_DAY_HOURS
+                and density >= STATIC_MIN_DAY_DENSITY
+            ):
+                eligible.append((day, day_windows, density))
+        required_days = (
+            STATIC_MIN_TRAIN_DAYS
+            + STATIC_TUNING_DAYS
+            + STATIC_CALIBRATION_DAYS
+            + STATIC_TEST_DAYS
+        )
+        if len(eligible) < required_days:
+            return None
+        # Reserve the final seven full days, and use all earlier eligible days for
+        # training. This keeps the annotated early interval causal and maximizes
+        # generic glucose-dynamics evidence without touching future evaluation.
+        test_items = eligible[-STATIC_TEST_DAYS:]
+        calibration_items = eligible[
+            -(STATIC_TEST_DAYS + STATIC_CALIBRATION_DAYS) : -STATIC_TEST_DAYS
+        ]
+        tuning_items = eligible[
+            -(
+                STATIC_TEST_DAYS
+                + STATIC_CALIBRATION_DAYS
+                + STATIC_TUNING_DAYS
+            ) : -(STATIC_TEST_DAYS + STATIC_CALIBRATION_DAYS)
+        ]
+        train_items = eligible[
+            : -(
+                STATIC_TEST_DAYS
+                + STATIC_CALIBRATION_DAYS
+                + STATIC_TUNING_DAYS
+            )
+        ]
+        if len(train_items) < STATIC_MIN_TRAIN_DAYS:
+            return None
+
+        def minute_of_day(window: tuple[int, np.ndarray]) -> int:
+            reading = readings[window[0]]
+            return int(
+                (
+                    reading.measured_at_ms // 60_000
+                    + int(reading.utc_offset_minutes or 0)
+                )
+                % (24 * 60)
+            )
+
+        def flatten(
+            items: Sequence[tuple[int, list[tuple[int, np.ndarray]], float]],
+            *,
+            purge_start: bool,
+            purge_end: bool,
+        ) -> list[tuple[int, np.ndarray]]:
+            result: list[tuple[int, np.ndarray]] = []
+            for item_index, (_day, day_windows, _density) in enumerate(items):
+                for window in day_windows:
+                    minute = minute_of_day(window)
+                    if purge_start and item_index == 0 and minute < STATIC_PURGE_MINUTES:
+                        continue
+                    if (
+                        purge_end
+                        and item_index == len(items) - 1
+                        and minute >= 24 * 60 - STATIC_PURGE_MINUTES
+                    ):
+                        continue
+                    result.append(window)
+            return result
+
+        train = flatten(train_items, purge_start=False, purge_end=True)
+        tuning = flatten(tuning_items, purge_start=True, purge_end=True)
+        calibration = flatten(
+            calibration_items, purge_start=True, purge_end=True
+        )
+        test = flatten(test_items, purge_start=True, purge_end=False)
+        if min(len(train), len(tuning), len(calibration), len(test)) < VALIDATION_WINDOWS:
+            return None
+
+        def day_hash(items: Sequence[tuple[int, list[tuple[int, np.ndarray]], float]]) -> str:
+            canonical = ",".join(str(item[0]) for item in items).encode("ascii")
+            return hashlib.sha256(canonical).hexdigest()
+
+        manifest = {
+            "train_days": len(train_items),
+            "tuning_days": len(tuning_items),
+            "calibration_days": len(calibration_items),
+            "test_days": len(test_items),
+            "purge_minutes": STATIC_PURGE_MINUTES,
+            "train_windows": len(train),
+            "tuning_windows": len(tuning),
+            "calibration_windows": len(calibration),
+            "test_windows": len(test),
+            "train_days_sha256": day_hash(train_items),
+            "tuning_days_sha256": day_hash(tuning_items),
+            "calibration_days_sha256": day_hash(calibration_items),
+            "test_days_sha256": day_hash(test_items),
+            "minimum_day_hours": STATIC_MIN_USABLE_DAY_HOURS,
+            "minimum_day_density": STATIC_MIN_DAY_DENSITY,
+        }
+        return train, tuning, calibration, test, manifest
+
+    @classmethod
+    def _independent_windows(
+        cls,
+        readings: Sequence[GlucoseReadingRecord],
+        windows: Sequence[tuple[int, np.ndarray]],
+        *,
+        spacing_minutes: int = HORIZON_MINUTES,
+    ) -> list[tuple[int, np.ndarray]]:
+        result: list[tuple[int, np.ndarray]] = []
+        last_by_day: dict[int, int] = {}
+        for window in windows:
+            day = cls._window_local_day(readings, window)
+            anchor_ms = readings[window[0]].measured_at_ms
+            previous = last_by_day.get(day)
+            if previous is None or anchor_ms - previous >= spacing_minutes * 60_000:
+                result.append(window)
+                last_by_day[day] = anchor_ms
+        return result
+
+    @staticmethod
+    def _frozen_calibration(
+        prediction: np.ndarray, target: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        residual = target - prediction
+        bias = np.median(residual, axis=0)
+        centered = residual - bias.reshape(1, -1)
+        try:
+            half_width = np.quantile(
+                np.abs(centered), STATIC_INTERVAL_LEVEL, axis=0, method="higher"
+            )
+        except TypeError:  # NumPy < 1.22 compatibility.
+            half_width = np.quantile(
+                np.abs(centered), STATIC_INTERVAL_LEVEL, axis=0, interpolation="higher"
+            )
+        half_width = np.maximum.accumulate(np.maximum(7.0, half_width))
+        sigma = half_width / 1.2816
+        return np.asarray(bias, dtype=np.float64), np.asarray(sigma, dtype=np.float64)
+
+    @classmethod
+    def _equal_day_results(
+        cls,
+        readings: Sequence[GlucoseReadingRecord],
+        windows: Sequence[tuple[int, np.ndarray]],
+        candidate: np.ndarray,
+        reference: np.ndarray,
+        pinned: np.ndarray,
+        target: np.ndarray,
+    ) -> list[dict[str, float]]:
+        grouped: dict[int, list[int]] = {}
+        for index, window in enumerate(windows):
+            grouped.setdefault(cls._window_local_day(readings, window), []).append(index)
+        return [
+            {
+                "candidate_mae": float(np.mean(np.abs(candidate[indexes] - target[indexes]))),
+                "reference_mae": float(np.mean(np.abs(reference[indexes] - target[indexes]))),
+                "pinned_mae": float(np.mean(np.abs(pinned[indexes] - target[indexes]))),
+            }
+            for _day, indexes in sorted(grouped.items())
+        ]
+
+    @staticmethod
+    def static_promotion_gates(
+        candidate_metrics: dict[str, float | None],
+        reference_metrics: dict[str, float | None],
+        pinned_metrics: dict[str, float | None],
+        day_results: Sequence[dict[str, float]],
+        *,
+        test_day_count: int,
+        finite: bool = True,
+    ) -> dict[str, bool | float | int]:
+        """Independent-day gate; overlapping 5-minute averages cannot promote."""
+
+        result: dict[str, bool | float | int] = {
+            "finite": bool(finite),
+            "test_days": int(test_day_count),
+            "accepted": False,
+        }
+        required = (
+            "mae",
+            "rmse",
+            "mae_30",
+            "mae_60",
+            "mae_120",
+            "coverage_80",
+            "interval_score_80",
+            "coverage_band_0",
+            "coverage_band_1",
+            "coverage_band_2",
+            "coverage_band_3",
+        )
+        if (
+            not finite
+            or test_day_count < STATIC_TEST_DAYS
+            or len(day_results) != test_day_count
+            or any(
+                metrics.get(key) is None
+                or not math.isfinite(float(metrics[key]))
+                or float(metrics[key]) < 0.0
+                for metrics in (candidate_metrics, reference_metrics, pinned_metrics)
+                for key in required
+            )
+        ):
+            return result
+
+        candidate_days = np.asarray(
+            [item["candidate_mae"] for item in day_results], dtype=np.float64
+        )
+        reference_days = np.asarray(
+            [item["reference_mae"] for item in day_results], dtype=np.float64
+        )
+        pinned_days = np.asarray(
+            [item["pinned_mae"] for item in day_results], dtype=np.float64
+        )
+        if not all(np.isfinite(item).all() and np.all(item > 0) for item in (candidate_days, reference_days, pinned_days)):
+            return result
+        candidate_equal = float(np.mean(candidate_days))
+        reference_equal = float(np.mean(reference_days))
+        pinned_equal = float(np.mean(pinned_days))
+        reference_improvement = 1.0 - candidate_equal / reference_equal
+        pinned_improvement = 1.0 - candidate_equal / pinned_equal
+        day_improvements = 1.0 - candidate_days / reference_days
+        winning_days = int(np.sum(candidate_days < reference_days))
+        required_wins = (
+            test_day_count - 1
+            if test_day_count < 8
+            else int(math.ceil(0.70 * test_day_count))
+        )
+        minimum_reference_improvement = 0.08 if test_day_count < 8 else 0.05
+        no_bad_day = bool(np.all(candidate_days <= reference_days * 1.02))
+        horizons_safe = all(
+            float(candidate_metrics[key])
+            <= max(float(reference_metrics[key]) * 1.02, float(reference_metrics[key]) + 0.5)
+            and float(candidate_metrics[key])
+            <= max(float(pinned_metrics[key]) * 1.02, float(pinned_metrics[key]) + 0.5)
+            for key in ("mae_30", "mae_60", "mae_120")
+        )
+        coverage_safe = (
+            0.75 <= float(candidate_metrics["coverage_80"]) <= 0.90
+            and all(
+                float(candidate_metrics[f"coverage_band_{index}"]) >= 0.70
+                for index in range(len(STATIC_BANDS))
+            )
+        )
+        result.update(
+            {
+                "candidate_equal_day_mae": candidate_equal,
+                "reference_equal_day_mae": reference_equal,
+                "pinned_equal_day_mae": pinned_equal,
+                "reference_equal_day_improvement": reference_improvement,
+                "pinned_equal_day_improvement": pinned_improvement,
+                "winning_days": winning_days,
+                "required_winning_days": required_wins,
+                "median_day_improvement": float(np.median(day_improvements)),
+                "no_day_regression_over_2pct": no_bad_day,
+                "horizons_safe": bool(horizons_safe),
+                "coverage_safe": bool(coverage_safe),
+                "interval_score_safe": float(candidate_metrics["interval_score_80"])
+                <= float(reference_metrics["interval_score_80"]) * 0.98,
+                "rmse_safe": float(candidate_metrics["rmse"])
+                <= float(reference_metrics["rmse"]) * 0.98,
+                "anchor_mae_safe": float(candidate_metrics["mae"])
+                <= float(reference_metrics["mae"]) * 0.97,
+            }
+        )
+        result["accepted"] = bool(
+            reference_improvement >= minimum_reference_improvement
+            and pinned_improvement >= 0.03
+            and winning_days >= required_wins
+            and float(result["median_day_improvement"]) > 0.0
+            and no_bad_day
+            and horizons_safe
+            and coverage_safe
+            and bool(result["interval_score_safe"])
+            and bool(result["rmse_safe"])
+            and bool(result["anchor_mae_safe"])
+        )
+        return result
 
     @staticmethod
     def _event_channel_gate_result(
@@ -3109,244 +3780,537 @@ class ForecastService:
             )
         return results
 
-    def train(self, session: Session) -> ForecastTrainResponse:
-        self.score_available(session)
-        champion = self._champion(session)
-        readings = self._load_readings(session, through_ms=_now_ms(), limit=20_000)
-        windows = self._training_windows(readings)
-        occupied_bins = len({row.measured_at_ms // STEP_MS for row in readings})
-        occupied_days = occupied_bins / (24 * 60 / STEP_MINUTES)
-        span_bins = (
-            int((readings[-1].measured_at_ms - readings[0].measured_at_ms) // STEP_MS) + 1
-            if readings
-            else 0
-        )
-        coverage_density = occupied_bins / span_bins if span_bins else 0.0
-        if occupied_days < MINIMUM_PERSONALIZATION_DAYS or coverage_density < 0.8:
-            return ForecastTrainResponse(
-                status="skipped",
-                promoted=False,
-                model_version=champion.version,
-                reason=(
-                    f"Need at least {MINIMUM_PERSONALIZATION_DAYS:g} occupied days "
-                    f"with 80% density; found {occupied_days:.2f} days at "
-                    f"{coverage_density:.0%} density"
-                ),
-                sample_count=0,
-                metrics={
-                    "occupied_5m_bins": occupied_bins,
-                    "occupied_days": occupied_days,
-                    "coverage_density": coverage_density,
-                },
-            )
-        if len(windows) < MINIMUM_TRAINING_WINDOWS:
-            return ForecastTrainResponse(
-                status="skipped",
-                promoted=False,
-                model_version=champion.version,
-                reason=(
-                    f"Need at least {MINIMUM_TRAINING_WINDOWS} complete causal windows; "
-                    f"found {len(windows)}"
-                ),
-                sample_count=len(windows),
-                metrics={},
+    def train_static_model(
+        self,
+        session: Session,
+        data_cutoff_ms: int | None = None,
+        candidate_version: str | None = None,
+    ) -> ForecastTrainResponse:
+        """Manually build one frozen candidate from an immutable causal snapshot.
+
+        This method is intentionally reachable only from the local admin CLI. It
+        never activates a candidate: a model that passes the independent-day gate
+        is staged with ``status=candidate`` and requires an explicit activation.
+        """
+
+        with self._training_lock:
+            return self._train_static_model_unlocked(
+                session,
+                data_cutoff_ms=data_cutoff_ms,
+                candidate_version=candidate_version,
             )
 
-        validation_count = max(VALIDATION_WINDOWS, int(len(windows) * 0.2))
-        validation_count = min(
-            validation_count,
-            len(windows) - EMBARGO_WINDOWS - MINIMUM_TRAIN_WINDOWS,
+    def _train_static_model_unlocked(
+        self,
+        session: Session,
+        *,
+        data_cutoff_ms: int | None,
+        candidate_version: str | None,
+    ) -> ForecastTrainResponse:
+        champion = self._champion(session)
+        source_revision_before = self._source_revision(session)
+        latest_available = session.scalar(
+            select(func.max(GlucoseReadingRecord.measured_at_ms))
         )
-        validation_start = len(windows) - validation_count
-        train_end = validation_start - EMBARGO_WINDOWS
-        train_windows = windows[:train_end]
-        validation_windows = windows[validation_start:]
+        if latest_available is None:
+            return ForecastTrainResponse(
+                status="skipped",
+                promoted=False,
+                model_version=champion.version,
+                reason="No glucose readings are available for manual training",
+                sample_count=0,
+                metrics={},
+            )
+        requested_cutoff = (
+            int(data_cutoff_ms) if data_cutoff_ms is not None else int(latest_available)
+        )
+        if requested_cutoff <= 0:
+            raise ValueError("data cutoff must be a positive Unix timestamp in milliseconds")
+        readings = self._load_readings(
+            session,
+            through_ms=min(requested_cutoff, int(latest_available)),
+            limit=60_000,
+        )
+        if not readings:
+            return ForecastTrainResponse(
+                status="skipped",
+                promoted=False,
+                model_version=champion.version,
+                reason="No glucose readings exist at or before the requested cutoff",
+                sample_count=0,
+                metrics={},
+            )
+        cutoff_ms = int(readings[-1].measured_at_ms)
+        all_windows = self._training_windows(readings, max_windows=None)
+        split_result = self._static_day_split(readings, all_windows)
+        if split_result is None:
+            day_count = len(
+                {
+                    self._window_local_day(readings, window)
+                    for window in all_windows
+                }
+            )
+            return ForecastTrainResponse(
+                status="skipped",
+                promoted=False,
+                model_version=champion.version,
+                reason=(
+                    "Need at least 15 dense local-day blocks: 8+ training, 1 tuning, "
+                    "2 frozen calibration, and 4 untouched test days"
+                ),
+                sample_count=len(all_windows),
+                metrics={"eligible_day_candidates": day_count},
+            )
+        train_windows, tuning_windows, calibration_windows, test_windows, split = (
+            split_result
+        )
+        tuning_independent = self._independent_windows(readings, tuning_windows)
+        calibration_independent = self._independent_windows(
+            readings, calibration_windows
+        )
+        test_independent = self._independent_windows(readings, test_windows)
+        split["tuning_independent_anchors"] = len(tuning_independent)
+        split["calibration_independent_anchors"] = len(calibration_independent)
+        split["test_independent_anchors"] = len(test_independent)
         if (
-            len(train_windows) < MINIMUM_TRAIN_WINDOWS
-            or len(validation_windows) < VALIDATION_WINDOWS
+            len(calibration_independent) < VALIDATION_WINDOWS
+            or len(test_independent) < 8 * STATIC_TEST_DAYS
         ):
             return ForecastTrainResponse(
                 status="skipped",
                 promoted=False,
                 model_version=champion.version,
-                reason="Not enough complete windows after the 120-minute validation embargo",
-                sample_count=len(windows),
-                metrics={},
+                reason="Not enough independent 120-minute anchors after chronological purges",
+                sample_count=len(train_windows),
+                metrics={
+                    "calibration_independent_anchors": len(calibration_independent),
+                    "test_independent_anchors": len(test_independent),
+                },
             )
-        # The embargo guarantees the final training target precedes the first
-        # validation anchor, so no target sample appears on both sides.
-        final_training_anchor = readings[train_windows[-1][0]].measured_at_ms
-        final_training_target_ms = final_training_anchor + HORIZON_STEPS * STEP_MS
-        first_validation_anchor_index = validation_windows[0][0]
-        first_validation_anchor_ms = readings[first_validation_anchor_index].measured_at_ms
-        if final_training_target_ms >= first_validation_anchor_ms:
-            return ForecastTrainResponse(
-                status="skipped",
-                promoted=False,
-                model_version=champion.version,
-                reason="Chronological windows did not provide a leakage-free embargo",
-                sample_count=len(windows),
-                metrics={},
-            )
-        split = len(train_windows)
-        selected_windows = train_windows + validation_windows
-        training_cutoff = final_training_target_ms + MATCH_TOLERANCE_MS
-        training_readings = [row for row in readings if row.measured_at_ms <= training_cutoff]
-        training_events = self._load_events(
-            session,
-            through_ms=training_cutoff,
-            known_through_ms=training_cutoff,
-        )
-        all_events = self._load_events(
-            session,
-            through_ms=readings[-1].measured_at_ms,
-            known_through_ms=readings[-1].measured_at_ms,
-        )
 
-        candidate_parameters = self._personalized_parameters(training_readings, training_events)
-        candidate_parameters["kind"] = "personalized_contextual_gated_neural"
-        candidate_parameters["feature_schema"] = V3_FEATURE_SCHEMA
-        candidate_parameters["architecture"] = PERSONAL_ARCHITECTURE
-        x_all, baseline_all, target_all = self._dataset_for_parameters(
-            readings, all_events, selected_windows, candidate_parameters
+        events = self._load_events(
+            session, through_ms=cutoff_ms, known_through_ms=cutoff_ms
         )
-        x_train = x_all[:split]
-        residual_train = target_all[:split] - baseline_all[:split]
-        candidate_parameters["network"] = _fit_contextual_network(
-            x_train, residual_train
+        # Analyze label support, but do not fit personal event curves from the 27
+        # heavily overlapping records. The runtime event reference keeps bounded
+        # population priors, while the network receives glucose/context only.
+        evidence_parameters = self._personalized_parameters(readings, events)
+        parameters = _default_parameters()
+        parameters["evidence_counts"] = dict(
+            evidence_parameters.get("evidence_counts", {})
         )
-
-        residual_errors = target_all[:split] - (
-            baseline_all[:split] + _network_predict_batch(x_all[:split], candidate_parameters)
-        )
-        in_sample_rmse = np.sqrt(np.mean(residual_errors * residual_errors, axis=0))
-        robust_q85 = np.quantile(np.abs(residual_errors), 0.85, axis=0) / 1.2816
-        warm_start_floor = np.asarray(_default_parameters()["residual_sigma"]) * 0.75
-        candidate_sigma = np.maximum.reduce(
-            [
-                np.full(HORIZON_STEPS, 6.0),
-                in_sample_rmse * 1.18,
-                robust_q85 * 1.15,
-                warm_start_floor,
-            ]
-        )
-        candidate_parameters["residual_sigma"] = candidate_sigma.tolist()
-        candidate_residual = _network_predict_batch(x_all[split:], candidate_parameters)
-        candidate_prediction = np.clip(baseline_all[split:] + candidate_residual, 20.0, 600.0)
-        candidate_metrics: dict[str, float | None] = {
-            **self._metrics(candidate_prediction, target_all[split:]),
-            **self._interval_metrics(
-                candidate_prediction, target_all[split:], candidate_sigma
-            ),
+        parameters["kind"] = "personalized_static_generic_residual"
+        parameters["feature_schema"] = STATIC_FEATURE_SCHEMA
+        parameters["architecture"] = STATIC_PERSONAL_ARCHITECTURE
+        parameters["network_disabled_event_channels"] = [
+            "meal",
+            "rapid",
+            "long",
+        ]
+        parameters["event_channel_validation"] = {
+            kind: {
+                "validated": False,
+                "reason": "not_identifiable_in_snapshot",
+                "response_samples": int(
+                    parameters["evidence_counts"].get(kind, 0) or 0
+                ),
+            }
+            for kind in ("meal", "rapid", "long")
         }
-        event_channel_validation = self._validate_event_channels(
-            readings,
-            all_events,
-            validation_windows,
-            candidate_parameters,
-            candidate_prediction,
-            target_all[split:],
-            training_cutoff_ms=training_cutoff,
+
+        x_train, reference_train, target_train = self._dataset_for_parameters(
+            readings, events, train_windows, parameters
         )
-        candidate_parameters["event_channel_validation"] = (
-            event_channel_validation
+        parameters["network"] = _fit_network(
+            x_train, target_train - reference_train
         )
 
-        champion_parameters = _json_dict(champion.parameters_json) or _default_parameters()
-        champion_x, champion_baseline, champion_target = self._dataset_for_parameters(
-            readings, all_events, validation_windows, champion_parameters
+        def raw_static(
+            windows: Sequence[tuple[int, np.ndarray]],
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            features, reference, target = self._dataset_for_parameters(
+                readings, events, windows, parameters
+            )
+            residual = _network_predict_batch(features, parameters)
+            raw = np.clip(reference + residual, 20.0, 600.0)
+            return features, reference, target, raw
+
+        _tune_x, tune_reference, tune_target, tune_raw = raw_static(
+            tuning_independent
         )
-        champion_prediction = np.clip(
-            champion_baseline + _network_predict_batch(champion_x, champion_parameters),
+        grid = (0.0, 0.25, 0.50, 0.75, 1.0)
+        band_weights: list[float] = []
+        for start, end in STATIC_BANDS:
+            start_index = (start // STEP_MINUTES) - 1
+            end_index = end // STEP_MINUTES
+            best_weight = 0.0
+            best_loss = math.inf
+            for weight in grid:
+                prediction = tune_reference[:, start_index:end_index] + weight * (
+                    tune_raw[:, start_index:end_index]
+                    - tune_reference[:, start_index:end_index]
+                )
+                loss = float(
+                    np.mean(
+                        np.abs(prediction - tune_target[:, start_index:end_index])
+                    )
+                )
+                if loss < best_loss - 1e-9:
+                    best_loss = loss
+                    best_weight = weight
+            band_weights.append(best_weight)
+        blend = np.asarray(
+            [
+                weight
+                for weight, (start, end) in zip(band_weights, STATIC_BANDS)
+                for _ in range(((end - start) // STEP_MINUTES) + 1)
+            ],
+            dtype=np.float64,
+        )
+        parameters["persistence_blend_weights"] = blend.tolist()
+
+        _cal_x, cal_reference, cal_target, cal_raw = raw_static(
+            calibration_independent
+        )
+        cal_shrunk = cal_reference + blend.reshape(1, -1) * (
+            cal_raw - cal_reference
+        )
+        bias, sigma = self._frozen_calibration(cal_shrunk, cal_target)
+        reference_bias, reference_sigma = self._frozen_calibration(
+            cal_reference, cal_target
+        )
+        parameters["residual_sigma"] = sigma.tolist()
+        parameters["frozen_calibration"] = {
+            "method": "frozen-day-block-conformal-v1",
+            "interval_level": STATIC_INTERVAL_LEVEL,
+            "sample_count": len(calibration_independent),
+            "bias_mg_dl": bias.tolist(),
+            "sigma_mg_dl": sigma.tolist(),
+        }
+
+        _test_x, test_reference, test_target, test_raw = raw_static(test_independent)
+        candidate_prediction = np.clip(
+            test_reference
+            + blend.reshape(1, -1) * (test_raw - test_reference)
+            + bias.reshape(1, -1),
             20.0,
             600.0,
         )
-        champion_sigma = np.asarray(
+        reference_prediction = np.clip(
+            test_reference + reference_bias.reshape(1, -1), 20.0, 600.0
+        )
+
+        champion_parameters = (
+            _baseline_parameters()
+            if champion.version == BASELINE_VERSION
+            else (_json_dict(champion.parameters_json) or _default_parameters())
+        )
+        champion_x, champion_base, champion_target = self._dataset_for_parameters(
+            readings, events, test_independent, champion_parameters
+        )
+        pinned_prediction = np.clip(
+            champion_base
+            + _network_predict_batch(champion_x, champion_parameters),
+            20.0,
+            600.0,
+        )
+        pinned_sigma = np.asarray(
             champion_parameters.get(
                 "residual_sigma", _default_parameters()["residual_sigma"]
             ),
             dtype=np.float64,
         )
-        if (
-            champion_sigma.shape != (HORIZON_STEPS,)
-            or not np.isfinite(champion_sigma).all()
-            or np.any(champion_sigma <= 0.0)
-        ):
-            champion_sigma = np.asarray(_default_parameters()["residual_sigma"])
-        champion_metrics: dict[str, float | None] = {
-            **self._metrics(champion_prediction, champion_target),
+        if champion.architecture == STATIC_PERSONAL_ARCHITECTURE:
+            champion_reference = self._reference_for_windows(
+                readings, events, test_independent, champion_parameters
+            )
+            pinned_prediction, pinned_sigma = _apply_static_predictor(
+                pinned_prediction,
+                champion_reference,
+                pinned_sigma,
+                champion_parameters,
+            )
+        elif champion.version == BASELINE_VERSION:
+            pinned_sigma = pinned_sigma * 1.25
+        if pinned_sigma.shape != (HORIZON_STEPS,) or not np.isfinite(pinned_sigma).all():
+            pinned_sigma = np.asarray(
+                _default_parameters()["residual_sigma"], dtype=np.float64
+            )
+
+        candidate_metrics: dict[str, float | None] = {
+            **self._metrics(candidate_prediction, test_target),
+            **self._interval_metrics(candidate_prediction, test_target, sigma),
+        }
+        reference_metrics: dict[str, float | None] = {
+            **self._metrics(reference_prediction, test_target),
             **self._interval_metrics(
-                champion_prediction, champion_target, champion_sigma
+                reference_prediction, test_target, reference_sigma
             ),
         }
-        metrics: dict[str, float | int | None] = {
-            **{f"candidate_{key}": value for key, value in candidate_metrics.items()},
-            **{f"champion_{key}": value for key, value in champion_metrics.items()},
-            "training_windows": len(train_windows),
-            "embargo_windows": EMBARGO_WINDOWS,
-            "validation_windows": len(validation_windows),
-            "final_training_target_ms": final_training_target_ms,
-            "first_validation_anchor_ms": first_validation_anchor_ms,
+        pinned_metrics: dict[str, float | None] = {
+            **self._metrics(pinned_prediction, champion_target),
+            **self._interval_metrics(
+                pinned_prediction, champion_target, pinned_sigma
+            ),
         }
-        for kind, validation_result in event_channel_validation.items():
-            prefix = f"event_{kind}_"
-            metrics[prefix + "validated"] = int(
-                validation_result["validated"] is True
-            )
-            for key in (
-                "response_samples",
-                "validation_events",
-                "validation_windows",
-                "full_mae",
-                "ablated_mae",
-                "improvement_mg_dl",
-                "relative_improvement",
-            ):
-                metrics[prefix + key] = validation_result.get(key)
-        promoted = self.candidate_is_promotable(
-            candidate_metrics,
-            champion_metrics,
-            finite=bool(np.isfinite(candidate_prediction).all()),
+        day_results = self._equal_day_results(
+            readings,
+            test_independent,
+            candidate_prediction,
+            reference_prediction,
+            pinned_prediction,
+            test_target,
         )
-        candidate_parameters["validation"] = {
-            "coverage_80": candidate_metrics["coverage_80"],
-            "mean_interval_width": candidate_metrics["mean_interval_width"],
-            "hypo_miss_rate": candidate_metrics["hypo_miss_rate"],
-        }
+        gates = self.static_promotion_gates(
+            candidate_metrics,
+            reference_metrics,
+            pinned_metrics,
+            day_results,
+            test_day_count=len(day_results),
+            finite=bool(
+                np.isfinite(candidate_prediction).all()
+                and np.isfinite(sigma).all()
+            ),
+        )
+        accepted = bool(gates["accepted"])
+
+        # Overlapping windows are retained only as a transparent secondary
+        # diagnostic; they never participate in the gate or confidence.
+        _diag_x, diag_reference, diag_target, diag_raw = raw_static(test_windows)
+        diag_prediction = np.clip(
+            diag_reference
+            + blend.reshape(1, -1) * (diag_raw - diag_reference)
+            + bias.reshape(1, -1),
+            20.0,
+            600.0,
+        )
+        diagnostic_metrics = self._metrics(diag_prediction, diag_target)
+
+        test_days = len(day_results)
+        confidence_cap = 0.35 if test_days < 8 else (0.50 if test_days < 14 else 0.65)
+        reference_skill = _clamp(
+            1.0
+            - float(candidate_metrics["mae"] or 0.0)
+            / max(1e-6, float(reference_metrics["mae"] or 0.0)),
+            0.0,
+            0.25,
+        ) / 0.25
+        calibration_skill = _clamp(
+            1.0 - abs(float(candidate_metrics["coverage_80"] or 0.0) - 0.8) / 0.2,
+            0.0,
+            1.0,
+        )
+        winning_fraction = float(gates.get("winning_days", 0)) / max(1, test_days)
+        evidence_fraction = _clamp(len(test_independent) / max(1, test_days * 12), 0.0, 1.0)
+        reliability_overall = confidence_cap * (
+            0.45 * reference_skill
+            + 0.25 * calibration_skill
+            + 0.20 * winning_fraction
+            + 0.10 * evidence_fraction
+        )
+        reliability_overall = _clamp(reliability_overall, 0.05, confidence_cap)
+        by_horizon = [
+            _clamp(
+                reliability_overall
+                * _clamp(
+                    float(reference_error)
+                    / max(float(candidate_error), float(reference_error), 1e-6),
+                    0.65,
+                    1.10,
+                ),
+                0.0,
+                confidence_cap,
+            )
+            for candidate_error, reference_error in zip(
+                np.mean(np.abs(candidate_prediction - test_target), axis=0),
+                np.mean(np.abs(reference_prediction - test_target), axis=0),
+            )
+        ]
+
         now = _now_ms()
-        version = f"personal-{now}-{uuid4().hex[:8]}"
+        if candidate_version is None:
+            version = f"static-{now}-{uuid4().hex[:8]}"
+        else:
+            version = str(candidate_version).strip()
+            if (
+                not version
+                or len(version) > 96
+                or any(
+                    character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+                    for character in version
+                )
+            ):
+                raise ValueError(
+                    "candidate version must contain only letters, digits, '.', '_' or '-'"
+                )
+        if session.get(ForecastModelRecord, version) is not None:
+            raise ValueError(f"forecast model version already exists: {version}")
+
+        evaluation: dict[str, float | int | None] = {
+            "accepted": int(accepted),
+            "candidate_equal_day_mae": _finite(
+                gates.get("candidate_equal_day_mae"),
+                float(candidate_metrics["mae"] or 0.0),
+            ),
+            "reference_equal_day_mae": _finite(
+                gates.get("reference_equal_day_mae"),
+                float(reference_metrics["mae"] or 0.0),
+            ),
+            "pinned_equal_day_mae": _finite(
+                gates.get("pinned_equal_day_mae"),
+                float(pinned_metrics["mae"] or 0.0),
+            ),
+            "candidate_anchor_mae": float(candidate_metrics["mae"] or 0.0),
+            "reference_anchor_mae": float(reference_metrics["mae"] or 0.0),
+            "pinned_anchor_mae": float(pinned_metrics["mae"] or 0.0),
+            "candidate_rmse": float(candidate_metrics["rmse"] or 0.0),
+            "reference_rmse": float(reference_metrics["rmse"] or 0.0),
+            "candidate_mae_30": float(candidate_metrics["mae_30"] or 0.0),
+            "candidate_mae_60": float(candidate_metrics["mae_60"] or 0.0),
+            "candidate_mae_120": float(candidate_metrics["mae_120"] or 0.0),
+            "reference_mae_30": float(reference_metrics["mae_30"] or 0.0),
+            "reference_mae_60": float(reference_metrics["mae_60"] or 0.0),
+            "reference_mae_120": float(reference_metrics["mae_120"] or 0.0),
+            "candidate_coverage_80": float(candidate_metrics["coverage_80"] or 0.0),
+            "candidate_interval_score_80": float(
+                candidate_metrics["interval_score_80"] or 0.0
+            ),
+            "reference_interval_score_80": float(
+                reference_metrics["interval_score_80"] or 0.0
+            ),
+            "test_days": test_days,
+            "test_independent_anchors": len(test_independent),
+            "calibration_independent_anchors": len(calibration_independent),
+            "winning_days": int(gates.get("winning_days", 0)),
+            "diagnostic_overlapping_mae": float(diagnostic_metrics["mae"]),
+            "reliability": reliability_overall,
+        }
+        for key, value in gates.items():
+            if key in evaluation or key == "finite":
+                continue
+            if isinstance(value, bool):
+                evaluation[f"gate_{key}"] = int(value)
+            elif isinstance(value, (int, float)) and math.isfinite(float(value)):
+                evaluation[f"gate_{key}"] = value
+
+        network = parameters["network"]
+        parameter_count = int(
+            sum(
+                np.asarray(network[name], dtype=np.float64).size
+                for name in ("w1", "b1", "w2", "b2")
+            )
+        )
+        max_received_at = max(int(row.received_at_ms) for row in readings)
+        event_revision = source_revision_before[3]
+        parameters["artifact"] = {
+            "artifact_version": 3,
+            "engine_version": FORECAST_ENGINE_VERSION,
+            "architecture": STATIC_PERSONAL_ARCHITECTURE,
+            "feature_schema": STATIC_FEATURE_SCHEMA,
+            "network_kind": STATIC_NETWORK_KIND,
+            "training_mode": STATIC_TRAINING_MODE,
+            "promotion_gate_version": STATIC_PROMOTION_GATE_VERSION,
+            "interval_level": STATIC_INTERVAL_LEVEL,
+            "seed": STATIC_TRAINING_SEED,
+            "feature_count": STATIC_FEATURE_COUNT,
+            "parameter_count": parameter_count,
+            "model_version": version,
+            "trained_at_ms": now,
+            "data_cutoff_ms": cutoff_ms,
+            "sample_count": len(train_windows),
+            "dataset_sha256": _dataset_fingerprint(readings, events),
+            "snapshot": {
+                "last_reading_at_ms": cutoff_ms,
+                "max_received_at_ms": max_received_at,
+                "event_revision": event_revision,
+                "active_event_count": len(events),
+            },
+            "split": split,
+            "band_definitions": [
+                {
+                    "start_minutes": start,
+                    "end_minutes": end,
+                    "weight": weight,
+                }
+                for weight, (start, end) in zip(band_weights, STATIC_BANDS)
+            ],
+            "event_channels": {
+                "meal": "population_prior_not_identifiable",
+                "rapid": "population_prior_not_identifiable",
+                "long": "population_prior_not_identifiable",
+            },
+            "reliability": {
+                "overall": reliability_overall,
+                "by_horizon": by_horizon,
+                "clinical_validation": False,
+                "test_day_cap": confidence_cap,
+            },
+            "evaluation": evaluation,
+            "accepted": accepted,
+        }
+        parameters["artifact"]["content_sha256"] = _artifact_content_hash(
+            parameters
+        )
         reason = (
-            "Candidate improved chronological holdout accuracy without unsafe horizon regression"
-            if promoted
-            else "Candidate did not beat the champion on the chronological holdout"
+            "Passed the independent-day static promotion gate; explicit activation is required"
+            if accepted
+            else "Rejected: independent-day evidence did not beat the frozen persistence and pinned comparators"
         )
         candidate = ForecastModelRecord(
             version=version,
-            status="candidate" if promoted else "rejected",
-            architecture=PERSONAL_ARCHITECTURE,
+            status="candidate" if accepted else "rejected",
+            architecture=STATIC_PERSONAL_ARCHITECTURE,
             created_at_ms=now,
             trained_at_ms=now,
             promoted_at_ms=None,
-            training_cutoff_ms=training_cutoff,
+            training_cutoff_ms=cutoff_ms,
             sample_count=len(train_windows),
-            parameters_json=json.dumps(candidate_parameters, separators=(",", ":"), allow_nan=False),
-            metrics_json=json.dumps(metrics, separators=(",", ":"), allow_nan=False),
+            parameters_json=json.dumps(
+                parameters, separators=(",", ":"), allow_nan=False
+            ),
+            metrics_json=json.dumps(
+                evaluation, separators=(",", ":"), allow_nan=False
+            ),
             decision_reason=reason,
         )
+        # SQLite's legacy transaction mode does not BEGIN for SELECT. Take a
+        # short write reservation only for the final revision check + insert.
+        # Monotone received/sync revisions make any interleaved source mutation
+        # observable without blocking mobile ingestion during model fitting.
+        session.rollback()
+        session.execute(text("BEGIN IMMEDIATE"))
+        source_revision_after = self._source_revision(session)
+        if source_revision_after != source_revision_before:
+            session.rollback()
+            return ForecastTrainResponse(
+                status="skipped",
+                promoted=False,
+                model_version=champion.version,
+                reason=(
+                    "Source glucose/intake data changed during training; retry from a fresh snapshot"
+                ),
+                sample_count=len(train_windows),
+                metrics={"source_revision_changed": 1},
+            )
         session.add(candidate)
-        if promoted:
-            champion.status = "retired"
-            candidate.status = "champion"
-            candidate.promoted_at_ms = now
         session.commit()
         return ForecastTrainResponse(
-            status="promoted" if promoted else "rejected",
-            promoted=promoted,
-            model_version=version if promoted else champion.version,
+            status="accepted" if accepted else "rejected",
+            promoted=False,
+            model_version=version,
             reason=reason,
             sample_count=len(train_windows),
-            metrics=metrics,
+            metrics=evaluation,
         )
+
+    # Compatibility for local Python callers. HTTP ingestion never calls this
+    # method, and maybe_train() remains a no-op.
+    def train(self, session: Session) -> ForecastTrainResponse:
+        return self.train_static_model(session)
+
+    def _legacy_train(self, session: Session) -> ForecastTrainResponse:
+        del session
+        raise RuntimeError("legacy automatic-promotion training is disabled")
 
     @staticmethod
     def candidate_is_promotable(
@@ -3436,13 +4400,19 @@ class ForecastService:
         ) or 0
         latest_attempt = session.scalar(
             select(ForecastModelRecord)
-            .where(ForecastModelRecord.trained_at_ms.is_not(None))
+            .where(
+                ForecastModelRecord.trained_at_ms.is_not(None),
+                ForecastModelRecord.architecture == STATIC_PERSONAL_ARCHITECTURE,
+            )
             .order_by(ForecastModelRecord.trained_at_ms.desc())
         )
-        last_trained = latest_attempt.trained_at_ms if latest_attempt is not None else None
         if champion.version != BASELINE_VERSION:
+            last_trained = champion.trained_at_ms
             trained_samples = champion.sample_count
         else:
+            last_trained = (
+                latest_attempt.trained_at_ms if latest_attempt is not None else None
+            )
             trained_samples = latest_attempt.sample_count if latest_attempt is not None else 0
         score_filter = ForecastScoreRecord.model_version == champion.version
         scored_points = session.scalar(
@@ -3478,15 +4448,6 @@ class ForecastService:
             else 0
         )
         coverage_density = _clamp(occupied_bins / span_bins if span_bins else 0.0, 0, 1)
-        minimum_readings = HISTORY_STEPS + HORIZON_STEPS - 1 + MINIMUM_TRAINING_WINDOWS
-        training_span_ready = bool(
-            reading_count >= minimum_readings
-            and first_at is not None
-            and last_at is not None
-            and last_at - first_at >= (minimum_readings - 1) * STEP_MS
-            and days >= MINIMUM_PERSONALIZATION_DAYS
-            and coverage_density >= 0.8
-        )
         if not reading_count:
             status_value = "no_data"
         elif last_at is not None and now - last_at > STALE_AFTER_MS:
@@ -3502,22 +4463,44 @@ class ForecastService:
             if quality_status == "low_confidence":
                 status_value = "low_confidence"
             elif champion.version != BASELINE_VERSION:
-                status_value = (
-                    "ready" if days >= READY_PERSONALIZATION_DAYS else "learning"
-                )
-            elif not training_span_ready:
-                status_value = "cold_start"
+                status_value = "ready"
             else:
-                status_value = "learning"
-        if last_trained is None:
-            training_state = "not_started"
-        elif champion.version != BASELINE_VERSION:
-            training_state = "trained"
-        elif latest_attempt is not None and latest_attempt.architecture == "training-attempt-v1":
-            training_state = "insufficient_data"
-        else:
-            training_state = "candidate_rejected"
-        parameters = _json_dict(champion.parameters_json) or _default_parameters()
+                status_value = "cold_start"
+        training_state = (
+            "frozen" if champion.version != BASELINE_VERSION else "manual_only"
+        )
+        comparison_record = (
+            champion if champion.version != BASELINE_VERSION else latest_attempt
+        )
+        comparison_parameters = (
+            _json_dict(comparison_record.parameters_json)
+            if comparison_record is not None
+            else {}
+        )
+        snapshot = comparison_parameters.get("artifact", {}).get("snapshot", {})
+        current_max_received = session.scalar(
+            select(func.max(GlucoseReadingRecord.received_at_ms))
+        )
+        current_event_revision = int(
+            session.scalar(select(func.max(SyncChangeRecord.id))) or 0
+        )
+        data_changed_since_training = bool(
+            comparison_record is not None
+            and isinstance(snapshot, dict)
+            and (
+                int(_finite(snapshot.get("last_reading_at_ms"), -1))
+                != int(last_at or -1)
+                or int(_finite(snapshot.get("max_received_at_ms"), -1))
+                != int(current_max_received or -1)
+                or int(_finite(snapshot.get("event_revision"), -1))
+                != current_event_revision
+            )
+        )
+        parameters = (
+            _baseline_parameters()
+            if champion.version == BASELINE_VERSION
+            else (_json_dict(champion.parameters_json) or _default_parameters())
+        )
         profiles = parameters.get("profiles", {})
         evidence = parameters.get("evidence_counts", {})
         return ForecastStatusResponse(
@@ -3526,8 +4509,11 @@ class ForecastService:
             model_version=champion.version,
             training=ForecastTrainingStatus(
                 state=training_state,
+                mode=STATIC_TRAINING_MODE,
+                automatic_enabled=False,
+                data_changed_since_training=data_changed_since_training,
                 last_trained_at_ms=last_trained,
-                next_eligible_at_ms=(last_trained + 24 * 60 * 60_000 if last_trained else None),
+                next_eligible_at_ms=None,
                 sample_count=int(trained_samples),
                 minimum_samples=MINIMUM_TRAIN_WINDOWS,
             ),
@@ -3553,8 +4539,8 @@ class ForecastService:
                 personal_model_active=champion.version != BASELINE_VERSION,
                 ready_for_display=status_value == "ready",
                 occupied_5m_bins=occupied_bins,
-                training_days_required=MINIMUM_PERSONALIZATION_DAYS,
-                ready_days_required=READY_PERSONALIZATION_DAYS,
+                training_days_required=STATIC_REQUIRED_DAYS,
+                ready_days_required=STATIC_REQUIRED_DAYS,
                 meal_response_samples=int(evidence.get("meal", 0) or 0),
                 rapid_response_samples=int(evidence.get("rapid", 0) or 0),
                 long_response_samples=int(evidence.get("long", 0) or 0),

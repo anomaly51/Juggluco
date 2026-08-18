@@ -503,8 +503,16 @@ class ForecastTrainingStatus(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     state: Literal[
-        "not_started", "insufficient_data", "candidate_rejected", "trained"
+        "not_started",
+        "insufficient_data",
+        "candidate_rejected",
+        "trained",
+        "manual_only",
+        "frozen",
     ]
+    mode: Literal["manual"] = "manual"
+    automatic_enabled: Literal[False] = False
+    data_changed_since_training: bool = False
     last_trained_at_ms: int | None
     next_eligible_at_ms: int | None
     sample_count: int = Field(ge=0)
@@ -568,7 +576,7 @@ class ForecastStatusResponse(BaseModel):
 class ForecastTrainResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["skipped", "rejected", "promoted"]
+    status: Literal["skipped", "rejected", "accepted", "promoted"]
     promoted: bool
     model_version: str
     reason: str

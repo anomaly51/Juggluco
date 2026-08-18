@@ -203,18 +203,7 @@ final class ForecastDetailsPage {
                     activity.getString(R.string.forecast_accuracy_30d)));
         }
 
-        String trainingState = humanState(model.trainingState);
-        if (model.minimumSamples > 0L || model.sampleCount > 0L) {
-            String text = activity.getString(R.string.forecast_training_summary,
-                    trainingState, model.sampleCount, model.minimumSamples);
-            text += "\n" + (model.lastTrainedAtMs > 0L
-                    ? activity.getString(R.string.forecast_last_trained,
-                            dateTime(model.lastTrainedAtMs))
-                    : activity.getString(R.string.forecast_not_trained));
-            training.setText(text);
-        } else {
-            training.setText(R.string.forecast_model_waiting);
-        }
+        training.setText(trainingText(model));
         String modelVersion = !forecast.modelVersion.isEmpty()
                 ? forecast.modelVersion : model.modelVersion;
         version.setText(modelVersion.isEmpty()
@@ -678,9 +667,48 @@ final class ForecastDetailsPage {
         if ("training".equals(raw)) {
             return activity.getString(R.string.forecast_training_in_progress);
         }
+        if ("frozen".equals(raw)) {
+            return activity.getString(R.string.forecast_training_frozen);
+        }
+        if ("manual_only".equals(raw)) {
+            return activity.getString(R.string.forecast_training_manual_only);
+        }
         String clean = value.trim().replace('_', ' ');
         return clean.substring(0, 1).toUpperCase(Locale.getDefault())
                 + clean.substring(1);
+    }
+
+    private CharSequence trainingText(ForecastModelStatus model) {
+        boolean manual = "manual".equalsIgnoreCase(model.trainingMode)
+                || Boolean.FALSE.equals(model.automaticTrainingEnabled)
+                || "manual_only".equalsIgnoreCase(model.trainingState)
+                || "frozen".equalsIgnoreCase(model.trainingState);
+        StringBuilder text = new StringBuilder();
+        if (manual) {
+            text.append(humanState(model.trainingState));
+            text.append("\n").append(activity.getString(
+                    R.string.forecast_training_manual_mode));
+            text.append("\n").append(activity.getString(
+                    R.string.forecast_training_samples, model.sampleCount));
+        } else if (model.minimumSamples > 0L || model.sampleCount > 0L) {
+            text.append(activity.getString(
+                    R.string.forecast_training_summary,
+                    humanState(model.trainingState), model.sampleCount,
+                    model.minimumSamples));
+        } else {
+            text.append(activity.getString(R.string.forecast_model_waiting));
+        }
+        if (manual || model.minimumSamples > 0L || model.sampleCount > 0L) {
+            text.append("\n").append(model.lastTrainedAtMs > 0L
+                    ? activity.getString(R.string.forecast_last_trained,
+                            dateTime(model.lastTrainedAtMs))
+                    : activity.getString(R.string.forecast_not_trained));
+        }
+        if (Boolean.TRUE.equals(model.dataChangedSinceTraining)) {
+            text.append("\n\n").append(activity.getString(
+                    R.string.forecast_training_data_changed));
+        }
+        return text;
     }
 
     private String dateTime(long timestampMs) {

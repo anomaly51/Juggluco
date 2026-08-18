@@ -141,7 +141,7 @@ def test_insufficient_event_evidence_is_explicit_population_prior(client, auth_h
     long = _post_insulin(client, auth_headers, anchor, 16.0, "Tresiba")
 
     response = client.get("/v1/forecast/current", headers=auth_headers).json()
-    assert response["model_version"] == "hybrid-baseline-v2"
+    assert response["model_version"] == "event-aware-persistence-v3"
     by_id = {item["event_id"]: item for item in response["activities"]}
     rapid_activity = by_id[rapid["id"]]
     long_activity = by_id[long["id"]]

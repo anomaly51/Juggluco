@@ -21,6 +21,10 @@ work/
 .pytest_cache/
 *.py[cod]
 backend/data/
+# Explicit privacy guards for manual CGM/intake snapshots and model artifacts.
+backend/data/exports/
+backend/data/models/
+forecast-export-*/
 *.db
 *.db-shm
 *.db-wal

@@ -101,6 +101,11 @@
     <string name="forecast_training_insufficient">Копим историю</string>
     <string name="forecast_training_trained">Обучена</string>
     <string name="forecast_training_in_progress">Обучается</string>
+    <string name="forecast_training_frozen">Зафиксированная версия модели</string>
+    <string name="forecast_training_manual_only">Только ручное переобучение</string>
+    <string name="forecast_training_manual_mode">Автоматическое переобучение отключено. Новая версия модели активируется вручную.</string>
+    <string name="forecast_training_samples">Примеров для обучения: %1$d</string>
+    <string name="forecast_training_data_changed">После обучения этой версии появились новые данные. До следующего ручного переобучения прогнозы продолжат использовать зафиксированную модель.</string>
     <string name="forecast_last_trained">Последнее обучение: %1$s</string>
     <string name="forecast_not_trained">Ещё не обучалась</string>
     <string name="forecast_model_version">Модель %1$s</string>

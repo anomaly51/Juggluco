@@ -486,7 +486,7 @@ def test_corrupt_v3_network_fails_closed_to_zero_residual(corrupt):
     )
 
 
-def test_corrupt_sigma_and_model_never_escape_as_nan_from_current(
+def test_corrupt_legacy_model_is_audit_only_and_current_remains_finite(
     app, client, auth_headers
 ):
     anchor = int(time.time() * 1_000) - 1_000
@@ -540,7 +540,7 @@ def test_corrupt_sigma_and_model_never_escape_as_nan_from_current(
     response = client.get("/v1/forecast/current", headers=auth_headers)
     assert response.status_code == 200
     body = response.json()
-    assert body["model_version"] == version
+    assert body["model_version"] == BASELINE_VERSION
     assert len(body["points"]) == HORIZON_STEPS
     for point in body["points"]:
         assert all(

@@ -319,12 +319,11 @@ quality, or UTC offset differs. Reusing an ID for materially different data retu
 The per-reading UTC offset takes precedence so a history batch can cross a DST boundary;
 the batch-level value remains the fallback for older clients.
 Timestamp-canonical IDs (`cgm-<measured_at_ms>`) are the exception: a later native-history
-correction updates the sample, invalidates/rebuilds its scores and calibration, and returns
+correction updates the sample, invalidates/rebuilds its derived scores, and returns
 `updated: 1`. An empty `readings` list is accepted only as an explicit
 `backfill_complete: true` boundary. Partial history requests send `false`; live uploads omit
-the field. Candidate training is queued only after the explicit `true` boundary, so a
-multi-request 45-day import is never trained from a prefix and ordinary refreshes still obey
-the 24-hour throttle.
+the field. This boundary only completes synchronization; it never starts training. Ingesting,
+correcting, or deleting source data cannot modify or replace the active model artifact.
 One-minute and five-minute sensors share the same contract: modeling resamples by actual
 timestamps onto five-minute feature/target bins. Raw row count is never treated as elapsed
 history, so 24 one-minute readings do not masquerade as two hours of coverage.
@@ -353,59 +352,62 @@ metadata keeps older clients compatible while making uncertainty explicit: `onse
 `peak_low_ms`, `peak_high_ms`, `end_low_ms`, `end_high_ms`, `attribution_confidence`,
 `identifiability`, `action_model`, and `overlap_count`. `peak_ms` and `end_ms` remain the
 central representatives; the interval fields must be used whenever they are available.
-For baseline and legacy-v2 champions the series uses the conservative prior response curve.
-Contextual points require a validated v3 personal champion, at least eight usable independent
-training responses of that event kind, and a later chronological holdout containing at least
-five independent events and twelve affected windows. The complete candidate must improve
-prediction over the same candidate with that event kind ablated; otherwise that kind keeps
-the prior series. An enabled series is the guarded counterfactual model difference between
-the complete forecast and a forecast with that one immutable event ID omitted, so simultaneous
-records stay separate and the same dose may have different sampled points under different
-measured context. All intersecting meal, rapid, and long kernels increase `overlap_count` and
-reduce attribution confidence instead of being silently merged.
+The active static predictor deliberately keeps meal, NovoRapid, and Tresiba on bounded
+population-prior curves. The available event records are too few and too overlapped to identify
+separate personal action profiles safely. Simultaneous records remain separate, every overlap
+reduces attribution confidence, meal contribution is non-negative, insulin contribution is
+non-positive, and no event contributes before it starts. These curves are explanatory model
+estimates, not causal measurements, pharmacokinetic claims, or dosing recommendations.
 
-For NovoRapid, a validated neural marginal is projected onto a regularized, bounded effective
-kernel that may adjust onset, peak, duration, and amplitude for the current context. The raw
-signed counterfactual remains the contribution series; the smooth kernel controls explanatory
-timing and activity. Without validated evidence the population or globally learned kernel is
-returned with a deliberately wide interval. Tresiba is not assigned a learned sharp per-dose
-peak: daily doses are rendered as separate, overlapping broad depot curves with a slow rise,
-wide plateau, and slow tail. Context may adapt one strongly bounded shared basal amplitude,
-while individual Tresiba timing remains low/not-identifiable. The existing
-`profile_source=personalized` wire value is retained for Android compatibility. Meal
-contribution is clamped non-negative, insulin contribution non-positive, magnitude is bounded,
-and an event has zero contribution before it starts. These are model estimates of effective
-glucose impact, not causal measurements, pharmacokinetic claims, or dosing recommendations.
+The manually trained model is a dependency-light NumPy residual network with one 12-unit
+`tanh` layer and 24 direct horizons. Its 138 causal inputs contain glucose deltas and quality
+masks from the detailed two-hour trace, progressively coarser samples through 72 hours,
+variability/dynamics summaries, daily harmonics, weekday phase, and current state. It receives
+no learned meal/rapid/long channels. The residual is added to event-aware persistence, then
+four separately tuned horizon-band weights can shrink it back toward that safe reference.
+Calibration bias and 80% intervals are frozen inside the checksummed artifact. Later CGM
+values are scored for monitoring only; they never update weights, bias, intervals, confidence,
+or the active version. Derived runs/scores are retained for 35 days; source CGM and intake data
+are not pruned. A persisted random `server_instance_id` lets Android reset its history cursor
+if the backend database is recreated.
 
-The v3 predictor is still a dependency-light NumPy hybrid. A damped CGM trend and continuous
-event-response priors remain the safe fallback. The personal candidate uses a compact shared
-encoder plus a gated second-stage residual head and produces all 24 horizons directly. Its
-causal feature schema keeps the detailed two-hour CGM trace, adds progressively coarser
-samples and variability/dynamics summaries through 72 hours, two daily harmonics, weekday
-phase, sensor-quality masks, event channels, and meal/insulin interaction channels. It learns
-predictive correlations present in those inputs; it cannot identify an unmeasured cause.
-Legacy `personalized-hybrid-mlp-direct-24-v2` champions remain readable and retain their old
-feature dimensions. Personal training may update global NovoRapid timing after enough clean
-episodes; long-insulin evidence may update only slow basal sensitivity, not a per-injection
-Tresiba peak or end. Validation-derived residual scale and a per-reading online residual
-calibrator form the uncertainty interval. Forecast runs and points are immutable; later CGM
-values are scored separately without changing the historical prediction. Scores and
-calibration are scoped to the exact model version. Derived runs/scores are retained for 35
-days; source CGM and intake data are not pruned. A persisted random `server_instance_id` in
-the status response lets Android reset its history cursor if the backend database is recreated.
+Training is strictly manual and local: there is no training HTTP endpoint, background task,
+timer, backfill hook, or online calibrator. New source data only makes
+`training.data_changed_since_training` true. The explicit `active_forecast_model` pin is the
+sole runtime selector; a missing, corrupt, rejected, or incompatible artifact fails closed to
+the baseline. The pinned artifact continues serving until an operator explicitly activates a
+different approved version.
 
-Personal training requires at least three occupied days at 80% or better five-minute-bin
-density; status remains `learning` until seven occupied days even if a personal model is
-already active. Ingestion attempts one bounded candidate training run at most every 24 hours.
-New, corrected, or deleted historical events/readings mark the replay dirty; the next explicit
-completed-history boundary can then rebuild a candidate without changing source data.
-Training uses a chronological holdout. A candidate replaces the
-champion only when overall error improves and 30/60/120-minute horizons pass regression
-guards; otherwise it is persisted as rejected. Chronological validation reserves at least
-48 training windows, a full 24-window/120-minute embargo, and 16 validation windows, so
-overlapping targets cannot leak across the split. `POST /v1/forecast/train` triggers the same
-candidate path manually for local/debug use. `GET /v1/forecast/status` reports training,
-data coverage, 30/60/120-minute errors, interval coverage, and rolling 7/30-day error.
+Manual training requires at least fifteen dense local-day blocks: at least eight early days
+for fitting, one separate tuning day, two frozen-calibration days, and four untouched test
+days. Every split boundary has a 120-minute purge. The primary evaluation samples anchors at
+least 120 minutes apart and weights calendar days equally; overlapping five-minute windows are
+diagnostics only. Promotion requires independent-day accuracy gains over both event-aware
+persistence and the pinned model, safe 30/60/120-minute errors, calibrated 80% coverage, and a
+better proper interval score. A candidate retains its dataset digest, deterministic seed,
+split manifest, comparator metrics, frozen calibration, approval bit, and an envelope checksum.
+Passing training only stages the candidate; it is never silently activated.
+Run the administration commands from `backend` against the local SQLite database only:
+
+```powershell
+python -m scripts.forecast_admin status
+python -m scripts.forecast_admin export
+python -m scripts.forecast_admin train --candidate-version personal-review-1
+python -m scripts.forecast_admin activate personal-review-1
+python -m scripts.forecast_admin rollback
+```
+
+Use `--database <path>` before the subcommand to override `JUGGLUCO_DATABASE_PATH`. `export`
+uses SQLite's online backup API, removes unrelated chat/forecast-audit tables and transcript
+text, then writes a minimized `training-snapshot.sqlite`, ordered glucose/intake CSVs, and a
+SHA-256 manifest below ignored `backend/data/exports/`. The export directory is mode 0700 and
+its files are mode 0600 on POSIX systems. The command prints only paths and aggregate counts,
+never raw glucose or meal values. Add `--output <new-directory>` to select a different
+destination. `train` accepts optional `--data-cutoff-ms` and
+`--candidate-version`. `activate` pins an existing version; `rollback [version]` pins either
+the prior version or an explicitly named existing version. `GET /v1/forecast/status` reports
+`training.mode=manual`, `automatic_enabled=false`, whether data changed, data coverage,
+30/60/120-minute errors, interval coverage, and rolling 7/30-day error.
 
 This remains an experimental conditional visualization. It does not calculate a dose and
 assumes no unrecorded food, insulin, exercise, illness, or sensor error.
@@ -454,8 +456,8 @@ must expand the cluster back to the individual event list and delete only by eve
 Deletion is authenticated, idempotent, and returns the same tombstone on retries; an unknown
 UUID returns `404` with `intake event not found`. It never erases the linked meal-chat or
 analysis audit data. The delete revision forces a fresh immutable current forecast without
-the event and marks historical event data dirty for a later completed-sync training attempt;
-deletion itself does not train a model or invoke any dosing behavior.
+the event and marks the static artifact as having newer source data. Deletion itself does not
+train or calibrate a model and never invokes any dosing behavior.
 
 ## Tests
 

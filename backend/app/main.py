@@ -11,7 +11,6 @@ from uuid import UUID, uuid4
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     FastAPI,
     File,
@@ -25,7 +24,6 @@ from fastapi import (
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import ValidationError
 from sqlalchemy import func, select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -35,7 +33,6 @@ from .forecast import ForecastService
 from .media import MediaValidationError, prepare_audio, prepare_image
 from .models import (
     AnalysisRecord,
-    ForecastMaintenanceRecord,
     IntakeEventRecord,
     MealChatMessageRecord,
     MealChatSessionRecord,
@@ -54,7 +51,6 @@ from .schemas import (
     AnalysisResponse,
     ForecastCurrentResponse,
     ForecastStatusResponse,
-    ForecastTrainResponse,
     GlucoseReadingsCreate,
     GlucoseReadingsResponse,
     HealthResponse,
@@ -289,20 +285,6 @@ def _soft_delete_intake_record(
     session.flush()
     record.sync_version = change.id
 
-    dirty_insert = sqlite_insert(ForecastMaintenanceRecord).values(
-        key="training_dirty_since", value_ms=record.occurred_at_ms
-    )
-    session.execute(
-        dirty_insert.on_conflict_do_update(
-            index_elements=[ForecastMaintenanceRecord.key],
-            set_={
-                "value_ms": func.min(
-                    ForecastMaintenanceRecord.value_ms,
-                    dirty_insert.excluded.value_ms,
-                )
-            },
-        )
-    )
     session.commit()
     return record, True
 
@@ -393,23 +375,6 @@ def _store_intake(
         session.add(change)
         session.flush()
         record.sync_version = change.id
-        # A newly confirmed historical event changes the causal training replay.
-        # Preserve the earliest dirty boundary and let the next completed history
-        # sync run the same bounded champion candidate path as CGM corrections.
-        dirty_insert = sqlite_insert(ForecastMaintenanceRecord).values(
-            key="training_dirty_since", value_ms=record.occurred_at_ms
-        )
-        session.execute(
-            dirty_insert.on_conflict_do_update(
-                index_elements=[ForecastMaintenanceRecord.key],
-                set_={
-                    "value_ms": func.min(
-                        ForecastMaintenanceRecord.value_ms,
-                        dirty_insert.excluded.value_ms,
-                    )
-                },
-            )
-        )
         session.commit()
     except IntegrityError as error:
         session.rollback()
@@ -579,7 +544,6 @@ def create_app(
     def ingest_glucose_readings(
         payload: GlucoseReadingsCreate,
         request: Request,
-        background_tasks: BackgroundTasks,
         session: SessionDependency,
     ) -> GlucoseReadingsResponse:
         try:
@@ -588,15 +552,6 @@ def create_app(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail=str(error)
             ) from error
-        if request.app.state.forecast_service.should_schedule_training(payload):
-            active_database = request.app.state.database
-            active_service = request.app.state.forecast_service
-
-            def run_training_after_response() -> None:
-                with active_database.session_factory() as training_session:
-                    active_service.maybe_train(training_session)
-
-            background_tasks.add_task(run_training_after_response)
         return result
 
     @router.get("/forecast/current", response_model=ForecastCurrentResponse)
@@ -612,13 +567,6 @@ def create_app(
         session: SessionDependency,
     ) -> ForecastStatusResponse:
         return request.app.state.forecast_service.status(session)
-
-    @router.post("/forecast/train", response_model=ForecastTrainResponse)
-    def train_forecast(
-        request: Request,
-        session: SessionDependency,
-    ) -> ForecastTrainResponse:
-        return request.app.state.forecast_service.train(session)
 
     @router.post("/transcriptions", response_model=TranscriptionResponse)
     async def transcribe_audio(
@@ -1333,20 +1281,6 @@ def create_app(
         session.add(change)
         session.flush()
         record.sync_version = change.id
-        dirty_insert = sqlite_insert(ForecastMaintenanceRecord).values(
-            key="training_dirty_since", value_ms=record.occurred_at_ms
-        )
-        session.execute(
-            dirty_insert.on_conflict_do_update(
-                index_elements=[ForecastMaintenanceRecord.key],
-                set_={
-                    "value_ms": func.min(
-                        ForecastMaintenanceRecord.value_ms,
-                        dirty_insert.excluded.value_ms,
-                    )
-                },
-            )
-        )
         session.commit()
         try:
             request.app.state.forecast_service.current(session)

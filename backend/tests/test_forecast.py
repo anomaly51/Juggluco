@@ -9,10 +9,9 @@ from uuid import uuid4
 import pytest
 
 from app.forecast import (
+    ACTIVE_MODEL_METADATA_KEY,
     BASELINE_VERSION,
     FORECAST_ENGINE_VERSION,
-    PERSONAL_ARCHITECTURE,
-    V3_FEATURE_SCHEMA,
     ForecastService,
     _Event,
     _default_parameters,
@@ -22,6 +21,7 @@ from app.forecast import (
 from app.main import create_app
 from app.models import (
     AnalysisRecord,
+    BackendMetadataRecord,
     ForecastMaintenanceRecord,
     ForecastCalibrationRecord,
     ForecastModelRecord,
@@ -555,8 +555,6 @@ def test_soft_delete_removes_event_and_regenerates_current_forecast(
     assert without_event["points"] != with_event["points"]
     with app.state.database.session_factory() as session:
         assert session.scalar(select(func.count(ForecastRunRecord.id))) == run_count_before + 1
-        dirty = session.get(ForecastMaintenanceRecord, "training_dirty_since")
-        assert dirty is not None and dirty.value_ms <= anchor
         assert session.scalar(
             select(func.count(ForecastModelRecord.version)).where(
                 ForecastModelRecord.trained_at_ms.is_not(None)
@@ -803,7 +801,7 @@ def test_twenty_four_one_minute_rows_are_not_mistaken_for_two_hours(
     assert forecast["confidence"] < 0.4
 
 
-def test_one_minute_cgm_produces_training_windows_and_auto_attempt(
+def test_one_minute_cgm_produces_windows_without_automatic_training(
     app, client, auth_headers
 ):
     anchor = int(time.time() * 1_000) - 1_000
@@ -825,12 +823,19 @@ def test_one_minute_cgm_produces_training_windows_and_auto_attempt(
     assert response.status_code == 200
     status = client.get("/v1/forecast/status", headers=auth_headers).json()
     # About 11 hours is enough to construct causal windows, but intentionally not
-    # enough evidence to personalize or claim readiness.
+    # enough evidence for a manual static build. Ingest never creates an attempt.
     assert status["training"]["last_trained_at_ms"] is None
+    assert status["training"]["mode"] == "manual"
+    assert status["training"]["automatic_enabled"] is False
     assert status["capabilities"]["personal_model_active"] is False
     with app.state.database.session_factory() as session:
         rows = app.state.forecast_service._load_readings(session)
         assert len(app.state.forecast_service._training_windows(rows)) >= 88
+        assert session.scalar(
+            select(func.count(ForecastModelRecord.version)).where(
+                ForecastModelRecord.trained_at_ms.is_not(None)
+            )
+        ) == 0
 
 
 def test_forecasts_are_scored_only_after_actual_reading_arrives(client, auth_headers):
@@ -856,7 +861,7 @@ def test_forecasts_are_scored_only_after_actual_reading_arrives(client, auth_hea
     assert accuracy["mae_30d_mg_dl"] is not None
 
 
-def test_training_is_bounded_and_returns_candidate_decision(
+def test_mobile_training_route_is_absent_even_with_sufficient_history(
     app, client, auth_headers
 ):
     anchor = int(time.time() * 1_000) - 1_000
@@ -875,41 +880,18 @@ def test_training_is_bounded_and_returns_candidate_decision(
     }
     ingested = client.post("/v1/glucose/readings", headers=auth_headers, json=payload)
     assert ingested.status_code == 200
+    assert "/v1/forecast/train" not in {route.path for route in client.app.routes}
     trained = client.post("/v1/forecast/train", headers=auth_headers)
-    assert trained.status_code == 200
-    result = trained.json()
-    assert result["status"] in {"promoted", "rejected"}
-    assert result["sample_count"] >= 72
-    assert result["metrics"]["validation_windows"] >= 16
-    assert result["metrics"]["embargo_windows"] == 24
-    assert (
-        result["metrics"]["final_training_target_ms"]
-        < result["metrics"]["first_validation_anchor_ms"]
-    )
-    assert result["metrics"]["candidate_mae"] >= 0
+    assert trained.status_code == 404
     with app.state.database.session_factory() as session:
-        attempt = session.scalar(
-            select(ForecastModelRecord)
-            .where(ForecastModelRecord.trained_at_ms.is_not(None))
-            .order_by(ForecastModelRecord.trained_at_ms.desc())
-        )
-        assert attempt is not None
-        assert attempt.architecture == PERSONAL_ARCHITECTURE
-        parameters = json.loads(attempt.parameters_json)
-        assert parameters["feature_schema"] == V3_FEATURE_SCHEMA
-        assert parameters["network"]["kind"] == "contextual_gated_v3"
-        channel_validation = parameters["event_channel_validation"]
-        assert set(channel_validation) == {"meal", "rapid", "long"}
-        assert all(
-            channel_validation[kind]["validated"] is False
-            for kind in channel_validation
-        )
-        assert result["metrics"]["event_meal_validated"] == 0
-        assert result["metrics"]["event_rapid_validated"] == 0
-        assert result["metrics"]["event_long_validated"] == 0
+        assert session.scalar(
+            select(func.count(ForecastModelRecord.version)).where(
+                ForecastModelRecord.trained_at_ms.is_not(None)
+            )
+        ) == 0
     status = client.get("/v1/forecast/status", headers=auth_headers).json()
-    assert status["training"]["last_trained_at_ms"] is not None
-    assert status["status"] == "learning"
+    assert status["training"]["last_trained_at_ms"] is None
+    assert status["training"]["automatic_enabled"] is False
     assert status["capabilities"]["ready_for_display"] is False
 
 
@@ -947,7 +929,7 @@ def test_candidate_gate_rejects_regression_or_non_finite_output():
     assert ForecastService.candidate_is_promotable(champion, champion, finite=False) is False
 
 
-def test_gappy_auto_training_skip_is_throttled_for_24_hours(
+def test_gappy_completed_backfill_never_creates_a_training_attempt(
     app, client, auth_headers
 ):
     anchor = int(time.time() * 1_000) - 1_000
@@ -972,7 +954,7 @@ def test_gappy_auto_training_skip_is_throttled_for_24_hours(
                 ForecastModelRecord.trained_at_ms.is_not(None)
             )
         )
-    assert first_attempts == 1
+    assert first_attempts == 0
 
     response = client.post(
         "/v1/glucose/readings",
@@ -995,7 +977,7 @@ def test_gappy_auto_training_skip_is_throttled_for_24_hours(
                 ForecastModelRecord.trained_at_ms.is_not(None)
             )
         )
-    assert second_attempts == first_attempts
+    assert second_attempts == first_attempts == 0
 
 
 def test_unobserved_event_kinds_keep_independent_low_confidence(monkeypatch):
@@ -1127,71 +1109,61 @@ def test_versioned_forecast_tables_upgrade_legacy_preview_database(tmp_path):
     assert {"forecast_scores_v2", "forecast_calibration_v2"}.issubset(tables)
 
 
-def test_online_calibration_and_accuracy_are_scoped_to_model_version(
+def test_live_scoring_updates_accuracy_without_mutating_online_calibration(
     app, client, auth_headers
 ):
     anchor = int(time.time() * 1_000) - 2 * STEP_MS
-    client.post("/v1/glucose/readings", headers=auth_headers, json=reading_batch(anchor))
-    client.post(
+    assert client.post(
+        "/v1/glucose/readings", headers=auth_headers, json=reading_batch(anchor)
+    ).status_code == 200
+    frozen_state = (7.5, 225.0, 17, anchor - 1_000)
+    with app.state.database.session_factory() as session:
+        baseline = session.get(ForecastModelRecord, BASELINE_VERSION)
+        assert baseline is not None
+        session.add(
+            ForecastCalibrationRecord(
+                model_version=BASELINE_VERSION,
+                step_minutes=5,
+                residual_bias_mg_dl=frozen_state[0],
+                residual_variance=frozen_state[1],
+                sample_count=frozen_state[2],
+                updated_at_ms=frozen_state[3],
+            )
+        )
+        session.commit()
+
+    scored = client.post(
         "/v1/glucose/readings",
         headers=auth_headers,
         json={
             "readings": [{
-                "reading_id": "baseline-score-actual",
+                "reading_id": "live-score-actual",
                 "measured_at_ms": anchor + STEP_MS,
                 "glucose_mg_dl": 116,
                 "quality": 1,
             }]
         },
     )
-    personal_version = "personal-test-scope"
+    assert scored.status_code == 200
     with app.state.database.session_factory() as session:
-        baseline = session.get(ForecastModelRecord, BASELINE_VERSION)
-        assert baseline is not None
-        baseline.status = "retired"
-        session.add(
-            ForecastModelRecord(
-                version=personal_version,
-                status="champion",
-                architecture="personalized-hybrid-mlp-direct-24-v2",
-                created_at_ms=anchor,
-                trained_at_ms=anchor,
-                promoted_at_ms=anchor,
-                training_cutoff_ms=anchor,
-                sample_count=100,
-                parameters_json=json.dumps(_default_parameters()),
-                metrics_json=json.dumps({"candidate_coverage_80": 0.8}),
-                decision_reason="test",
-            )
+        calibration = session.get(
+            ForecastCalibrationRecord, (BASELINE_VERSION, 5)
         )
-        session.commit()
-    assert client.get("/v1/forecast/current", headers=auth_headers).status_code == 200
-    client.post(
-        "/v1/glucose/readings",
-        headers=auth_headers,
-        json={
-            "readings": [{
-                "reading_id": "personal-score-actual",
-                "measured_at_ms": anchor + 2 * STEP_MS,
-                "glucose_mg_dl": 117,
-                "quality": 1,
-            }]
-        },
-    )
-    with app.state.database.session_factory() as session:
-        calibration_versions = set(
-            session.scalars(select(ForecastCalibrationRecord.model_version))
-        )
-        assert {BASELINE_VERSION, personal_version}.issubset(calibration_versions)
-        personal_scores = session.scalar(
+        assert calibration is not None
+        assert (
+            calibration.residual_bias_mg_dl,
+            calibration.residual_variance,
+            calibration.sample_count,
+            calibration.updated_at_ms,
+        ) == frozen_state
+        active_scores = session.scalar(
             select(func.count(ForecastScoreRecord.run_id)).where(
-                ForecastScoreRecord.model_version == personal_version
+                ForecastScoreRecord.model_version == BASELINE_VERSION
             )
         )
-        all_scores = session.scalar(select(func.count(ForecastScoreRecord.run_id)))
+        assert active_scores >= 1
     accuracy = client.get("/v1/forecast/status", headers=auth_headers).json()["accuracy"]
-    assert accuracy["scored_points"] == personal_scores
-    assert personal_scores < all_scores
+    assert accuracy["scored_points"] == active_scores
 
 
 def _synthetic_event_readings(
@@ -1321,7 +1293,7 @@ def np_all_greater_equal(left, right) -> bool:
     return all(float(a) + 1e-9 >= float(b) for a, b in zip(left, right))
 
 
-def test_backfill_trains_only_after_explicit_completion_boundary(
+def test_backfill_and_corrections_never_train_automatically(
     app, client, auth_headers
 ):
     anchor = int(time.time() * 1_000) - 1_000
@@ -1355,21 +1327,13 @@ def test_backfill_trains_only_after_explicit_completion_boundary(
     )
     assert complete.status_code == 200
     with app.state.database.session_factory() as session:
-        latest_attempt = session.scalar(
-            select(ForecastModelRecord)
-            .where(ForecastModelRecord.trained_at_ms.is_not(None))
-            .order_by(ForecastModelRecord.trained_at_ms.desc())
-        )
-        assert latest_attempt is not None
-        metrics = json.loads(latest_attempt.metrics_json)
-        assert metrics["first_validation_anchor_ms"] > all_readings[499]["measured_at_ms"]
-        first_attempt_count = session.scalar(
+        assert session.scalar(
             select(func.count(ForecastModelRecord.version)).where(
                 ForecastModelRecord.trained_at_ms.is_not(None)
             )
-        )
+        ) == 0
 
-    # Ordinary completion boundaries obey the 24 h training throttle.
+    # Repeated completion boundaries remain pure ingest acknowledgements.
     assert client.post(
         "/v1/glucose/readings",
         headers=auth_headers,
@@ -1380,10 +1344,9 @@ def test_backfill_trains_only_after_explicit_completion_boundary(
             select(func.count(ForecastModelRecord.version)).where(
                 ForecastModelRecord.trained_at_ms.is_not(None)
             )
-        ) == first_attempt_count
+        ) == 0
 
-    # A canonical correction is materially new evidence and intentionally bypasses
-    # that throttle once; ingest marks only this path dirty.
+    # Canonical corrections are rescored for monitoring but still never train.
     corrected = {
         **all_readings[canonical_index],
         "glucose_mg_dl": all_readings[canonical_index]["glucose_mg_dl"] + 4,
@@ -1398,7 +1361,7 @@ def test_backfill_trains_only_after_explicit_completion_boundary(
             select(func.count(ForecastModelRecord.version)).where(
                 ForecastModelRecord.trained_at_ms.is_not(None)
             )
-        ) == first_attempt_count + 1
+        ) == 0
 
 
 def test_empty_backfill_boundary_validation_and_success(client, auth_headers):
@@ -1449,7 +1412,7 @@ def test_server_instance_id_is_stable_per_database_and_changes_after_recreation(
     assert recreated_id != first_id
 
 
-def test_canonical_cgm_correction_rebuilds_scores_calibration_and_current_run(
+def test_canonical_cgm_correction_rescores_without_mutating_calibration(
     app, client, auth_headers
 ):
     anchor = int(time.time() * 1_000) - 2 * STEP_MS
@@ -1477,6 +1440,18 @@ def test_canonical_cgm_correction_rebuilds_scores_calibration_and_current_run(
         )
         assert score_before is not None
         residual_before = score_before.residual_mg_dl
+        frozen_calibration = (4.25, 196.0, 23, anchor - 12_345)
+        session.add(
+            ForecastCalibrationRecord(
+                model_version=score_before.model_version,
+                step_minutes=score_before.step_minutes,
+                residual_bias_mg_dl=frozen_calibration[0],
+                residual_variance=frozen_calibration[1],
+                sample_count=frozen_calibration[2],
+                updated_at_ms=frozen_calibration[3],
+            )
+        )
+        session.commit()
         anchored_runs_before = list(
             session.scalars(
                 select(ForecastRunRecord).where(
@@ -1510,10 +1485,12 @@ def test_canonical_cgm_correction_rebuilds_scores_calibration_and_current_run(
             (score_after.model_version, score_after.step_minutes),
         )
         assert calibration is not None
-        assert calibration.sample_count == 1
-        assert math.isclose(
-            calibration.residual_bias_mg_dl, score_after.residual_mg_dl, abs_tol=1e-9
-        )
+        assert (
+            calibration.residual_bias_mg_dl,
+            calibration.residual_variance,
+            calibration.sample_count,
+            calibration.updated_at_ms,
+        ) == frozen_calibration
         anchored_runs_after = list(
             session.scalars(
                 select(ForecastRunRecord).where(
@@ -1607,14 +1584,16 @@ def test_legacy_champion_and_colliding_run_are_audit_only(tmp_path):
         with application.state.database.session_factory() as session:
             legacy = session.get(ForecastModelRecord, legacy_version)
             baseline = session.get(ForecastModelRecord, BASELINE_VERSION)
-            assert legacy is not None and legacy.status == "retired"
+            assert legacy is not None
             assert baseline is not None
             assert baseline.status == "champion"
-            assert baseline.architecture == "hybrid-trend-event-prior-v2"
+            assert baseline.architecture == "event-aware-persistence-prior-v3"
+            pin = session.get(BackendMetadataRecord, ACTIVE_MODEL_METADATA_KEY)
+            assert pin is not None and pin.value_text == BASELINE_VERSION
             assert session.get(ForecastRunRecord, legacy_run_id) is not None
             assert session.scalar(
                 select(func.count(ForecastRunRecord.id)).where(
                     ForecastRunRecord.model_version == BASELINE_VERSION
                 )
             ) == 1
-    assert FORECAST_ENGINE_VERSION == "forecast-engine-v4"
+    assert FORECAST_ENGINE_VERSION == "forecast-engine-v5-static"

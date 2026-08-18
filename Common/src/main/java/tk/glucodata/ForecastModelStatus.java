@@ -8,6 +8,9 @@ final class ForecastModelStatus {
     final String serverInstanceId;
     final String modelVersion;
     final String trainingState;
+    final String trainingMode;
+    final Boolean automaticTrainingEnabled;
+    final Boolean dataChangedSinceTraining;
     final long lastTrainedAtMs;
     final long nextEligibleAtMs;
     final long sampleCount;
@@ -50,7 +53,10 @@ final class ForecastModelStatus {
 
     private ForecastModelStatus(String status, String serverInstanceId,
             String modelVersion,
-            String trainingState, long lastTrainedAtMs, long nextEligibleAtMs,
+            String trainingState, String trainingMode,
+            Boolean automaticTrainingEnabled,
+            Boolean dataChangedSinceTraining, long lastTrainedAtMs,
+            long nextEligibleAtMs,
             long sampleCount, long minimumSamples, long readingCount,
             double daysCovered, long confirmedMeals, long rapidEvents,
             long longEvents, long lastReadingAtMs, long scoredPoints,
@@ -61,6 +67,9 @@ final class ForecastModelStatus {
         this.serverInstanceId = clean(serverInstanceId);
         this.modelVersion = clean(modelVersion);
         this.trainingState = clean(trainingState);
+        this.trainingMode = clean(trainingMode);
+        this.automaticTrainingEnabled = automaticTrainingEnabled;
+        this.dataChangedSinceTraining = dataChangedSinceTraining;
         this.lastTrainedAtMs = lastTrainedAtMs;
         this.nextEligibleAtMs = nextEligibleAtMs;
         this.sampleCount = sampleCount;
@@ -93,10 +102,25 @@ final class ForecastModelStatus {
         JSONObject accuracy = object(root, "accuracy");
         AccuracyWindow seven = accuracyWindow(root.optJSONObject("accuracy_7d"));
         AccuracyWindow thirty = accuracyWindow(root.optJSONObject("accuracy_30d"));
+        Boolean automaticTrainingEnabled = optionalBoolean(training,
+                "automatic_enabled");
+        if (automaticTrainingEnabled == null) {
+            automaticTrainingEnabled = optionalBoolean(root,
+                    "automatic_enabled");
+        }
+        Boolean dataChangedSinceTraining = optionalBoolean(training,
+                "data_changed_since_training");
+        if (dataChangedSinceTraining == null) {
+            dataChangedSinceTraining = optionalBoolean(root,
+                    "data_changed_since_training");
+        }
         return new ForecastModelStatus(root.optString("status", "unknown"),
                 root.optString("server_instance_id", ""),
                 root.optString("model_version", ""),
                 training.optString("state", root.optString("training_state", "")),
+                training.optString("mode",
+                        root.optString("training_mode", "")),
+                automaticTrainingEnabled, dataChangedSinceTraining,
                 training.optLong("last_trained_at_ms",
                         root.optLong("last_trained_at_ms", 0L)),
                 training.optLong("next_eligible_at_ms", 0L),
@@ -140,6 +164,14 @@ final class ForecastModelStatus {
         if (value == null || !value.has(name) || value.isNull(name)) return null;
         double number = value.optDouble(name, Double.NaN);
         return finite(number) ? number : null;
+    }
+
+    private static Boolean optionalBoolean(JSONObject value, String name) {
+        if (value == null || !value.has(name) || value.isNull(name)) {
+            return null;
+        }
+        Object raw = value.opt(name);
+        return raw instanceof Boolean ? (Boolean) raw : null;
     }
 
     private static double finiteDouble(JSONObject value, String name,

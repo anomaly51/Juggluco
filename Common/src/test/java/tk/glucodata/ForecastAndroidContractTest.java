@@ -514,7 +514,10 @@ public class ForecastAndroidContractTest {
                         .put("server_instance_id", "server-test-id")
                         .put("future_field", true)
                         .put("training", new JSONObject()
-                                .put("state", "idle")
+                                .put("state", "frozen")
+                                .put("mode", "manual")
+                                .put("automatic_enabled", false)
+                                .put("data_changed_since_training", true)
                                 .put("sample_count", 90)
                                 .put("minimum_samples", 120))
                         .put("data", new JSONObject()
@@ -528,12 +531,39 @@ public class ForecastAndroidContractTest {
 
         assertEquals("learning", status.status);
         assertEquals("server-test-id", status.serverInstanceId);
+        assertEquals("frozen", status.trainingState);
+        assertEquals("manual", status.trainingMode);
+        assertEquals(Boolean.FALSE, status.automaticTrainingEnabled);
+        assertEquals(Boolean.TRUE, status.dataChangedSinceTraining);
         assertEquals(90L, status.sampleCount);
         assertEquals(555L, status.readingCount);
         assertEquals(4.5, status.daysCovered, 0d);
         assertEquals(12.25, status.mae30, 0d);
         assertEquals(18.5, status.mae7d, 0d);
         assertEquals(20.75, status.mae30d, 0d);
+    }
+
+    @Test
+    public void statusParserKeepsLegacyTrainingPayloadCompatible()
+            throws Exception {
+        ForecastModelStatus status = ForecastModelStatus.fromJson(
+                new JSONObject().put("training_state", "trained")
+                        .put("last_trained_at_ms", 1234L));
+
+        assertEquals("trained", status.trainingState);
+        assertEquals("", status.trainingMode);
+        assertEquals(null, status.automaticTrainingEnabled);
+        assertEquals(null, status.dataChangedSinceTraining);
+        assertEquals(1234L, status.lastTrainedAtMs);
+    }
+
+    @Test
+    public void forecastDetailsHasNoMobileTrainingControl() throws Exception {
+        String details = source("ForecastDetailsPage.java");
+
+        assertFalse(details.contains("/v1/forecast/train"));
+        assertFalse(details.contains("repository.train"));
+        assertFalse(details.contains("api.train"));
     }
 
     @Test
