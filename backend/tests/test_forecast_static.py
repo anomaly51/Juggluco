@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 
+import numpy as np
 import pytest
 
 from app.forecast import (
@@ -14,16 +15,29 @@ from app.forecast import (
     STATIC_FEATURE_SCHEMA,
     STATIC_HIDDEN_SIZE,
     STATIC_INTERVAL_LEVEL,
+    STATIC_LOW_GUARD_MG_DL,
     STATIC_NETWORK_KIND,
     STATIC_PERSONAL_ARCHITECTURE,
     STATIC_PROMOTION_GATE_VERSION,
     STATIC_TRAINING_MODE,
     ForecastService,
+    _Event,
     _artifact_content_hash,
+    _baseline_parameters,
+    _dataset_fingerprint,
     _default_parameters,
+    _finite_sample_quantile_level,
+    _model_parameters_hash,
     _static_artifact_is_valid,
+    _static_predictor_hash,
+    _static_reliability,
 )
-from app.models import BackendMetadataRecord, ForecastModelRecord
+from app.models import (
+    BackendMetadataRecord,
+    ForecastModelRecord,
+    GlucoseReadingRecord,
+    IntakeEventRecord,
+)
 
 
 TRAINED_AT_MS = 1_700_000_000_000
@@ -41,6 +55,8 @@ def _promotion_metrics(
     return {
         "mae": mae,
         "rmse": rmse,
+        "mae_5": horizon_mae,
+        "mae_15": horizon_mae,
         "mae_30": horizon_mae,
         "mae_60": horizon_mae,
         "mae_120": horizon_mae,
@@ -50,6 +66,13 @@ def _promotion_metrics(
         "coverage_band_1": 0.80,
         "coverage_band_2": 0.80,
         "coverage_band_3": 0.80,
+        "hypo_low_points": 50.0,
+        "hypo_low_episodes": 6.0,
+        "hypo_low_days": 4.0,
+        "hypo_recall": 0.90,
+        "hypo_fpr": 0.10,
+        "hypo_missed_episodes": 0.0,
+        "low_zone_mae": horizon_mae,
     }
 
 
@@ -88,33 +111,108 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
             {"start_minutes": start, "end_minutes": end, "weight": weight}
         )
     sigma = [20.0] * 24
+    candidate_metrics = _promotion_metrics(
+        mae=18.0, rmse=19.0, horizon_mae=9.0, interval_score=35.0
+    )
+    reference_metrics = _promotion_metrics(
+        mae=20.0, rmse=22.0, horizon_mae=10.0, interval_score=40.0
+    )
+    day_results = [
+        {"candidate_mae": 18.0, "reference_mae": 20.0, "pinned_mae": 20.0}
+        for _ in range(14)
+    ]
+    gates = ForecastService.static_promotion_gates(
+        candidate_metrics,
+        reference_metrics,
+        reference_metrics,
+        day_results,
+        test_day_count=14,
+    )
+    assert gates["accepted"] is True
+    candidate_horizon_mae = [candidate_metrics["mae_5"]] * 24
+    reference_horizon_mae = [reference_metrics["mae_5"]] * 24
+    reliability = _static_reliability(
+        candidate_metrics,
+        reference_metrics,
+        gates,
+        test_days=14,
+        independent_anchors=112,
+        candidate_horizon_mae=candidate_horizon_mae,
+        reference_horizon_mae=reference_horizon_mae,
+    )
     evaluation = {
         "accepted": 1 if accepted else 0,
-        "candidate_equal_day_mae": 18.0,
-        "reference_equal_day_mae": 20.0,
-        "pinned_equal_day_mae": 20.0,
-        "candidate_anchor_mae": 17.5,
-        "reference_anchor_mae": 20.0,
-        "candidate_coverage_80": 0.80,
-        "candidate_interval_score_80": 35.0,
-        "reference_interval_score_80": 40.0,
-        "test_days": 4,
-        "test_independent_anchors": 32,
+        "prospective": 1,
+        "inconclusive": 0,
+        "current_comparator_gate_passed": 1,
+        "candidate_equal_day_mae": gates["candidate_equal_day_mae"],
+        "reference_equal_day_mae": gates["reference_equal_day_mae"],
+        "pinned_equal_day_mae": gates["pinned_equal_day_mae"],
+        "candidate_anchor_mae": candidate_metrics["mae"],
+        "reference_anchor_mae": reference_metrics["mae"],
+        "pinned_anchor_mae": reference_metrics["mae"],
+        "candidate_rmse": candidate_metrics["rmse"],
+        "reference_rmse": reference_metrics["rmse"],
+        "pinned_rmse": reference_metrics["rmse"],
+        "candidate_coverage_80": candidate_metrics["coverage_80"],
+        "candidate_interval_score_80": candidate_metrics["interval_score_80"],
+        "reference_interval_score_80": reference_metrics["interval_score_80"],
+        "pinned_interval_score_80": reference_metrics["interval_score_80"],
+        "candidate_hypo_recall": candidate_metrics["hypo_recall"],
+        "reference_hypo_recall": reference_metrics["hypo_recall"],
+        "pinned_hypo_recall": reference_metrics["hypo_recall"],
+        "candidate_hypo_fpr": candidate_metrics["hypo_fpr"],
+        "reference_hypo_fpr": reference_metrics["hypo_fpr"],
+        "pinned_hypo_fpr": reference_metrics["hypo_fpr"],
+        "candidate_hypo_missed_episodes": candidate_metrics["hypo_missed_episodes"],
+        "reference_hypo_missed_episodes": reference_metrics["hypo_missed_episodes"],
+        "pinned_hypo_missed_episodes": reference_metrics["hypo_missed_episodes"],
+        "candidate_low_zone_mae": candidate_metrics["low_zone_mae"],
+        "reference_low_zone_mae": reference_metrics["low_zone_mae"],
+        "pinned_low_zone_mae": reference_metrics["low_zone_mae"],
+        "hypo_low_points": candidate_metrics["hypo_low_points"],
+        "hypo_low_episodes": candidate_metrics["hypo_low_episodes"],
+        "hypo_low_days": candidate_metrics["hypo_low_days"],
+        "test_days": 14,
+        "test_independent_anchors": 112,
+        "winning_days": gates["winning_days"],
     }
+    for prefix, metrics in (
+        ("candidate", candidate_metrics),
+        ("reference", reference_metrics),
+        ("pinned", reference_metrics),
+    ):
+        for horizon in (5, 15, 30, 60, 120):
+            evaluation[f"{prefix}_mae_{horizon}"] = metrics[f"mae_{horizon}"]
+    for band_index in range(4):
+        evaluation[f"candidate_coverage_band_{band_index}"] = candidate_metrics[
+            f"coverage_band_{band_index}"
+        ]
+    for key, value in gates.items():
+        if key in evaluation or key == "finite":
+            continue
+        evaluation[f"gate_{key}"] = int(value) if isinstance(value, bool) else value
     parameters.update(
         {
             "network": network,
             "persistence_blend_weights": blend,
             "residual_sigma": sigma,
             "frozen_calibration": {
-                "method": "frozen-day-block-conformal-v1",
+                "method": "frozen-uncentered-conformal-v2",
+                "quantile_method": "exact-order-statistic",
+                "point_bias": "disabled",
+                "low_guard_threshold_mg_dl": STATIC_LOW_GUARD_MG_DL,
+                "safety_envelope": "reference-interval-union-v1",
                 "interval_level": STATIC_INTERVAL_LEVEL,
                 "sample_count": 32,
+                "finite_sample_quantile": _finite_sample_quantile_level(32),
+                "finite_sample_rank": 27,
                 "bias_mg_dl": [0.0] * 24,
                 "sigma_mg_dl": sigma,
+                "reference_sigma_mg_dl": [24.0] * 24,
             },
             "artifact": {
-                "artifact_version": 3,
+                "artifact_version": 4,
                 "engine_version": FORECAST_ENGINE_VERSION,
                 "architecture": STATIC_PERSONAL_ARCHITECTURE,
                 "feature_schema": STATIC_FEATURE_SCHEMA,
@@ -140,14 +238,33 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
                     "test_independent_anchors": 32,
                 },
                 "evaluation": evaluation,
-                "reliability": {
-                    "overall": 0.35,
-                    "by_horizon": [0.35] * 24,
-                    "clinical_validation": False,
-                },
+                "reliability": reliability,
             },
         }
     )
+    predictor_hash = _static_predictor_hash(parameters)
+    parameters["artifact"]["predictor_sha256"] = predictor_hash
+    parameters["artifact"]["approval"] = {
+        "state": "approved_prospective" if accepted else "rejected_prospective",
+        "protocol": "frozen-future-local-days-v1",
+        "minimum_new_days": 14,
+        "strictly_after_ms": DATA_CUTOFF_MS,
+        "dense_days": 14,
+        "independent_anchors": 112,
+        "cohort_start_ms": DATA_CUTOFF_MS + 86_400_000,
+        "cohort_end_ms": DATA_CUTOFF_MS + 15 * 86_400_000,
+        "predictor_sha256": predictor_hash,
+        "pinned_comparator_version": BASELINE_VERSION,
+        "pinned_comparator_sha256": _model_parameters_hash(_baseline_parameters()),
+        "candidate_metrics": candidate_metrics,
+        "reference_metrics": reference_metrics,
+        "pinned_metrics": reference_metrics,
+        "current_metrics": reference_metrics,
+        "candidate_horizon_mae": candidate_horizon_mae,
+        "reference_horizon_mae": reference_horizon_mae,
+        "pinned_day_results": day_results,
+        "current_day_results": day_results,
+    }
     parameters["artifact"]["content_sha256"] = _artifact_content_hash(parameters)
     return parameters
 
@@ -167,6 +284,88 @@ def _static_record(version: str, *, accepted: bool = True) -> ForecastModelRecor
         metrics_json=json.dumps(parameters["artifact"]["evaluation"], separators=(",", ":")),
         decision_reason="static contract fixture",
     )
+
+
+def _add_pending_prospective_fixture(
+    session, service: ForecastService, version: str
+) -> tuple[str, int, int, int]:
+    step_ms = 5 * 60_000
+    day_ms = 86_400_000
+    base_ms = 1_700_006_400_000  # UTC midnight.
+    cutoff_ms = base_ms + day_ms - step_ms
+    freeze_time_ms = cutoff_ms + 10_000
+    readings: list[GlucoseReadingRecord] = []
+    for index in range(15 * 24 * 12):
+        measured_at_ms = base_ms + index * step_ms
+        readings.append(
+            GlucoseReadingRecord(
+                reading_id=f"{version}-reading-{index}",
+                measured_at_ms=measured_at_ms,
+                glucose_mg_dl=120.0,
+                trend_mg_dl_min=0.0,
+                sensor_id="test",
+                sensor_generation="test",
+                quality=1.0,
+                utc_offset_minutes=0,
+                payload_hash=f"{index:064x}"[-64:],
+                received_at_ms=(
+                    measured_at_ms + 1_000
+                    if measured_at_ms <= cutoff_ms
+                    else freeze_time_ms + (measured_at_ms - cutoff_ms) + 1_000
+                ),
+            )
+        )
+    training_readings = [
+        row for row in readings if row.measured_at_ms <= cutoff_ms
+    ]
+    service._ensure_baseline(session)
+    baseline = session.get(ForecastModelRecord, BASELINE_VERSION)
+    assert baseline is not None
+    parameters = _static_parameters(version)
+    artifact = parameters["artifact"]
+    artifact["accepted"] = False
+    artifact["trained_at_ms"] = freeze_time_ms
+    artifact["data_cutoff_ms"] = cutoff_ms
+    artifact["dataset_sha256"] = _dataset_fingerprint(training_readings, [])
+    artifact["snapshot"] = {
+        "last_reading_at_ms": cutoff_ms,
+        "max_received_at_ms": cutoff_ms + 1_000,
+        "event_revision": 0,
+        "active_event_count": 0,
+    }
+    artifact["evaluation"]["accepted"] = 0
+    artifact["evaluation"]["prospective_pending"] = 1
+    artifact["approval"] = {
+        "state": "pending_prospective",
+        "protocol": "frozen-future-local-days-v1",
+        "minimum_new_days": 14,
+        "strictly_after_ms": cutoff_ms,
+        "freeze_time_ms": freeze_time_ms,
+        "source_max_received_at_ms": cutoff_ms + 1_000,
+        "pinned_comparator_version": BASELINE_VERSION,
+        "pinned_comparator_sha256": _model_parameters_hash(
+            json.loads(baseline.parameters_json)
+        ),
+        "predictor_sha256": artifact["predictor_sha256"],
+    }
+    artifact["content_sha256"] = _artifact_content_hash(parameters)
+    predictor_hash = _static_predictor_hash(parameters)
+    pending = ForecastModelRecord(
+        version=version,
+        status="pending",
+        architecture=STATIC_PERSONAL_ARCHITECTURE,
+        created_at_ms=freeze_time_ms,
+        trained_at_ms=freeze_time_ms,
+        promoted_at_ms=None,
+        training_cutoff_ms=cutoff_ms,
+        sample_count=SAMPLE_COUNT,
+        parameters_json=json.dumps(parameters, separators=(",", ":")),
+        metrics_json=json.dumps(artifact["evaluation"], separators=(",", ":")),
+        decision_reason="pending prospective fixture",
+    )
+    session.add_all([*readings, pending])
+    session.commit()
+    return predictor_hash, cutoff_ms, freeze_time_ms, readings[-1].measured_at_ms
 
 
 def test_day_block_gate_rejects_aggregate_win_concentrated_in_one_of_four_days():
@@ -247,6 +446,464 @@ def test_activation_requires_approved_checksummed_static_artifact(app, client):
         assert activated.version == approved_version
         pin = session.get(BackendMetadataRecord, ACTIVE_MODEL_METADATA_KEY)
         assert pin is not None and pin.value_text == approved_version
+
+
+def test_pending_and_development_artifacts_cannot_activate(app, client):
+    del client
+    service = app.state.forecast_service
+    pending = _static_record("static-pending")
+    pending_parameters = json.loads(pending.parameters_json)
+    pending_parameters["artifact"]["accepted"] = False
+    pending_parameters["artifact"]["evaluation"]["accepted"] = 0
+    pending_parameters["artifact"]["evaluation"]["prospective_pending"] = 1
+    pending_parameters["artifact"]["approval"]["state"] = "pending_prospective"
+    pending_parameters["artifact"]["content_sha256"] = _artifact_content_hash(
+        pending_parameters
+    )
+    pending.parameters_json = json.dumps(pending_parameters, separators=(",", ":"))
+    pending.metrics_json = json.dumps(
+        pending_parameters["artifact"]["evaluation"], separators=(",", ":")
+    )
+    pending.status = "pending"
+
+    development = _static_record("static-development")
+    development_parameters = json.loads(development.parameters_json)
+    development_parameters["artifact"].pop("approval")
+    development_parameters["artifact"]["content_sha256"] = _artifact_content_hash(
+        development_parameters
+    )
+    development.parameters_json = json.dumps(
+        development_parameters, separators=(",", ":")
+    )
+
+    assert _static_artifact_is_valid(
+        pending_parameters, require_approved=False
+    ) is True
+    assert _static_artifact_is_valid(pending_parameters) is False
+    assert _static_artifact_is_valid(development_parameters) is False
+
+    with app.state.database.session_factory() as session:
+        service._ensure_baseline(session)
+        session.add_all([pending, development])
+        session.commit()
+        for version in (pending.version, development.version):
+            with pytest.raises(ValueError, match="approved, checksummed static model"):
+                service.activate_model(session, version)
+
+
+def test_validator_recomputes_safety_gates_and_exact_reliability_cap():
+    valid = _static_parameters("static-recomputed-gates")
+    assert _static_artifact_is_valid(valid) is True
+
+    tampered_hypo = copy.deepcopy(valid)
+    tampered_hypo["artifact"]["evaluation"]["candidate_hypo_recall"] = 0.01
+    tampered_hypo["artifact"]["content_sha256"] = _artifact_content_hash(
+        tampered_hypo
+    )
+    assert _static_artifact_is_valid(tampered_hypo) is False
+
+    tampered_gate = copy.deepcopy(valid)
+    tampered_gate["artifact"]["evaluation"]["gate_interval_score_safe"] = 0
+    tampered_gate["artifact"]["content_sha256"] = _artifact_content_hash(
+        tampered_gate
+    )
+    assert _static_artifact_is_valid(tampered_gate) is False
+
+    tampered_cap = copy.deepcopy(valid)
+    tampered_cap["artifact"]["reliability"]["test_day_cap"] = 0.35
+    tampered_cap["artifact"]["content_sha256"] = _artifact_content_hash(
+        tampered_cap
+    )
+    assert _static_artifact_is_valid(tampered_cap) is False
+
+    tampered_reliability = copy.deepcopy(valid)
+    tampered_reliability["artifact"]["reliability"]["overall"] += 0.01
+    tampered_reliability["artifact"]["content_sha256"] = _artifact_content_hash(
+        tampered_reliability
+    )
+    assert _static_artifact_is_valid(tampered_reliability) is False
+
+    tampered_audit = copy.deepcopy(valid)
+    tampered_audit["artifact"]["evaluation"]["hypo_low_points"] += 1.0
+    tampered_audit["artifact"]["content_sha256"] = _artifact_content_hash(
+        tampered_audit
+    )
+    assert _static_artifact_is_valid(tampered_audit) is False
+
+
+def test_prospective_cohort_is_the_earliest_fixed_fourteen_whole_days():
+    day_ms = 86_400_000
+    base_ms = 1_700_006_400_000  # UTC midnight.
+    readings: list[GlucoseReadingRecord] = []
+    for index in range(18 * 24 * 12):
+        measured_at_ms = base_ms + index * 300_000
+        readings.append(
+            GlucoseReadingRecord(
+                reading_id=f"r-{index}",
+                measured_at_ms=measured_at_ms,
+                glucose_mg_dl=120.0,
+                trend_mg_dl_min=0.0,
+                sensor_id="test",
+                sensor_generation="test",
+                quality=1.0,
+                utc_offset_minutes=0,
+                payload_hash=f"{index:064x}"[-64:],
+                received_at_ms=measured_at_ms + 1_000,
+            )
+        )
+    windows = [
+        (index, np.full(24, 120.0))
+        for index in range(len(readings) - 24)
+    ]
+    cutoff_ms = base_ms + 2 * day_ms - 300_000
+
+    selected, manifest = ForecastService._prospective_dense_windows(
+        readings, windows, strictly_after_ms=cutoff_ms
+    )
+
+    selected_days = {
+        ForecastService._window_local_day(readings, window) for window in selected
+    }
+    assert manifest["available_dense_days"] == 16
+    assert manifest["dense_days"] == 14
+    assert len(selected_days) == 14
+    assert min(selected_days) == (base_ms // day_ms) + 2
+    assert max(selected_days) == (base_ms // day_ms) + 15
+    assert all(readings[window[0]].measured_at_ms > cutoff_ms for window in selected)
+
+
+def test_prospective_causal_windows_reject_bulk_uploaded_future_labels():
+    base_ms = 1_700_006_400_000
+
+    def rows(*, bulk: bool) -> list[GlucoseReadingRecord]:
+        result: list[GlucoseReadingRecord] = []
+        for index in range(8 * 12):
+            measured_at_ms = base_ms + index * 300_000
+            result.append(
+                GlucoseReadingRecord(
+                    reading_id=f"{'b' if bulk else 'n'}-{index}",
+                    measured_at_ms=measured_at_ms,
+                    glucose_mg_dl=120.0,
+                    trend_mg_dl_min=0.0,
+                    sensor_id="test",
+                    sensor_generation="test",
+                    quality=1.0,
+                    utc_offset_minutes=0,
+                    payload_hash=f"{index:064x}"[-64:],
+                    received_at_ms=(
+                        base_ms + 9 * 3_600_000
+                        if bulk
+                        else measured_at_ms + 1_000
+                    ),
+                )
+            )
+        return result
+
+    causal, causal_manifest = ForecastService._prospective_causal_windows(
+        rows(bulk=False)
+    )
+    bulk, bulk_manifest = ForecastService._prospective_causal_windows(rows(bulk=True))
+
+    assert causal
+    assert causal_manifest["causal_target_rejections"] == 0
+    assert bulk == []
+    assert bulk_manifest["causal_target_rejections"] > 0
+
+
+def test_prospective_causal_windows_reject_sequential_stale_backfill():
+    base_ms = 1_700_006_400_000
+    readings: list[GlucoseReadingRecord] = []
+    for index in range(9 * 12):
+        measured_at_ms = base_ms + index * 300_000
+        readings.append(
+            GlucoseReadingRecord(
+                reading_id=f"backfill-{index}",
+                measured_at_ms=measured_at_ms,
+                glucose_mg_dl=120.0,
+                trend_mg_dl_min=0.0,
+                sensor_id="test",
+                sensor_generation="test",
+                quality=1.0,
+                utc_offset_minutes=0,
+                payload_hash=f"{index:064x}"[-64:],
+                # Receipt order is causal, but every historical anchor would
+                # have been stale under the live forecasting contract.
+                received_at_ms=measured_at_ms + 60 * 60_000,
+            )
+        )
+
+    windows, manifest = ForecastService._prospective_causal_windows(readings)
+
+    assert windows == []
+    assert manifest["causal_stale_anchor_rejections"] > 0
+
+
+def test_non_hypo_gate_distinguishes_inconclusive_from_bad_point_model():
+    candidate = _promotion_metrics(
+        mae=18.0, rmse=19.0, horizon_mae=9.0, interval_score=35.0
+    )
+    reference = _promotion_metrics(
+        mae=20.0, rmse=22.0, horizon_mae=10.0, interval_score=40.0
+    )
+    no_hypo_candidate = {
+        **candidate,
+        "hypo_low_points": 0.0,
+        "hypo_low_episodes": 0.0,
+        "hypo_low_days": 0.0,
+        "hypo_recall": None,
+        "low_zone_mae": None,
+    }
+    day_results = [
+        {"candidate_mae": 18.0, "reference_mae": 20.0, "pinned_mae": 20.0}
+        for _ in range(14)
+    ]
+
+    safe_without_hypo = ForecastService._non_hypo_promotion_gates(
+        no_hypo_candidate,
+        reference,
+        reference,
+        day_results,
+        test_day_count=14,
+    )
+    bad_without_hypo = ForecastService._non_hypo_promotion_gates(
+        {**no_hypo_candidate, "mae": 25.0, "rmse": 25.0},
+        reference,
+        reference,
+        [
+            {
+                "candidate_mae": 25.0,
+                "reference_mae": 20.0,
+                "pinned_mae": 20.0,
+            }
+            for _ in range(14)
+        ],
+        test_day_count=14,
+    )
+
+    assert safe_without_hypo["accepted"] is True
+    assert bad_without_hypo["accepted"] is False
+
+
+def test_prospective_reference_includes_event_known_between_measurement_and_receipt():
+    anchor_ms = 1_700_006_400_000
+    anchor = GlucoseReadingRecord(
+        reading_id="anchor",
+        measured_at_ms=anchor_ms,
+        glucose_mg_dl=120.0,
+        trend_mg_dl_min=0.0,
+        sensor_id="test",
+        sensor_generation="test",
+        quality=1.0,
+        utc_offset_minutes=0,
+        payload_hash="a" * 64,
+        received_at_ms=anchor_ms + 10 * 60_000,
+    )
+    event = _Event(
+        event_id="00000000-0000-0000-0000-000000000001",
+        occurred_at_ms=anchor_ms + 5 * 60_000,
+        known_at_ms=anchor_ms + 6 * 60_000,
+        kind="meal",
+        label="future-known meal",
+        amount=40.0,
+    )
+    windows = [(0, np.full(24, 120.0))]
+    parameters = _default_parameters()
+
+    legacy = ForecastService._reference_for_windows(
+        [anchor], [event], windows, parameters
+    )
+    prospective = ForecastService._reference_for_windows(
+        [anchor],
+        [event],
+        windows,
+        parameters,
+        decision_times_ms={0: anchor.received_at_ms},
+    )
+
+    np.testing.assert_allclose(legacy, np.full((1, 24), 120.0))
+    assert prospective[0, -1] > legacy[0, -1]
+
+
+def test_prospective_evaluation_finalizes_pending_candidate_once(app, client):
+    del client
+    service = app.state.forecast_service
+    version = "static-prospective-e2e"
+
+    with app.state.database.session_factory() as session:
+        predictor_before, _cutoff, _freeze, _latest = (
+            _add_pending_prospective_fixture(session, service, version)
+        )
+
+        result = service.evaluate_static_candidate(session, version)
+        stored = session.get(ForecastModelRecord, version)
+        assert stored is not None
+        stored_parameters = json.loads(stored.parameters_json)
+
+        assert result.status == "rejected"
+        assert stored.status == "rejected"
+        assert stored_parameters["artifact"]["approval"]["state"] == (
+            "rejected_prospective"
+        )
+        assert stored_parameters["artifact"]["evaluation"]["inconclusive"] == 0
+        assert _static_predictor_hash(stored_parameters) == predictor_before
+        with pytest.raises(ValueError, match="not a pending prospective candidate"):
+            service.evaluate_static_candidate(session, version)
+
+
+@pytest.mark.parametrize("deleted", [False, True], ids=["edited", "deleted"])
+def test_intake_mutation_terminalizes_pending_and_releases_next_freeze(
+    app, client, deleted
+):
+    del client
+    service = app.state.forecast_service
+    version = f"static-mutation-{'delete' if deleted else 'edit'}"
+
+    with app.state.database.session_factory() as session:
+        _predictor, cutoff_ms, _freeze_ms, latest_ms = (
+            _add_pending_prospective_fixture(session, service, version)
+        )
+        pending = session.get(ForecastModelRecord, version)
+        assert pending is not None
+        original_parameters_json = pending.parameters_json
+        occurred_at_ms = cutoff_ms + 60 * 60_000
+        updated_at_ms = occurred_at_ms + 10 * 60_000
+        suffix = "2" if deleted else "1"
+        session.add(
+            IntakeEventRecord(
+                id=f"00000000-0000-0000-0000-00000000000{suffix}",
+                client_event_id=(
+                    f"10000000-0000-0000-0000-00000000000{suffix}"
+                ),
+                occurred_at_ms=occurred_at_ms,
+                meal_text="edited prospective meal",
+                carbs_g=35.0,
+                portion_g=200.0,
+                original_portion_g=250.0,
+                original_carbs_g=44.0,
+                carbs_source="manual",
+                payload_hash=suffix * 64,
+                created_at_ms=occurred_at_ms,
+                updated_at_ms=updated_at_ms,
+                deleted_at_ms=updated_at_ms if deleted else None,
+                sync_version=1,
+            )
+        )
+        session.commit()
+
+        result = service.evaluate_static_candidate(session, version)
+        stored = session.get(ForecastModelRecord, version)
+
+        assert result.status == "rejected"
+        assert result.metrics["permanent_invalidation"] == 1
+        assert stored is not None
+        assert stored.status == "rejected"
+        assert "intake edits/deletions" in (stored.decision_reason or "")
+        assert stored.parameters_json == original_parameters_json
+        # The terminal record no longer occupies the singleton pending slot;
+        # a newly frozen candidate at the latest reading can register.
+        service._assert_prospective_registration_allowed(
+            session, cutoff_ms=latest_ms
+        )
+
+
+def test_active_comparator_pin_change_aborts_final_decision(
+    app, client, monkeypatch
+):
+    del client
+    service = app.state.forecast_service
+    version = "static-active-pin-race"
+
+    with app.state.database.session_factory() as session:
+        _add_pending_prospective_fixture(session, service, version)
+        replacement = _static_record("static-race-replacement")
+        session.add(replacement)
+        session.commit()
+        original_metrics = ForecastService._metrics
+        changed = False
+
+        def metrics_with_pin_change(prediction, target):
+            nonlocal changed
+            if not changed:
+                pin = session.get(
+                    BackendMetadataRecord, ACTIVE_MODEL_METADATA_KEY
+                )
+                assert pin is not None
+                pin.value_text = replacement.version
+                session.commit()
+                changed = True
+            return original_metrics(prediction, target)
+
+        monkeypatch.setattr(service, "_metrics", metrics_with_pin_change)
+
+        result = service.evaluate_static_candidate(session, version)
+        stored = session.get(ForecastModelRecord, version)
+
+        assert changed is True
+        assert result.status == "skipped"
+        assert result.metrics["active_comparator_changed"] == 1
+        assert stored is not None and stored.status == "pending"
+
+
+def test_active_comparator_pin_change_aborts_training_freeze(
+    app, client, monkeypatch
+):
+    del client
+    import app.forecast as forecast_module
+
+    service = app.state.forecast_service
+    version = "static-training-pin-race"
+    replacement = _static_record("static-training-race-replacement")
+    base_ms = 1_700_006_400_000  # UTC midnight.
+    step_ms = 5 * 60_000
+
+    with app.state.database.session_factory() as session:
+        service._ensure_baseline(session)
+        session.add(replacement)
+        session.add_all(
+            [
+                GlucoseReadingRecord(
+                    reading_id=f"training-race-{index}",
+                    measured_at_ms=base_ms + index * step_ms,
+                    glucose_mg_dl=120.0,
+                    trend_mg_dl_min=0.0,
+                    sensor_id="test",
+                    sensor_generation="test",
+                    quality=1.0,
+                    utc_offset_minutes=0,
+                    payload_hash=f"{index:064x}"[-64:],
+                    received_at_ms=base_ms + index * step_ms + 1_000,
+                )
+                for index in range(17 * 24 * 12)
+            ]
+        )
+        session.commit()
+
+        original_fit = forecast_module._fit_network
+        changed = False
+
+        def fit_with_pin_change(features, residual):
+            nonlocal changed
+            fitted = original_fit(features, residual)
+            if not changed:
+                pin = session.get(
+                    BackendMetadataRecord, ACTIVE_MODEL_METADATA_KEY
+                )
+                assert pin is not None
+                pin.value_text = replacement.version
+                session.commit()
+                changed = True
+            return fitted
+
+        monkeypatch.setattr(forecast_module, "_fit_network", fit_with_pin_change)
+
+        result = service.train_static_model(
+            session, candidate_version=version, stage_pending=True
+        )
+
+        assert changed is True
+        assert result.status == "skipped"
+        assert result.metrics["active_comparator_changed"] == 1
+        assert session.get(ForecastModelRecord, version) is None
 
 
 def test_non_finite_artifact_fails_closed_without_raising(app, client):

@@ -12,7 +12,7 @@ from typing import Any, Sequence
 from uuid import UUID, uuid4
 
 import numpy as np
-from sqlalchemy import Integer, and_, cast, delete, func, select, text
+from sqlalchemy import Integer, and_, cast, delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -68,24 +68,29 @@ V3_FEATURE_SCHEMA = "context-sequence-v3"
 V3_NETWORK_KIND = "contextual_gated_v3"
 PERSONAL_ARCHITECTURE = "personalized-contextual-gated-mlp-direct-24-v3"
 LEGACY_PERSONAL_ARCHITECTURE = "personalized-hybrid-mlp-direct-24-v2"
-STATIC_PERSONAL_ARCHITECTURE = "personalized-static-generic-residual-v1"
-FORECAST_ENGINE_VERSION = "forecast-engine-v5-static"
+STATIC_PERSONAL_ARCHITECTURE = "personalized-static-generic-residual-v2"
+FORECAST_ENGINE_VERSION = "forecast-engine-v6-static-safe"
 ACTIVE_MODEL_METADATA_KEY = "active_forecast_model"
 ACTIVATION_HISTORY_METADATA_KEY = "forecast_model_activation_history"
+GLUCOSE_SOURCE_REVISION_METADATA_KEY = "forecast_glucose_source_revision"
 STATIC_TRAINING_MODE = "manual"
 STATIC_INTERVAL_LEVEL = 0.80
+STATIC_INTERVAL_Z = 1.2816
+STATIC_LOW_GUARD_MG_DL = 90.0
 STATIC_TRAINING_SEED = 20_260_805
-STATIC_FEATURE_SCHEMA = "generic-glucose-context-v1"
-STATIC_NETWORK_KIND = "static_generic_tanh_v1"
+STATIC_FEATURE_SCHEMA = "generic-glucose-context-v2"
+STATIC_NETWORK_KIND = "static_generic_tanh_v2"
 STATIC_FEATURE_COUNT = 138
 STATIC_HIDDEN_SIZE = 12
 STATIC_PURGE_MINUTES = HORIZON_MINUTES
 STATIC_PURGE_WINDOWS = STATIC_PURGE_MINUTES // STEP_MINUTES
-STATIC_PROMOTION_GATE_VERSION = "independent-day-block-v2"
+STATIC_PROMOTION_GATE_VERSION = "independent-day-block-hypo-safe-v3"
 STATIC_MIN_TRAIN_DAYS = 8
 STATIC_TUNING_DAYS = 1
 STATIC_CALIBRATION_DAYS = 2
 STATIC_TEST_DAYS = 4
+STATIC_PROSPECTIVE_MIN_DAYS = 14
+STATIC_PROSPECTIVE_PROTOCOL = "frozen-future-local-days-v1"
 STATIC_REQUIRED_DAYS = float(
     STATIC_MIN_TRAIN_DAYS
     + STATIC_TUNING_DAYS
@@ -204,6 +209,16 @@ def _validated_vector(value: Any, *, positive: bool = False) -> np.ndarray | Non
     return result
 
 
+def _finite_sample_quantile_level(
+    sample_count: int, coverage: float = STATIC_INTERVAL_LEVEL
+) -> float:
+    """Conservative split-conformal order statistic for a finite calibration set."""
+
+    if sample_count <= 0:
+        raise ValueError("sample_count must be positive")
+    return min(1.0, math.ceil((sample_count + 1) * coverage) / sample_count)
+
+
 def _apply_static_predictor(
     prediction: np.ndarray,
     reference_prediction: np.ndarray,
@@ -220,21 +235,196 @@ def _apply_static_predictor(
         return prediction, sigma
     bias = _validated_vector(calibration.get("bias_mg_dl"))
     frozen_sigma = _validated_vector(calibration.get("sigma_mg_dl"), positive=True)
-    if bias is None or frozen_sigma is None:
+    reference_sigma = _validated_vector(
+        calibration.get("reference_sigma_mg_dl"), positive=True
+    )
+    if (
+        bias is None
+        or not np.allclose(bias, 0.0, rtol=0.0, atol=1e-12)
+        or frozen_sigma is None
+        or reference_sigma is None
+    ):
         return prediction, sigma
     reference = np.asarray(reference_prediction, dtype=np.float64)
     if prediction.ndim == 1:
         if reference.shape != (HORIZON_STEPS,):
             return prediction, sigma
-        shrunk = reference + blend * (prediction - reference)
-        return np.clip(shrunk + bias, 20.0, 600.0), np.maximum(frozen_sigma, 6.0)
+        shrunk = np.clip(reference + blend * (prediction - reference), 20.0, 600.0)
+        # Preserve every low-glucose signal emitted by either trajectory. This
+        # makes the point forecast's <70 false-safe set a subset of the reference
+        # model's false-safe set without shifting ordinary-range predictions.
+        shrunk = np.where(
+            (shrunk <= STATIC_LOW_GUARD_MG_DL)
+            | (reference <= STATIC_LOW_GUARD_MG_DL),
+            np.minimum(shrunk, reference),
+            shrunk,
+        )
+        safe_sigma = _reference_safety_sigma(
+            shrunk, reference, frozen_sigma, reference_sigma
+        )
+        return shrunk, safe_sigma
     if reference.shape != prediction.shape:
         return prediction, sigma
     shrunk = reference + blend.reshape(1, -1) * (prediction - reference)
-    return (
-        np.clip(shrunk + bias.reshape(1, -1), 20.0, 600.0),
-        np.maximum(frozen_sigma, 6.0),
+    shrunk = np.clip(shrunk, 20.0, 600.0)
+    shrunk = np.where(
+        (shrunk <= STATIC_LOW_GUARD_MG_DL)
+        | (reference <= STATIC_LOW_GUARD_MG_DL),
+        np.minimum(shrunk, reference),
+        shrunk,
     )
+    safe_sigma = _reference_safety_sigma(
+        shrunk, reference, frozen_sigma, reference_sigma
+    )
+    return shrunk, safe_sigma
+
+
+def _reference_safety_sigma(
+    candidate_prediction: np.ndarray,
+    reference_prediction: np.ndarray,
+    candidate_sigma: np.ndarray,
+    reference_sigma: np.ndarray,
+) -> np.ndarray:
+    """Return a symmetric band containing both frozen central intervals.
+
+    The learned median may improve average error while still missing a rare low.
+    Until enough independent hypo episodes exist, its displayed lower bound must
+    never be higher than the calibrated event-aware reference lower bound.  The
+    same union is used on the upper side so the returned API can retain its
+    existing median+sigma contract without hiding asymmetric widening.
+    """
+
+    candidate = np.asarray(candidate_prediction, dtype=np.float64)
+    reference = np.asarray(reference_prediction, dtype=np.float64)
+    candidate_scale = np.asarray(candidate_sigma, dtype=np.float64)
+    reference_scale = np.asarray(reference_sigma, dtype=np.float64)
+    if candidate.shape != reference.shape or candidate.shape[-1:] != (HORIZON_STEPS,):
+        return np.maximum(candidate_scale, 6.0)
+    if candidate_scale.shape != (HORIZON_STEPS,) or reference_scale.shape != (
+        HORIZON_STEPS,
+    ):
+        return np.maximum(candidate_scale, 6.0)
+    candidate_half = np.maximum.accumulate(
+        np.maximum(7.0, STATIC_INTERVAL_Z * np.maximum(candidate_scale, 6.0))
+    )
+    reference_half = np.maximum.accumulate(
+        np.maximum(7.0, STATIC_INTERVAL_Z * np.maximum(reference_scale, 6.0))
+    )
+    if candidate.ndim == 1:
+        union_half = np.maximum.reduce(
+            (
+                candidate_half,
+                candidate - (reference - reference_half),
+                (reference + reference_half) - candidate,
+            )
+        )
+    else:
+        union_half = np.maximum.reduce(
+            (
+                np.broadcast_to(candidate_half, candidate.shape),
+                candidate - (reference - reference_half.reshape(1, -1)),
+                (reference + reference_half.reshape(1, -1)) - candidate,
+            )
+        )
+    union_half = np.maximum.accumulate(np.maximum(union_half, 7.0), axis=-1)
+    return union_half / STATIC_INTERVAL_Z
+
+
+def _forecast_interval_bounds(
+    prediction: np.ndarray, sigma: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build the displayed/scored 80% interval under one shared contract.
+
+    A static safety union may legitimately exceed the historical 200 mg/dL
+    sigma cap.  Capping its half-width at the full API glucose span still allows
+    [20, 600] and therefore cannot narrow either clipped source interval.
+    """
+
+    point = np.clip(np.asarray(prediction, dtype=np.float64), 20.0, 600.0)
+    scale = np.asarray(sigma, dtype=np.float64)
+    if scale.shape == (HORIZON_STEPS,):
+        scale = np.broadcast_to(scale, point.shape)
+    elif scale.shape != point.shape:
+        raise ValueError("sigma must have 24 horizons or match prediction shape")
+    maximum_sigma = (600.0 - 20.0) / STATIC_INTERVAL_Z
+    scale = np.nan_to_num(
+        scale, nan=60.0, posinf=maximum_sigma, neginf=60.0
+    )
+    half_width = np.maximum.accumulate(
+        np.maximum(7.0, STATIC_INTERVAL_Z * np.maximum(6.0, scale)), axis=-1
+    )
+    half_width = np.minimum(600.0 - 20.0, half_width)
+    return (
+        np.clip(point - half_width, 20.0, 600.0),
+        np.clip(point + half_width, 20.0, 600.0),
+    )
+
+
+def _static_reliability(
+    candidate_metrics: dict[str, float | None],
+    reference_metrics: dict[str, float | None],
+    gates: dict[str, bool | float | int],
+    *,
+    test_days: int,
+    independent_anchors: int,
+    candidate_horizon_mae: Sequence[float],
+    reference_horizon_mae: Sequence[float],
+) -> dict[str, Any]:
+    candidate_errors = np.asarray(candidate_horizon_mae, dtype=np.float64)
+    reference_errors = np.asarray(reference_horizon_mae, dtype=np.float64)
+    if (
+        candidate_errors.shape != (HORIZON_STEPS,)
+        or reference_errors.shape != (HORIZON_STEPS,)
+        or not np.isfinite(candidate_errors).all()
+        or not np.isfinite(reference_errors).all()
+    ):
+        raise ValueError("reliability requires 24 finite horizon errors")
+    confidence_cap = 0.35 if test_days < 8 else (0.50 if test_days < 14 else 0.65)
+    reference_skill = _clamp(
+        1.0
+        - float(candidate_metrics["mae"] or 0.0)
+        / max(1e-6, float(reference_metrics["mae"] or 0.0)),
+        0.0,
+        0.25,
+    ) / 0.25
+    calibration_skill = _clamp(
+        1.0 - abs(float(candidate_metrics["coverage_80"] or 0.0) - 0.8) / 0.2,
+        0.0,
+        1.0,
+    )
+    winning_fraction = float(gates.get("winning_days", 0)) / max(1, test_days)
+    evidence_fraction = _clamp(
+        independent_anchors / max(1, test_days * 12), 0.0, 1.0
+    )
+    overall = confidence_cap * (
+        0.45 * reference_skill
+        + 0.25 * calibration_skill
+        + 0.20 * winning_fraction
+        + 0.10 * evidence_fraction
+    )
+    overall = _clamp(overall, 0.05, confidence_cap)
+    by_horizon = [
+        _clamp(
+            overall
+            * _clamp(
+                float(reference_error)
+                / max(float(candidate_error), float(reference_error), 1e-6),
+                0.65,
+                1.10,
+            ),
+            0.0,
+            confidence_cap,
+        )
+        for candidate_error, reference_error in zip(
+            candidate_errors, reference_errors
+        )
+    ]
+    return {
+        "overall": overall,
+        "by_horizon": by_horizon,
+        "clinical_validation": False,
+        "test_day_cap": confidence_cap,
+    }
 
 
 def _artifact_content_hash(parameters: dict[str, Any]) -> str:
@@ -258,19 +448,48 @@ def _artifact_content_hash(parameters: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
-def _static_artifact_is_valid(parameters: dict[str, Any]) -> bool:
+def _static_predictor_hash(parameters: dict[str, Any]) -> str:
+    """Hash only fields that can affect a frozen prediction or interval.
+
+    Prospective evaluation is allowed to replace the signed approval/evaluation
+    envelope, but it must not mutate the network, blend, event priors, or frozen
+    calibration.  Keeping this digest inside the outer checksummed artifact makes
+    that boundary independently auditable.
+    """
+
+    payload = {key: value for key, value in parameters.items() if key != "artifact"}
+    canonical = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _model_parameters_hash(parameters: dict[str, Any]) -> str:
+    """Canonical digest for an exact frozen comparator parameter document."""
+
+    canonical = json.dumps(
+        parameters, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _static_artifact_is_valid(
+    parameters: dict[str, Any], *, require_approved: bool = True
+) -> bool:
     artifact = parameters.get("artifact")
     network = parameters.get("network")
     calibration = parameters.get("frozen_calibration")
     reliability = artifact.get("reliability") if isinstance(artifact, dict) else None
     evaluation = artifact.get("evaluation") if isinstance(artifact, dict) else None
     split = artifact.get("split") if isinstance(artifact, dict) else None
+    approval = artifact.get("approval") if isinstance(artifact, dict) else None
     if not all(
         isinstance(item, dict)
         for item in (artifact, network, calibration, reliability, evaluation, split)
     ):
         return False
     expected = artifact.get("content_sha256")
+    predictor_hash = artifact.get("predictor_sha256")
     try:
         computed_hash = _artifact_content_hash(parameters)
     except (TypeError, ValueError, OverflowError):
@@ -280,15 +499,27 @@ def _static_artifact_is_valid(parameters: dict[str, Any]) -> bool:
     blend = _validated_vector(parameters.get("persistence_blend_weights"))
     bias = _validated_vector(calibration.get("bias_mg_dl"))
     sigma = _validated_vector(calibration.get("sigma_mg_dl"), positive=True)
+    reference_sigma = _validated_vector(
+        calibration.get("reference_sigma_mg_dl"), positive=True
+    )
     residual_sigma = _validated_vector(parameters.get("residual_sigma"), positive=True)
+    calibration_samples = int(_finite(calibration.get("sample_count"), 0))
+    expected_quantile = (
+        _finite_sample_quantile_level(calibration_samples)
+        if calibration_samples > 0
+        else -1.0
+    )
     if not (
         isinstance(expected, str)
         and len(expected) == 64
         and expected == computed_hash
+        and isinstance(predictor_hash, str)
+        and len(predictor_hash) == 64
+        and predictor_hash == _static_predictor_hash(parameters)
         and parameters.get("architecture") == STATIC_PERSONAL_ARCHITECTURE
         and parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA
         and parameters.get("kind") == "personalized_static_generic_residual"
-        and artifact.get("artifact_version") == 3
+        and artifact.get("artifact_version") == 4
         and artifact.get("engine_version") == FORECAST_ENGINE_VERSION
         and artifact.get("architecture") == STATIC_PERSONAL_ARCHITECTURE
         and artifact.get("feature_schema") == STATIC_FEATURE_SCHEMA
@@ -296,7 +527,7 @@ def _static_artifact_is_valid(parameters: dict[str, Any]) -> bool:
         and artifact.get("training_mode") == STATIC_TRAINING_MODE
         and artifact.get("promotion_gate_version")
         == STATIC_PROMOTION_GATE_VERSION
-        and artifact.get("accepted") is True
+        and (not require_approved or artifact.get("accepted") is True)
         and isinstance(artifact.get("model_version"), str)
         and 0 < len(artifact["model_version"]) <= 96
         and math.isclose(
@@ -321,16 +552,36 @@ def _static_artifact_is_valid(parameters: dict[str, Any]) -> bool:
         and blend is not None
         and np.all((blend >= 0.0) & (blend <= 1.0))
         and bias is not None
+        and np.allclose(bias, 0.0, rtol=0.0, atol=1e-12)
         and sigma is not None
+        and reference_sigma is not None
         and residual_sigma is not None
         and np.allclose(sigma, residual_sigma, rtol=0.0, atol=1e-9)
-        and calibration.get("method") == "frozen-day-block-conformal-v1"
+        and calibration.get("method") == "frozen-uncentered-conformal-v2"
+        and calibration.get("quantile_method") == "exact-order-statistic"
+        and calibration.get("point_bias") == "disabled"
+        and math.isclose(
+            _finite(calibration.get("low_guard_threshold_mg_dl"), -1.0),
+            STATIC_LOW_GUARD_MG_DL,
+            abs_tol=1e-9,
+        )
+        and calibration.get("safety_envelope") == "reference-interval-union-v1"
         and math.isclose(
             _finite(calibration.get("interval_level"), -1.0),
             STATIC_INTERVAL_LEVEL,
             abs_tol=1e-9,
         )
-        and int(_finite(calibration.get("sample_count"), 0)) >= VALIDATION_WINDOWS
+        and calibration_samples >= VALIDATION_WINDOWS
+        and math.isclose(
+            _finite(calibration.get("finite_sample_quantile"), -1.0),
+            expected_quantile,
+            abs_tol=1e-12,
+        )
+        and int(_finite(calibration.get("finite_sample_rank"), -1))
+        == min(
+            calibration_samples,
+            math.ceil((calibration_samples + 1) * STATIC_INTERVAL_LEVEL),
+        )
         and parameters.get("network_disabled_event_channels")
         == ["meal", "rapid", "long"]
     ):
@@ -387,26 +638,305 @@ def _static_artifact_is_valid(parameters: dict[str, Any]) -> bool:
         "pinned_equal_day_mae",
         "candidate_anchor_mae",
         "reference_anchor_mae",
+        "pinned_anchor_mae",
+        "candidate_rmse",
+        "reference_rmse",
+        "pinned_rmse",
         "candidate_coverage_80",
         "candidate_interval_score_80",
         "reference_interval_score_80",
+        "pinned_interval_score_80",
+        "candidate_mae_5",
+        "candidate_mae_15",
+        "candidate_mae_30",
+        "candidate_mae_60",
+        "candidate_mae_120",
+        "reference_mae_5",
+        "reference_mae_15",
+        "reference_mae_30",
+        "reference_mae_60",
+        "reference_mae_120",
+        "pinned_mae_5",
+        "pinned_mae_15",
+        "pinned_mae_30",
+        "pinned_mae_60",
+        "pinned_mae_120",
+        "candidate_hypo_recall",
+        "reference_hypo_recall",
+        "pinned_hypo_recall",
+        "candidate_hypo_fpr",
+        "reference_hypo_fpr",
+        "pinned_hypo_fpr",
+        "candidate_hypo_missed_episodes",
+        "reference_hypo_missed_episodes",
+        "pinned_hypo_missed_episodes",
+        "candidate_low_zone_mae",
+        "reference_low_zone_mae",
+        "pinned_low_zone_mae",
+        "hypo_low_points",
+        "hypo_low_episodes",
+        "hypo_low_days",
         "test_days",
         "test_independent_anchors",
+        "winning_days",
+        "gate_reference_equal_day_improvement",
+        "gate_pinned_equal_day_improvement",
+        "gate_required_winning_days",
+        "gate_median_day_improvement",
     )
-    if evaluation.get("accepted") != 1 or any(
-        key not in evaluation or not math.isfinite(_finite(evaluation.get(key), math.nan))
-        for key in required_evaluation
-        if key != "accepted"
-    ):
+    required_gate_flags = (
+        "gate_no_day_regression_over_2pct",
+        "gate_horizons_safe",
+        "gate_coverage_safe",
+        "gate_hypo_evidence_sufficient",
+        "gate_hypo_recall_safe",
+        "gate_hypo_episode_safe",
+        "gate_hypo_false_alarm_safe",
+        "gate_low_zone_safe",
+        "gate_hypo_safe",
+        "gate_interval_score_safe",
+        "gate_rmse_safe",
+        "gate_anchor_mae_safe",
+    )
+    required_evaluation = (
+        required_evaluation
+        + tuple(
+            f"candidate_coverage_band_{index}"
+            for index in range(len(STATIC_BANDS))
+        )
+        + required_gate_flags
+    )
+    expected_reliability: dict[str, Any] | None = None
+    if require_approved:
+        if (
+            not isinstance(approval, dict)
+            or approval.get("state") != "approved_prospective"
+            or approval.get("protocol") != STATIC_PROSPECTIVE_PROTOCOL
+            or int(_finite(approval.get("minimum_new_days"), -1))
+            != STATIC_PROSPECTIVE_MIN_DAYS
+            or int(_finite(approval.get("strictly_after_ms"), -1))
+            != int(_finite(artifact.get("data_cutoff_ms"), -2))
+            or int(_finite(approval.get("dense_days"), -1))
+            != STATIC_PROSPECTIVE_MIN_DAYS
+            or int(_finite(approval.get("independent_anchors"), -1))
+            != int(_finite(evaluation.get("test_independent_anchors"), -2))
+            or int(_finite(approval.get("cohort_start_ms"), -1))
+            <= int(_finite(artifact.get("data_cutoff_ms"), -1))
+            or int(_finite(approval.get("cohort_end_ms"), -1))
+            <= int(_finite(approval.get("cohort_start_ms"), -1))
+            or approval.get("predictor_sha256") != predictor_hash
+            or not isinstance(approval.get("pinned_comparator_version"), str)
+            or not isinstance(approval.get("pinned_comparator_sha256"), str)
+            or len(approval.get("pinned_comparator_sha256", "")) != 64
+            or evaluation.get("prospective") != 1
+            or evaluation.get("inconclusive") != 0
+            or evaluation.get("current_comparator_gate_passed") != 1
+            or evaluation.get("accepted") != 1
+            or evaluation.get("gate_hypo_safe") != 1
+            or any(
+                key not in evaluation
+                or not math.isfinite(_finite(evaluation.get(key), math.nan))
+                for key in required_evaluation
+                if key != "accepted"
+            )
+        ):
+            return False
+    elif evaluation.get("accepted") not in {0, 1}:
         return False
+    if require_approved:
+        candidate_metrics = approval.get("candidate_metrics")
+        reference_metrics = approval.get("reference_metrics")
+        pinned_metrics = approval.get("pinned_metrics")
+        current_metrics = approval.get("current_metrics")
+        pinned_days = approval.get("pinned_day_results")
+        current_days = approval.get("current_day_results")
+        if not all(
+            isinstance(item, dict)
+            for item in (
+                candidate_metrics,
+                reference_metrics,
+                pinned_metrics,
+                current_metrics,
+            )
+        ) or not all(isinstance(item, list) for item in (pinned_days, current_days)):
+            return False
+        test_days = int(_finite(evaluation.get("test_days"), -1))
+        if (
+            test_days != STATIC_PROSPECTIVE_MIN_DAYS
+            or int(_finite(evaluation.get("test_independent_anchors"), 0))
+            < 8 * test_days
+        ):
+            return False
+        try:
+            frozen_gates = ForecastService.static_promotion_gates(
+                candidate_metrics,
+                reference_metrics,
+                pinned_metrics,
+                pinned_days,
+                test_day_count=test_days,
+            )
+            current_gates = ForecastService.static_promotion_gates(
+                candidate_metrics,
+                reference_metrics,
+                current_metrics,
+                current_days,
+                test_day_count=test_days,
+            )
+        except (KeyError, TypeError, ValueError, IndexError):
+            return False
+        if not bool(frozen_gates.get("accepted")) or not bool(
+            current_gates.get("accepted")
+        ):
+            return False
+        metric_consistency = {
+            "candidate_anchor_mae": candidate_metrics.get("mae"),
+            "reference_anchor_mae": reference_metrics.get("mae"),
+            "pinned_anchor_mae": pinned_metrics.get("mae"),
+            "candidate_rmse": candidate_metrics.get("rmse"),
+            "reference_rmse": reference_metrics.get("rmse"),
+            "pinned_rmse": pinned_metrics.get("rmse"),
+            "candidate_coverage_80": candidate_metrics.get("coverage_80"),
+            "candidate_interval_score_80": candidate_metrics.get(
+                "interval_score_80"
+            ),
+            "reference_interval_score_80": reference_metrics.get(
+                "interval_score_80"
+            ),
+            "pinned_interval_score_80": pinned_metrics.get("interval_score_80"),
+            "candidate_hypo_recall": candidate_metrics.get("hypo_recall"),
+            "reference_hypo_recall": reference_metrics.get("hypo_recall"),
+            "pinned_hypo_recall": pinned_metrics.get("hypo_recall"),
+            "candidate_hypo_fpr": candidate_metrics.get("hypo_fpr"),
+            "reference_hypo_fpr": reference_metrics.get("hypo_fpr"),
+            "pinned_hypo_fpr": pinned_metrics.get("hypo_fpr"),
+            "candidate_hypo_missed_episodes": candidate_metrics.get(
+                "hypo_missed_episodes"
+            ),
+            "reference_hypo_missed_episodes": reference_metrics.get(
+                "hypo_missed_episodes"
+            ),
+            "pinned_hypo_missed_episodes": pinned_metrics.get(
+                "hypo_missed_episodes"
+            ),
+            "candidate_low_zone_mae": candidate_metrics.get("low_zone_mae"),
+            "reference_low_zone_mae": reference_metrics.get("low_zone_mae"),
+            "pinned_low_zone_mae": pinned_metrics.get("low_zone_mae"),
+            "hypo_low_points": candidate_metrics.get("hypo_low_points"),
+            "hypo_low_episodes": candidate_metrics.get("hypo_low_episodes"),
+            "hypo_low_days": candidate_metrics.get("hypo_low_days"),
+        }
+        for band_index in range(len(STATIC_BANDS)):
+            metric_consistency[f"candidate_coverage_band_{band_index}"] = (
+                candidate_metrics.get(f"coverage_band_{band_index}")
+            )
+        for prefix, metrics in (
+            ("candidate", candidate_metrics),
+            ("reference", reference_metrics),
+            ("pinned", pinned_metrics),
+        ):
+            for horizon in (5, 15, 30, 60, 120):
+                metric_consistency[f"{prefix}_mae_{horizon}"] = metrics.get(
+                    f"mae_{horizon}"
+                )
+        if any(
+            expected_value is None
+            or not math.isclose(
+                _finite(evaluation.get(key), math.nan),
+                _finite(expected_value, math.nan),
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+            for key, expected_value in metric_consistency.items()
+        ):
+            return False
+        gate_consistency = {
+            "candidate_equal_day_mae": frozen_gates.get(
+                "candidate_equal_day_mae"
+            ),
+            "reference_equal_day_mae": frozen_gates.get(
+                "reference_equal_day_mae"
+            ),
+            "pinned_equal_day_mae": frozen_gates.get("pinned_equal_day_mae"),
+            "winning_days": frozen_gates.get("winning_days"),
+            "gate_reference_equal_day_improvement": frozen_gates.get(
+                "reference_equal_day_improvement"
+            ),
+            "gate_pinned_equal_day_improvement": frozen_gates.get(
+                "pinned_equal_day_improvement"
+            ),
+            "gate_required_winning_days": frozen_gates.get(
+                "required_winning_days"
+            ),
+            "gate_median_day_improvement": frozen_gates.get(
+                "median_day_improvement"
+            ),
+        }
+        if any(
+            expected_value is None
+            or not math.isclose(
+                _finite(evaluation.get(key), math.nan),
+                _finite(expected_value, math.nan),
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+            for key, expected_value in gate_consistency.items()
+        ):
+            return False
+        if any(evaluation.get(key) != 1 for key in required_gate_flags):
+            return False
+        try:
+            expected_reliability = _static_reliability(
+                candidate_metrics,
+                reference_metrics,
+                frozen_gates,
+                test_days=test_days,
+                independent_anchors=int(
+                    _finite(evaluation.get("test_independent_anchors"), 0)
+                ),
+                candidate_horizon_mae=approval["candidate_horizon_mae"],
+                reference_horizon_mae=approval["reference_horizon_mae"],
+            )
+        except (KeyError, TypeError, ValueError, IndexError):
+            return False
     overall = _finite(reliability.get("overall"), -1.0)
+    test_day_cap = _finite(reliability.get("test_day_cap"), -1.0)
+    evaluated_days = int(_finite(evaluation.get("test_days"), 0))
+    expected_cap = 0.35 if evaluated_days < 8 else (0.50 if evaluated_days < 14 else 0.65)
     by_horizon = reliability.get("by_horizon")
-    return bool(
-        0.0 <= overall <= 0.35
+    basic_reliability_valid = bool(
+        math.isclose(test_day_cap, expected_cap, abs_tol=1e-12)
+        and 0.0 <= overall <= test_day_cap
         and reliability.get("clinical_validation") is False
         and isinstance(by_horizon, list)
         and len(by_horizon) == HORIZON_STEPS
-        and all(0.0 <= _finite(item, -1.0) <= 0.35 for item in by_horizon)
+        and all(0.0 <= _finite(item, -1.0) <= test_day_cap for item in by_horizon)
+    )
+    if not basic_reliability_valid or expected_reliability is None:
+        return basic_reliability_valid and not require_approved
+    expected_by_horizon = expected_reliability["by_horizon"]
+    return bool(
+        math.isclose(
+            overall,
+            float(expected_reliability["overall"]),
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+        and math.isclose(
+            test_day_cap,
+            float(expected_reliability["test_day_cap"]),
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+        and isinstance(expected_by_horizon, list)
+        and all(
+            math.isclose(
+                _finite(actual, math.nan),
+                float(expected),
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            for actual, expected in zip(by_horizon, expected_by_horizon)
+        )
     )
 
 
@@ -1855,13 +2385,17 @@ class ForecastService:
         self._training_lock = threading.Lock()
 
     @staticmethod
-    def _runtime_model_is_valid(record: ForecastModelRecord) -> bool:
+    def _stored_static_model_is_valid(
+        record: ForecastModelRecord, *, require_approved: bool
+    ) -> bool:
         if record.version == BASELINE_VERSION:
-            return True
+            return require_approved
         if record.architecture != STATIC_PERSONAL_ARCHITECTURE:
             return False
         parameters = _json_dict(record.parameters_json)
-        if not _static_artifact_is_valid(parameters):
+        if not _static_artifact_is_valid(
+            parameters, require_approved=require_approved
+        ):
             return False
         artifact = parameters.get("artifact", {})
         evaluation = artifact.get("evaluation", {})
@@ -1876,6 +2410,68 @@ class ForecastService:
             == int(record.sample_count)
             and evaluation == metrics
         )
+
+    @staticmethod
+    def _runtime_model_is_valid(record: ForecastModelRecord) -> bool:
+        return ForecastService._stored_static_model_is_valid(
+            record, require_approved=True
+        )
+
+    @classmethod
+    def _runtime_model_dependencies_are_valid(
+        cls, session: Session, record: ForecastModelRecord
+    ) -> bool:
+        if not cls._runtime_model_is_valid(record):
+            return False
+        if record.version == BASELINE_VERSION:
+            return True
+        parameters = _json_dict(record.parameters_json)
+        approval = parameters.get("artifact", {}).get("approval", {})
+        comparator_version = approval.get("pinned_comparator_version")
+        comparator_hash = approval.get("pinned_comparator_sha256")
+        if (
+            not isinstance(comparator_version, str)
+            or comparator_version == record.version
+            or not isinstance(comparator_hash, str)
+        ):
+            return False
+        comparator = session.get(ForecastModelRecord, comparator_version)
+        return bool(
+            comparator is not None
+            and cls._runtime_model_is_valid(comparator)
+            and _model_parameters_hash(_json_dict(comparator.parameters_json))
+            == comparator_hash
+        )
+
+    @staticmethod
+    def _assert_prospective_registration_allowed(
+        session: Session, *, cutoff_ms: int
+    ) -> None:
+        latest_decided_cohort_end = -1
+        for record in session.scalars(
+            select(ForecastModelRecord).where(
+                ForecastModelRecord.architecture == STATIC_PERSONAL_ARCHITECTURE
+            )
+        ):
+            parameters = _json_dict(record.parameters_json)
+            artifact = parameters.get("artifact", {})
+            approval = artifact.get("approval") if isinstance(artifact, dict) else None
+            if record.status == "pending":
+                raise ValueError(
+                    "a preregistered prospective forecast candidate is already pending"
+                )
+            if not isinstance(approval, dict):
+                continue
+            if approval.get("protocol") != STATIC_PROSPECTIVE_PROTOCOL:
+                continue
+            latest_decided_cohort_end = max(
+                latest_decided_cohort_end,
+                int(_finite(approval.get("cohort_end_ms"), -1)),
+            )
+        if cutoff_ms <= latest_decided_cohort_end:
+            raise ValueError(
+                "a new prospective candidate must freeze after the prior cohort ended"
+            )
 
     def _ensure_baseline(self, session: Session) -> ForecastModelRecord:
         record = session.get(ForecastModelRecord, BASELINE_VERSION)
@@ -1929,7 +2525,7 @@ class ForecastService:
             return UUID(record.value_text)
 
     @staticmethod
-    def _source_revision(session: Session) -> tuple[int, int, int, int, int]:
+    def _source_revision(session: Session) -> tuple[int, int, int, int, int, int]:
         """One-statement fingerprint for source data concurrency guards."""
 
         event_revision = (
@@ -1940,7 +2536,22 @@ class ForecastService:
             .where(IntakeEventRecord.deleted_at_ms.is_(None))
             .scalar_subquery()
         )
-        reading_count, last_reading, max_received, sync_revision, event_count = (
+        glucose_revision = (
+            select(cast(BackendMetadataRecord.value_text, Integer))
+            .where(
+                BackendMetadataRecord.key
+                == GLUCOSE_SOURCE_REVISION_METADATA_KEY
+            )
+            .scalar_subquery()
+        )
+        (
+            reading_count,
+            last_reading,
+            max_received,
+            sync_revision,
+            event_count,
+            glucose_source_revision,
+        ) = (
             session.execute(
                 select(
                     func.count(GlucoseReadingRecord.reading_id),
@@ -1948,6 +2559,7 @@ class ForecastService:
                     func.max(GlucoseReadingRecord.received_at_ms),
                     event_revision,
                     active_events,
+                    glucose_revision,
                 )
             ).one()
         )
@@ -1957,6 +2569,7 @@ class ForecastService:
             int(max_received or 0),
             int(sync_revision or 0),
             int(event_count or 0),
+            int(glucose_source_revision or 0),
         )
     def _champion(self, session: Session) -> ForecastModelRecord:
         """Return only the explicit valid pin; otherwise fail closed to baseline."""
@@ -1965,7 +2578,9 @@ class ForecastService:
         pin = session.get(BackendMetadataRecord, ACTIVE_MODEL_METADATA_KEY)
         if pin is not None:
             selected = session.get(ForecastModelRecord, pin.value_text)
-            if selected is not None and self._runtime_model_is_valid(selected):
+            if selected is not None and self._runtime_model_dependencies_are_valid(
+                session, selected
+            ):
                 return selected
         if pin is None:
             session.add(
@@ -2007,7 +2622,7 @@ class ForecastService:
         selected = session.get(ForecastModelRecord, version)
         if selected is None:
             raise ValueError(f"unknown forecast model version: {version}")
-        if not self._runtime_model_is_valid(selected):
+        if not self._runtime_model_dependencies_are_valid(session, selected):
             raise ValueError(
                 "only the baseline or an approved, checksummed static model can be activated"
             )
@@ -2048,7 +2663,7 @@ class ForecastService:
                 if (
                     candidate_version != current.version
                     and selected is not None
-                    and self._runtime_model_is_valid(selected)
+                    and self._runtime_model_dependencies_are_valid(session, selected)
                 ):
                     version = candidate_version
                     break
@@ -2061,21 +2676,27 @@ class ForecastService:
         through_ms: int | None = None,
         from_ms: int | None = None,
         limit: int = 20_000,
+        earliest_first: bool = False,
     ) -> list[GlucoseReadingRecord]:
         statement = select(GlucoseReadingRecord)
         if through_ms is not None:
             statement = statement.where(GlucoseReadingRecord.measured_at_ms <= through_ms)
         if from_ms is not None:
             statement = statement.where(GlucoseReadingRecord.measured_at_ms >= from_ms)
-        rows = list(
-            session.scalars(
-                statement.order_by(
-                    GlucoseReadingRecord.measured_at_ms.desc(),
-                    GlucoseReadingRecord.reading_id.desc(),
-                ).limit(limit)
+        ordering = (
+            (
+                GlucoseReadingRecord.measured_at_ms.asc(),
+                GlucoseReadingRecord.reading_id.asc(),
+            )
+            if earliest_first
+            else (
+                GlucoseReadingRecord.measured_at_ms.desc(),
+                GlucoseReadingRecord.reading_id.desc(),
             )
         )
-        rows.reverse()
+        rows = list(session.scalars(statement.order_by(*ordering).limit(limit)))
+        if not earliest_first:
+            rows.reverse()
         return rows
 
     @staticmethod
@@ -2140,7 +2761,7 @@ class ForecastService:
                         kind="meal",
                         label=f"{meal_name} · {record.carbs_g:g} g carbs",
                         amount=float(record.carbs_g),
-                        known_at_ms=record.created_at_ms,
+                        known_at_ms=max(record.created_at_ms, record.updated_at_ms),
                         carbs_low_g=analysis.get("carbs_low_g"),
                         carbs_high_g=analysis.get("carbs_high_g"),
                         absorption_speed=analysis.get("absorption_speed"),
@@ -2167,7 +2788,7 @@ class ForecastService:
                         kind=kind,
                         label=f"{name} · {record.insulin_units:g} U",
                         amount=float(record.insulin_units),
-                        known_at_ms=record.created_at_ms,
+                        known_at_ms=max(record.created_at_ms, record.updated_at_ms),
                     )
                 )
         return events
@@ -2177,6 +2798,7 @@ class ForecastService:
         unchanged = 0
         updated = 0
         context_updated = 0
+        source_mutated = False
         corrected_ids: list[str] = []
         now = _now_ms()
         unique_payload: dict[str, Any] = {}
@@ -2216,6 +2838,7 @@ class ForecastService:
                     existing.trend_mg_dl_min = reading.trend_mg_dl_min
                     existing.payload_hash = digest
                     existing.received_at_ms = now
+                    source_mutated = True
                     updated += 1
                     corrected_ids.append(reading_id)
                 else:
@@ -2224,6 +2847,7 @@ class ForecastService:
                     unchanged += 1
                     if existing.payload_hash != digest:
                         existing.payload_hash = digest
+                        source_mutated = True
                 metadata_changed = False
                 for name, value in (
                     ("sensor_id", reading.sensor_id),
@@ -2236,6 +2860,7 @@ class ForecastService:
                         metadata_changed = True
                 if metadata_changed:
                     existing.received_at_ms = now
+                    source_mutated = True
                     context_updated += 1
                 continue
             session.add(
@@ -2252,8 +2877,26 @@ class ForecastService:
                     received_at_ms=now,
                 )
             )
+            source_mutated = True
             inserted += 1
         try:
+            if source_mutated:
+                # A wall-clock maximum is not a mutation revision: an in-place
+                # correction can share its millisecond with the previous write,
+                # and clocks can move backwards. This counter advances in the
+                # same SQLite transaction as every model-relevant CGM mutation.
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO backend_metadata (key, value_text)
+                        VALUES (:metadata_key, '1')
+                        ON CONFLICT(key) DO UPDATE SET value_text = CAST(
+                            CAST(backend_metadata.value_text AS INTEGER) + 1 AS TEXT
+                        )
+                        """
+                    ),
+                    {"metadata_key": GLUCOSE_SOURCE_REVISION_METADATA_KEY},
+                )
             if updated:
                 session.execute(
                     delete(ForecastScoreRecord).where(
@@ -2945,12 +3588,25 @@ class ForecastService:
             20.0,
             600.0,
         )
-        sigma = np.nan_to_num(sigma, nan=60.0, posinf=120.0, neginf=60.0)
-        sigma = np.clip(sigma, 6.0, 200.0)
-        # 80% central interval; it widens monotonically to avoid visual false precision.
-        half_width = np.maximum.accumulate(np.maximum(7.0, sigma * 1.2816))
-        low = np.clip(median - half_width, 20.0, 600.0)
-        high = np.clip(median + half_width, 20.0, 600.0)
+        static_maximum_sigma = (600.0 - 20.0) / STATIC_INTERVAL_Z
+        sigma = np.nan_to_num(
+            sigma,
+            nan=60.0,
+            posinf=(
+                static_maximum_sigma
+                if champion.architecture == STATIC_PERSONAL_ARCHITECTURE
+                else 120.0
+            ),
+            neginf=60.0,
+        )
+        sigma = (
+            np.maximum(sigma, 6.0)
+            if champion.architecture == STATIC_PERSONAL_ARCHITECTURE
+            else np.clip(sigma, 6.0, 200.0)
+        )
+        # Intrinsic static calibration and live rendering share these bounds.
+        # Live quality/meal uncertainty above may only widen them further.
+        low, high = _forecast_interval_bounds(median, sigma)
         run = ForecastRunRecord(
             id=str(uuid4()),
             generated_at_ms=now,
@@ -3043,6 +3699,103 @@ class ForecastService:
             indexes = np.linspace(0, len(windows) - 1, max_windows, dtype=int)
             windows = [windows[index] for index in indexes]
         return windows
+
+    @staticmethod
+    def _prospective_causal_windows(
+        readings: Sequence[GlucoseReadingRecord],
+    ) -> tuple[list[tuple[int, np.ndarray]], dict[str, int]]:
+        """Build replay windows using backend receipt time as decision time.
+
+        A delayed/bulk upload is not a historical forecast. Every history row
+        must already have reached the backend when the anchor arrived, while all
+        labels must arrive strictly later. Equal receipt timestamps (a common
+        backfill signature) are rejected instead of creating look-ahead. The
+        anchor itself must also have been fresh enough for live ``current()``;
+        sequential historical backfills are not retrospective forecasts.
+        """
+
+        windows: list[tuple[int, np.ndarray]] = []
+        rejected_history = 0
+        rejected_target = 0
+        rejected_stale_anchor = 0
+        if not readings:
+            return windows, {
+                "causal_history_rejections": 0,
+                "causal_target_rejections": 0,
+                "causal_stale_anchor_rejections": 0,
+            }
+        reading_times = [row.measured_at_ms for row in readings]
+        previous_bucket: int | None = None
+        for anchor_index, anchor in enumerate(readings):
+            bucket = anchor.measured_at_ms // STEP_MS
+            if bucket == previous_bucket:
+                continue
+            previous_bucket = bucket
+            if (
+                anchor.measured_at_ms - readings[0].measured_at_ms
+                < (HISTORY_STEPS - 1) * STEP_MS
+                or readings[-1].measured_at_ms - anchor.measured_at_ms
+                < HORIZON_STEPS * STEP_MS
+            ):
+                continue
+            history_rows = [
+                _nearest_value(
+                    readings,
+                    anchor.measured_at_ms - offset * STEP_MS,
+                    MATCH_TOLERANCE_MS,
+                    reading_times,
+                )
+                for offset in range(HISTORY_STEPS - 1, -1, -1)
+            ]
+            future_rows = [
+                _nearest_value(
+                    readings,
+                    anchor.measured_at_ms + step * STEP_MS,
+                    MATCH_TOLERANCE_MS,
+                    reading_times,
+                )
+                for step in range(1, HORIZON_STEPS + 1)
+            ]
+            if any(row is None for row in history_rows) or any(
+                row is None for row in future_rows
+            ):
+                continue
+            concrete_history = [row for row in history_rows if row is not None]
+            concrete_future = [row for row in future_rows if row is not None]
+            if (
+                len({row.reading_id for row in concrete_history}) != HISTORY_STEPS
+                or len({row.reading_id for row in concrete_future}) != HORIZON_STEPS
+                or any(
+                    row.measured_at_ms <= anchor.measured_at_ms
+                    for row in concrete_future
+                )
+            ):
+                continue
+            decision_ms = int(anchor.received_at_ms)
+            if any(int(row.received_at_ms) > decision_ms for row in concrete_history):
+                rejected_history += 1
+                continue
+            if any(int(row.received_at_ms) <= decision_ms for row in concrete_future):
+                rejected_target += 1
+                continue
+            anchor_latency_ms = decision_ms - int(anchor.measured_at_ms)
+            if anchor_latency_ms < 0 or anchor_latency_ms > STALE_AFTER_MS:
+                rejected_stale_anchor += 1
+                continue
+            windows.append(
+                (
+                    anchor_index,
+                    np.asarray(
+                        [row.glucose_mg_dl for row in concrete_future],
+                        dtype=np.float64,
+                    ),
+                )
+            )
+        return windows, {
+            "causal_history_rejections": rejected_history,
+            "causal_target_rejections": rejected_target,
+            "causal_stale_anchor_rejections": rejected_stale_anchor,
+        }
 
     @staticmethod
     def _event_aligned_effects(
@@ -3215,6 +3968,8 @@ class ForecastService:
         events: Sequence[_Event],
         windows: Sequence[tuple[int, np.ndarray]],
         parameters: dict[str, Any],
+        *,
+        decision_times_ms: dict[int, int] | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         features: list[np.ndarray] = []
         baselines: list[np.ndarray] = []
@@ -3229,11 +3984,21 @@ class ForecastService:
         )
         for anchor_index, target in windows:
             anchor = readings[anchor_index]
+            decision_ms = (
+                decision_times_ms.get(anchor_index, anchor.measured_at_ms)
+                if decision_times_ms is not None
+                else anchor.measured_at_ms
+            )
+            event_occurrence_cutoff_ms = (
+                decision_ms
+                if decision_times_ms is not None
+                else anchor.measured_at_ms
+            )
             causal_recent = [
                 item
                 for item in sorted_events
-                if item.occurred_at_ms <= anchor.measured_at_ms
-                and _event_known_at(item) <= anchor.measured_at_ms
+                if item.occurred_at_ms <= event_occurrence_cutoff_ms
+                and _event_known_at(item) <= decision_ms
                 and item.occurred_at_ms
                 >= anchor.measured_at_ms - 96 * 60 * 60_000
             ]
@@ -3244,6 +4009,12 @@ class ForecastService:
             )
             history_index = bisect.bisect_left(reading_times, history_start)
             causal_readings = readings[history_index : anchor_index + 1]
+            if decision_times_ms is not None:
+                causal_readings = [
+                    row
+                    for row in causal_readings
+                    if int(row.received_at_ms) <= decision_ms
+                ]
             features.append(
                 _history_features(causal_readings, causal_recent, anchor.measured_at_ms, parameters)
             )
@@ -3273,16 +4044,28 @@ class ForecastService:
         events: Sequence[_Event],
         windows: Sequence[tuple[int, np.ndarray]],
         parameters: dict[str, Any],
+        *,
+        decision_times_ms: dict[int, int] | None = None,
     ) -> np.ndarray:
         sorted_events = sorted(events, key=lambda item: item.occurred_at_ms)
         references: list[np.ndarray] = []
         for anchor_index, _target in windows:
             anchor = readings[anchor_index]
+            decision_ms = (
+                decision_times_ms.get(anchor_index, anchor.measured_at_ms)
+                if decision_times_ms is not None
+                else anchor.measured_at_ms
+            )
+            event_occurrence_cutoff_ms = (
+                decision_ms
+                if decision_times_ms is not None
+                else anchor.measured_at_ms
+            )
             causal_events = [
                 event
                 for event in sorted_events
-                if event.occurred_at_ms <= anchor.measured_at_ms
-                and _event_known_at(event) <= anchor.measured_at_ms
+                if event.occurred_at_ms <= event_occurrence_cutoff_ms
+                and _event_known_at(event) <= decision_ms
                 and event.occurred_at_ms
                 >= anchor.measured_at_ms - 96 * 60 * 60_000
             ]
@@ -3298,6 +4081,8 @@ class ForecastService:
         absolute = np.abs(prediction - target)
         return {
             "mae": float(np.mean(absolute)),
+            "mae_5": float(np.mean(absolute[:, 0])),
+            "mae_15": float(np.mean(absolute[:, 2])),
             "mae_30": float(np.mean(absolute[:, 5])),
             "mae_60": float(np.mean(absolute[:, 11])),
             "mae_120": float(np.mean(absolute[:, 23])),
@@ -3309,10 +4094,11 @@ class ForecastService:
         prediction: np.ndarray,
         target: np.ndarray,
         sigma: np.ndarray,
+        *,
+        readings: Sequence[GlucoseReadingRecord] | None = None,
+        windows: Sequence[tuple[int, np.ndarray]] | None = None,
     ) -> dict[str, float | None]:
-        half_width = 1.2816 * np.maximum(6.0, sigma.reshape(1, -1))
-        low = prediction - half_width
-        high = prediction + half_width
+        low, high = _forecast_interval_bounds(prediction, sigma)
         inside = (target >= low) & (target <= high)
         interval_score = (
             (high - low)
@@ -3322,15 +4108,86 @@ class ForecastService:
             * np.maximum(0.0, target - high)
         )
         hypo = target < 70.0
+        risk = low <= 70.0
         hypo_count = int(np.sum(hypo))
-        hypo_misses = int(np.sum(hypo & (low > 70.0)))
+        true_positive = int(np.sum(hypo & risk))
+        false_negative = hypo_count - true_positive
+        negative_count = int(np.sum(~hypo))
+        false_positive = int(np.sum((~hypo) & risk))
+        low_zone = target < 80.0
+        low_zone_count = int(np.sum(low_zone))
+
+        timeline: list[tuple[int, int, bool, bool]] = []
+        if (
+            readings is not None
+            and windows is not None
+            and len(windows) == target.shape[0]
+        ):
+            for row_index, window in enumerate(windows):
+                anchor = readings[window[0]]
+                offset_ms = int(anchor.utc_offset_minutes or 0) * 60_000
+                for horizon_index in range(HORIZON_STEPS):
+                    at_ms = anchor.measured_at_ms + (horizon_index + 1) * STEP_MS
+                    timeline.append(
+                        (
+                            at_ms,
+                            (at_ms + offset_ms) // 86_400_000,
+                            bool(hypo[row_index, horizon_index]),
+                            bool(risk[row_index, horizon_index]),
+                        )
+                    )
+        else:
+            for point_index, (actual_low, warned) in enumerate(
+                zip(hypo.reshape(-1), risk.reshape(-1))
+            ):
+                timeline.append(
+                    (
+                        point_index * STEP_MS,
+                        point_index // (24 * 60 // STEP_MINUTES),
+                        bool(actual_low),
+                        bool(warned),
+                    )
+                )
+        timeline.sort(key=lambda item: item[0])
+        low_days = {day for _at, day, actual_low, _risk in timeline if actual_low}
+        episode_count = 0
+        missed_episodes = 0
+        episode_last_at: int | None = None
+        episode_warned = False
+        for at_ms, _day, actual_low, warned in timeline:
+            if not actual_low:
+                continue
+            if episode_last_at is None or at_ms - episode_last_at > 15 * 60_000:
+                if episode_last_at is not None and not episode_warned:
+                    missed_episodes += 1
+                episode_count += 1
+                episode_warned = False
+            episode_warned = episode_warned or warned
+            episode_last_at = at_ms
+        if episode_last_at is not None and not episode_warned:
+            missed_episodes += 1
         result: dict[str, float | None] = {
             "coverage_80": float(np.mean(inside)),
-            "mean_interval_width": float(np.mean(2.0 * half_width)),
+            "mean_interval_width": float(np.mean(high - low)),
             "interval_score_80": float(np.mean(interval_score)),
             "hypo_samples": float(hypo_count),
+            "hypo_low_points": float(hypo_count),
+            "hypo_low_episodes": float(episode_count),
+            "hypo_low_days": float(len(low_days)),
+            "hypo_recall": (
+                float(true_positive / hypo_count) if hypo_count else None
+            ),
+            "hypo_fpr": (
+                float(false_positive / negative_count) if negative_count else None
+            ),
+            "hypo_missed_episodes": float(missed_episodes),
+            "low_zone_mae": (
+                float(np.mean(np.abs(prediction[low_zone] - target[low_zone])))
+                if low_zone_count
+                else None
+            ),
             "hypo_miss_rate": (
-                float(hypo_misses / hypo_count) if hypo_count else None
+                float(false_negative / hypo_count) if hypo_count else None
             ),
         }
         for band_index, (start, end) in enumerate(STATIC_BANDS):
@@ -3495,21 +4352,131 @@ class ForecastService:
                 last_by_day[day] = anchor_ms
         return result
 
+    @classmethod
+    def _prospective_dense_windows(
+        cls,
+        readings: Sequence[GlucoseReadingRecord],
+        windows: Sequence[tuple[int, np.ndarray]],
+        *,
+        strictly_after_ms: int,
+    ) -> tuple[list[tuple[int, np.ndarray]], dict[str, Any]]:
+        """Select independent anchors from complete dense local days after a freeze.
+
+        The local day containing the artifact cutoff is always discarded, even
+        when the cutoff happens just after midnight.  Eligible later days must
+        cover the beginning and the final forecastable part of the day, remain
+        dense between those edges, and are then downsampled to non-overlapping
+        120-minute anchors.  No target that helped fit or calibrate the artifact
+        can therefore re-enter its prospective decision.
+        """
+
+        cutoff_rows = [
+            row for row in readings if row.measured_at_ms <= strictly_after_ms
+        ]
+        if not cutoff_rows:
+            return [], {
+                "protocol": STATIC_PROSPECTIVE_PROTOCOL,
+                "dense_days": 0,
+                "independent_anchors": 0,
+                "local_days_sha256": hashlib.sha256(b"").hexdigest(),
+            }
+        cutoff_row = max(cutoff_rows, key=lambda row: row.measured_at_ms)
+        cutoff_offset_ms = int(cutoff_row.utc_offset_minutes or 0) * 60_000
+        cutoff_local_day = (
+            cutoff_row.measured_at_ms + cutoff_offset_ms
+        ) // 86_400_000
+
+        grouped: dict[int, list[tuple[int, np.ndarray]]] = {}
+        for window in windows:
+            anchor = readings[window[0]]
+            day = cls._window_local_day(readings, window)
+            if anchor.measured_at_ms <= strictly_after_ms or day <= cutoff_local_day:
+                continue
+            grouped.setdefault(day, []).append(window)
+
+        eligible: list[tuple[int, list[tuple[int, np.ndarray]], float]] = []
+        for day, day_windows in sorted(grouped.items()):
+            day_windows.sort(key=lambda item: readings[item[0]].measured_at_ms)
+            times = [readings[item[0]].measured_at_ms for item in day_windows]
+            if len(times) < 2:
+                continue
+            local_minutes = [
+                (
+                    reading.measured_at_ms // 60_000
+                    + int(reading.utc_offset_minutes or 0)
+                )
+                % (24 * 60)
+                for reading in (readings[item[0]] for item in day_windows)
+            ]
+            span_hours = (times[-1] - times[0]) / 3_600_000.0
+            expected = max(1, int(round((times[-1] - times[0]) / STEP_MS)) + 1)
+            occupied = len({value // STEP_MS for value in times})
+            density = occupied / expected
+            # Complete targets end two hours after their anchor, so an anchor at
+            # 21:00 still verifies the day through 23:00.  The one-hour edge
+            # tolerance accommodates ordinary sensor gaps without admitting a
+            # partial morning/evening as a "whole" day.
+            covers_day_edges = min(local_minutes) <= 60 and max(local_minutes) >= 21 * 60
+            if (
+                span_hours >= 20.0
+                and density >= STATIC_MIN_DAY_DENSITY
+                and covers_day_edges
+            ):
+                eligible.append((day, day_windows, density))
+
+        available_days = len(eligible)
+        # The cohort is preregistered: exactly the earliest fourteen eligible
+        # days, never an operator-selected expanding prefix.  Four days suffice
+        # for the point/day gate, while fourteen provide a materially better
+        # chance of observing the predeclared low-glucose safety evidence.
+        eligible = eligible[:STATIC_PROSPECTIVE_MIN_DAYS]
+        independent: list[tuple[int, np.ndarray]] = []
+        for _day, day_windows, _density in eligible:
+            independent.extend(cls._independent_windows(readings, day_windows))
+        day_ids = [item[0] for item in eligible]
+        day_digest = hashlib.sha256(
+            ",".join(str(day) for day in day_ids).encode("ascii")
+        ).hexdigest()
+        return independent, {
+            "protocol": STATIC_PROSPECTIVE_PROTOCOL,
+            "dense_days": len(eligible),
+            "available_dense_days": available_days,
+            "independent_anchors": len(independent),
+            "local_days_sha256": day_digest,
+            "minimum_day_hours": 20.0,
+            "minimum_day_density": STATIC_MIN_DAY_DENSITY,
+            "edge_tolerance_minutes": 60,
+            "first_local_day": day_ids[0] if day_ids else None,
+            "last_local_day": day_ids[-1] if day_ids else None,
+        }
+
     @staticmethod
     def _frozen_calibration(
         prediction: np.ndarray, target: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
-        residual = target - prediction
-        bias = np.median(residual, axis=0)
-        centered = residual - bias.reshape(1, -1)
-        try:
-            half_width = np.quantile(
-                np.abs(centered), STATIC_INTERVAL_LEVEL, axis=0, method="higher"
-            )
-        except TypeError:  # NumPy < 1.22 compatibility.
-            half_width = np.quantile(
-                np.abs(centered), STATIC_INTERVAL_LEVEL, axis=0, interpolation="higher"
-            )
+        if (
+            prediction.ndim != 2
+            or prediction.shape != target.shape
+            or prediction.shape[1] != HORIZON_STEPS
+            or prediction.shape[0] <= 0
+            or not np.isfinite(prediction).all()
+            or not np.isfinite(target).all()
+        ):
+            raise ValueError("calibration requires finite N x 24 prediction and target arrays")
+        # Never shift a point forecast using only a tiny calibration tail. The
+        # calibration fold estimates uncertainty, not a mutable median offset.
+        bias = np.zeros(HORIZON_STEPS, dtype=np.float64)
+        rank = min(
+            prediction.shape[0],
+            max(
+                1,
+                math.ceil(
+                    (prediction.shape[0] + 1) * STATIC_INTERVAL_LEVEL
+                ),
+            ),
+        )
+        ordered_scores = np.sort(np.abs(target - prediction), axis=0)
+        half_width = ordered_scores[rank - 1]
         half_width = np.maximum.accumulate(np.maximum(7.0, half_width))
         sigma = half_width / 1.2816
         return np.asarray(bias, dtype=np.float64), np.asarray(sigma, dtype=np.float64)
@@ -3556,6 +4523,8 @@ class ForecastService:
         required = (
             "mae",
             "rmse",
+            "mae_5",
+            "mae_15",
             "mae_30",
             "mae_60",
             "mae_120",
@@ -3565,6 +4534,13 @@ class ForecastService:
             "coverage_band_1",
             "coverage_band_2",
             "coverage_band_3",
+            "hypo_low_points",
+            "hypo_low_episodes",
+            "hypo_low_days",
+            "hypo_recall",
+            "hypo_fpr",
+            "hypo_missed_episodes",
+            "low_zone_mae",
         )
         if (
             not finite
@@ -3604,13 +4580,16 @@ class ForecastService:
             else int(math.ceil(0.70 * test_day_count))
         )
         minimum_reference_improvement = 0.08 if test_day_count < 8 else 0.05
-        no_bad_day = bool(np.all(candidate_days <= reference_days * 1.02))
+        no_bad_day = bool(
+            np.all(candidate_days <= reference_days * 1.02)
+            and np.all(candidate_days <= pinned_days * 1.02)
+        )
         horizons_safe = all(
             float(candidate_metrics[key])
             <= max(float(reference_metrics[key]) * 1.02, float(reference_metrics[key]) + 0.5)
             and float(candidate_metrics[key])
             <= max(float(pinned_metrics[key]) * 1.02, float(pinned_metrics[key]) + 0.5)
-            for key in ("mae_30", "mae_60", "mae_120")
+            for key in ("mae_5", "mae_15", "mae_30", "mae_60", "mae_120")
         )
         coverage_safe = (
             0.75 <= float(candidate_metrics["coverage_80"]) <= 0.90
@@ -3618,6 +4597,48 @@ class ForecastService:
                 float(candidate_metrics[f"coverage_band_{index}"]) >= 0.70
                 for index in range(len(STATIC_BANDS))
             )
+        )
+        hypo_evidence_sufficient = bool(
+            float(candidate_metrics["hypo_low_points"]) >= 40
+            and float(candidate_metrics["hypo_low_episodes"]) >= 5
+            and float(candidate_metrics["hypo_low_days"]) >= 4
+        )
+        hypo_recall_safe = bool(
+            float(candidate_metrics["hypo_recall"])
+            >= float(reference_metrics["hypo_recall"]) - 0.05
+            and float(candidate_metrics["hypo_recall"])
+            >= float(pinned_metrics["hypo_recall"]) - 0.05
+        )
+        hypo_episode_safe = bool(
+            float(candidate_metrics["hypo_missed_episodes"])
+            <= float(reference_metrics["hypo_missed_episodes"])
+            and float(candidate_metrics["hypo_missed_episodes"])
+            <= float(pinned_metrics["hypo_missed_episodes"])
+        )
+        hypo_false_alarm_safe = bool(
+            float(candidate_metrics["hypo_fpr"])
+            <= float(reference_metrics["hypo_fpr"]) + 0.05
+            and float(candidate_metrics["hypo_fpr"])
+            <= float(pinned_metrics["hypo_fpr"]) + 0.05
+        )
+        low_zone_safe = bool(
+            float(candidate_metrics["low_zone_mae"])
+            <= max(
+                float(reference_metrics["low_zone_mae"]) * 1.02,
+                float(reference_metrics["low_zone_mae"]) + 0.5,
+            )
+            and float(candidate_metrics["low_zone_mae"])
+            <= max(
+                float(pinned_metrics["low_zone_mae"]) * 1.02,
+                float(pinned_metrics["low_zone_mae"]) + 0.5,
+            )
+        )
+        hypo_safe = bool(
+            hypo_evidence_sufficient
+            and hypo_recall_safe
+            and hypo_episode_safe
+            and hypo_false_alarm_safe
+            and low_zone_safe
         )
         result.update(
             {
@@ -3632,12 +4653,24 @@ class ForecastService:
                 "no_day_regression_over_2pct": no_bad_day,
                 "horizons_safe": bool(horizons_safe),
                 "coverage_safe": bool(coverage_safe),
+                "hypo_evidence_sufficient": hypo_evidence_sufficient,
+                "hypo_recall_safe": hypo_recall_safe,
+                "hypo_episode_safe": hypo_episode_safe,
+                "hypo_false_alarm_safe": hypo_false_alarm_safe,
+                "low_zone_safe": low_zone_safe,
+                "hypo_safe": hypo_safe,
                 "interval_score_safe": float(candidate_metrics["interval_score_80"])
-                <= float(reference_metrics["interval_score_80"]) * 0.98,
+                <= float(reference_metrics["interval_score_80"]) * 0.98
+                and float(candidate_metrics["interval_score_80"])
+                <= float(pinned_metrics["interval_score_80"]) * 0.98,
                 "rmse_safe": float(candidate_metrics["rmse"])
-                <= float(reference_metrics["rmse"]) * 0.98,
+                <= float(reference_metrics["rmse"]) * 0.98
+                and float(candidate_metrics["rmse"])
+                <= float(pinned_metrics["rmse"]) * 0.98,
                 "anchor_mae_safe": float(candidate_metrics["mae"])
-                <= float(reference_metrics["mae"]) * 0.97,
+                <= float(reference_metrics["mae"]) * 0.97
+                and float(candidate_metrics["mae"])
+                <= float(pinned_metrics["mae"]) * 0.97,
             }
         )
         result["accepted"] = bool(
@@ -3651,8 +4684,52 @@ class ForecastService:
             and bool(result["interval_score_safe"])
             and bool(result["rmse_safe"])
             and bool(result["anchor_mae_safe"])
+            and hypo_safe
         )
         return result
+
+    @staticmethod
+    def _non_hypo_promotion_gates(
+        candidate_metrics: dict[str, float | None],
+        reference_metrics: dict[str, float | None],
+        pinned_metrics: dict[str, float | None],
+        day_results: Sequence[dict[str, float]],
+        *,
+        test_day_count: int,
+        finite: bool = True,
+    ) -> dict[str, bool | float | int]:
+        """Evaluate every preregistered gate except unavailable hypo evidence.
+
+        The prospective decision may be *inconclusive* only when the point,
+        interval, and independent-day gates would otherwise pass.  Supplying a
+        common synthetic hypo-perfect block lets the canonical gate remain the
+        single implementation of those non-hypoglycemia thresholds; none of the
+        synthetic values are persisted or used to approve a model.
+        """
+
+        synthetic_hypo = {
+            "hypo_low_points": 40.0,
+            "hypo_low_episodes": 5.0,
+            "hypo_low_days": 4.0,
+            "hypo_recall": 1.0,
+            "hypo_fpr": 0.0,
+            "hypo_missed_episodes": 0.0,
+            "low_zone_mae": 1.0,
+        }
+
+        def with_synthetic_hypo(
+            metrics: dict[str, float | None],
+        ) -> dict[str, float | None]:
+            return {**metrics, **synthetic_hypo}
+
+        return ForecastService.static_promotion_gates(
+            with_synthetic_hypo(candidate_metrics),
+            with_synthetic_hypo(reference_metrics),
+            with_synthetic_hypo(pinned_metrics),
+            day_results,
+            test_day_count=test_day_count,
+            finite=finite,
+        )
 
     @staticmethod
     def _event_channel_gate_result(
@@ -3785,12 +4862,14 @@ class ForecastService:
         session: Session,
         data_cutoff_ms: int | None = None,
         candidate_version: str | None = None,
+        stage_pending: bool = True,
     ) -> ForecastTrainResponse:
         """Manually build one frozen candidate from an immutable causal snapshot.
 
         This method is intentionally reachable only from the local admin CLI. It
-        never activates a candidate: a model that passes the independent-day gate
-        is staged with ``status=candidate`` and requires an explicit activation.
+        never activates a candidate. The normal path freezes a development-gate
+        pass with ``status=pending``; only a later one-shot prospective approval
+        can make it eligible for a separate explicit activation.
         """
 
         with self._training_lock:
@@ -3798,6 +4877,7 @@ class ForecastService:
                 session,
                 data_cutoff_ms=data_cutoff_ms,
                 candidate_version=candidate_version,
+                stage_pending=stage_pending,
             )
 
     def _train_static_model_unlocked(
@@ -3806,8 +4886,10 @@ class ForecastService:
         *,
         data_cutoff_ms: int | None,
         candidate_version: str | None,
+        stage_pending: bool,
     ) -> ForecastTrainResponse:
         champion = self._champion(session)
+        champion_parameters_json = champion.parameters_json
         source_revision_before = self._source_revision(session)
         latest_available = session.scalar(
             select(func.max(GlucoseReadingRecord.measured_at_ms))
@@ -3981,23 +5063,36 @@ class ForecastService:
         )
         parameters["residual_sigma"] = sigma.tolist()
         parameters["frozen_calibration"] = {
-            "method": "frozen-day-block-conformal-v1",
+            "method": "frozen-uncentered-conformal-v2",
             "interval_level": STATIC_INTERVAL_LEVEL,
             "sample_count": len(calibration_independent),
+            "finite_sample_quantile": _finite_sample_quantile_level(
+                len(calibration_independent)
+            ),
+            "finite_sample_rank": min(
+                len(calibration_independent),
+                math.ceil(
+                    (len(calibration_independent) + 1) * STATIC_INTERVAL_LEVEL
+                ),
+            ),
+            "quantile_method": "exact-order-statistic",
+            "point_bias": "disabled",
+            "low_guard_threshold_mg_dl": STATIC_LOW_GUARD_MG_DL,
+            "safety_envelope": "reference-interval-union-v1",
             "bias_mg_dl": bias.tolist(),
             "sigma_mg_dl": sigma.tolist(),
+            "reference_sigma_mg_dl": reference_sigma.tolist(),
         }
 
         _test_x, test_reference, test_target, test_raw = raw_static(test_independent)
-        candidate_prediction = np.clip(
-            test_reference
-            + blend.reshape(1, -1) * (test_raw - test_reference)
-            + bias.reshape(1, -1),
-            20.0,
-            600.0,
-        )
         reference_prediction = np.clip(
-            test_reference + reference_bias.reshape(1, -1), 20.0, 600.0
+            test_reference, 20.0, 600.0
+        )
+        candidate_prediction, candidate_safety_sigma = _apply_static_predictor(
+            test_raw,
+            reference_prediction,
+            sigma,
+            parameters,
         )
 
         champion_parameters = (
@@ -4032,25 +5127,42 @@ class ForecastService:
             )
         elif champion.version == BASELINE_VERSION:
             pinned_sigma = pinned_sigma * 1.25
-        if pinned_sigma.shape != (HORIZON_STEPS,) or not np.isfinite(pinned_sigma).all():
+        if pinned_sigma.shape not in {
+            (HORIZON_STEPS,),
+            pinned_prediction.shape,
+        } or not np.isfinite(pinned_sigma).all():
             pinned_sigma = np.asarray(
                 _default_parameters()["residual_sigma"], dtype=np.float64
             )
 
         candidate_metrics: dict[str, float | None] = {
             **self._metrics(candidate_prediction, test_target),
-            **self._interval_metrics(candidate_prediction, test_target, sigma),
+            **self._interval_metrics(
+                candidate_prediction,
+                test_target,
+                candidate_safety_sigma,
+                readings=readings,
+                windows=test_independent,
+            ),
         }
         reference_metrics: dict[str, float | None] = {
             **self._metrics(reference_prediction, test_target),
             **self._interval_metrics(
-                reference_prediction, test_target, reference_sigma
+                reference_prediction,
+                test_target,
+                reference_sigma,
+                readings=readings,
+                windows=test_independent,
             ),
         }
         pinned_metrics: dict[str, float | None] = {
             **self._metrics(pinned_prediction, champion_target),
             **self._interval_metrics(
-                pinned_prediction, champion_target, pinned_sigma
+                pinned_prediction,
+                champion_target,
+                pinned_sigma,
+                readings=readings,
+                windows=test_independent,
             ),
         }
         day_results = self._equal_day_results(
@@ -4077,55 +5189,31 @@ class ForecastService:
         # Overlapping windows are retained only as a transparent secondary
         # diagnostic; they never participate in the gate or confidence.
         _diag_x, diag_reference, diag_target, diag_raw = raw_static(test_windows)
-        diag_prediction = np.clip(
-            diag_reference
-            + blend.reshape(1, -1) * (diag_raw - diag_reference)
-            + bias.reshape(1, -1),
-            20.0,
-            600.0,
+        diag_prediction, _diag_sigma = _apply_static_predictor(
+            diag_raw,
+            np.clip(diag_reference, 20.0, 600.0),
+            sigma,
+            parameters,
         )
         diagnostic_metrics = self._metrics(diag_prediction, diag_target)
 
         test_days = len(day_results)
-        confidence_cap = 0.35 if test_days < 8 else (0.50 if test_days < 14 else 0.65)
-        reference_skill = _clamp(
-            1.0
-            - float(candidate_metrics["mae"] or 0.0)
-            / max(1e-6, float(reference_metrics["mae"] or 0.0)),
-            0.0,
-            0.25,
-        ) / 0.25
-        calibration_skill = _clamp(
-            1.0 - abs(float(candidate_metrics["coverage_80"] or 0.0) - 0.8) / 0.2,
-            0.0,
-            1.0,
+        development_reliability = _static_reliability(
+            candidate_metrics,
+            reference_metrics,
+            gates,
+            test_days=test_days,
+            independent_anchors=len(test_independent),
+            candidate_horizon_mae=np.mean(
+                np.abs(candidate_prediction - test_target), axis=0
+            ),
+            reference_horizon_mae=np.mean(
+                np.abs(reference_prediction - test_target), axis=0
+            ),
         )
-        winning_fraction = float(gates.get("winning_days", 0)) / max(1, test_days)
-        evidence_fraction = _clamp(len(test_independent) / max(1, test_days * 12), 0.0, 1.0)
-        reliability_overall = confidence_cap * (
-            0.45 * reference_skill
-            + 0.25 * calibration_skill
-            + 0.20 * winning_fraction
-            + 0.10 * evidence_fraction
-        )
-        reliability_overall = _clamp(reliability_overall, 0.05, confidence_cap)
-        by_horizon = [
-            _clamp(
-                reliability_overall
-                * _clamp(
-                    float(reference_error)
-                    / max(float(candidate_error), float(reference_error), 1e-6),
-                    0.65,
-                    1.10,
-                ),
-                0.0,
-                confidence_cap,
-            )
-            for candidate_error, reference_error in zip(
-                np.mean(np.abs(candidate_prediction - test_target), axis=0),
-                np.mean(np.abs(reference_prediction - test_target), axis=0),
-            )
-        ]
+        reliability_overall = float(development_reliability["overall"])
+        by_horizon = development_reliability["by_horizon"]
+        confidence_cap = float(development_reliability["test_day_cap"])
 
         now = _now_ms()
         if candidate_version is None:
@@ -4164,13 +5252,22 @@ class ForecastService:
             "reference_anchor_mae": float(reference_metrics["mae"] or 0.0),
             "pinned_anchor_mae": float(pinned_metrics["mae"] or 0.0),
             "candidate_rmse": float(candidate_metrics["rmse"] or 0.0),
+            "candidate_mae_5": float(candidate_metrics["mae_5"] or 0.0),
+            "candidate_mae_15": float(candidate_metrics["mae_15"] or 0.0),
             "reference_rmse": float(reference_metrics["rmse"] or 0.0),
             "candidate_mae_30": float(candidate_metrics["mae_30"] or 0.0),
             "candidate_mae_60": float(candidate_metrics["mae_60"] or 0.0),
             "candidate_mae_120": float(candidate_metrics["mae_120"] or 0.0),
+            "reference_mae_5": float(reference_metrics["mae_5"] or 0.0),
+            "reference_mae_15": float(reference_metrics["mae_15"] or 0.0),
             "reference_mae_30": float(reference_metrics["mae_30"] or 0.0),
             "reference_mae_60": float(reference_metrics["mae_60"] or 0.0),
             "reference_mae_120": float(reference_metrics["mae_120"] or 0.0),
+            "pinned_mae_5": float(pinned_metrics["mae_5"] or 0.0),
+            "pinned_mae_15": float(pinned_metrics["mae_15"] or 0.0),
+            "pinned_mae_30": float(pinned_metrics["mae_30"] or 0.0),
+            "pinned_mae_60": float(pinned_metrics["mae_60"] or 0.0),
+            "pinned_mae_120": float(pinned_metrics["mae_120"] or 0.0),
             "candidate_coverage_80": float(candidate_metrics["coverage_80"] or 0.0),
             "candidate_interval_score_80": float(
                 candidate_metrics["interval_score_80"] or 0.0
@@ -4178,6 +5275,34 @@ class ForecastService:
             "reference_interval_score_80": float(
                 reference_metrics["interval_score_80"] or 0.0
             ),
+            "candidate_hypo_recall": float(
+                candidate_metrics["hypo_recall"] or 0.0
+            ),
+            "reference_hypo_recall": float(
+                reference_metrics["hypo_recall"] or 0.0
+            ),
+            "candidate_hypo_fpr": float(candidate_metrics["hypo_fpr"] or 0.0),
+            "reference_hypo_fpr": float(reference_metrics["hypo_fpr"] or 0.0),
+            "candidate_hypo_missed_episodes": float(
+                candidate_metrics["hypo_missed_episodes"] or 0.0
+            ),
+            "reference_hypo_missed_episodes": float(
+                reference_metrics["hypo_missed_episodes"] or 0.0
+            ),
+            "candidate_low_zone_mae": float(
+                candidate_metrics["low_zone_mae"] or 0.0
+            ),
+            "reference_low_zone_mae": float(
+                reference_metrics["low_zone_mae"] or 0.0
+            ),
+            "pinned_low_zone_mae": float(
+                pinned_metrics["low_zone_mae"] or 0.0
+            ),
+            "hypo_low_points": float(candidate_metrics["hypo_low_points"] or 0.0),
+            "hypo_low_episodes": float(
+                candidate_metrics["hypo_low_episodes"] or 0.0
+            ),
+            "hypo_low_days": float(candidate_metrics["hypo_low_days"] or 0.0),
             "test_days": test_days,
             "test_independent_anchors": len(test_independent),
             "calibration_independent_anchors": len(calibration_independent),
@@ -4193,6 +5318,28 @@ class ForecastService:
             elif isinstance(value, (int, float)) and math.isfinite(float(value)):
                 evaluation[f"gate_{key}"] = value
 
+        # A prospective candidate deliberately ignores the development-fold
+        # promotion result.  It is frozen now, but cannot become runnable until
+        # a preregistered fourteen-day future cohort passes the same gates.
+        development_evaluation = dict(evaluation)
+        development_accepted = accepted
+        pending_eligible = bool(
+            stage_pending
+            and development_accepted
+            and cutoff_ms == int(latest_available)
+        )
+        # Development evidence is diagnostic only. Even the private historical
+        # helper path cannot emit an accepted/activation-eligible artifact.
+        accepted = False
+        evaluation = dict(evaluation)
+        evaluation["accepted"] = 0
+        evaluation["prospective_pending"] = int(pending_eligible)
+        evaluation["development_only"] = int(not stage_pending)
+        if pending_eligible:
+            self._assert_prospective_registration_allowed(
+                session, cutoff_ms=cutoff_ms
+            )
+
         network = parameters["network"]
         parameter_count = int(
             sum(
@@ -4203,7 +5350,7 @@ class ForecastService:
         max_received_at = max(int(row.received_at_ms) for row in readings)
         event_revision = source_revision_before[3]
         parameters["artifact"] = {
-            "artifact_version": 3,
+            "artifact_version": 4,
             "engine_version": FORECAST_ENGINE_VERSION,
             "architecture": STATIC_PERSONAL_ARCHITECTURE,
             "feature_schema": STATIC_FEATURE_SCHEMA,
@@ -4224,6 +5371,7 @@ class ForecastService:
                 "max_received_at_ms": max_received_at,
                 "event_revision": event_revision,
                 "active_event_count": len(events),
+                "glucose_source_revision": source_revision_before[5],
             },
             "split": split,
             "band_definitions": [
@@ -4247,18 +5395,48 @@ class ForecastService:
             },
             "evaluation": evaluation,
             "accepted": accepted,
+            "predictor_sha256": _static_predictor_hash(parameters),
         }
+        parameters["artifact"]["development_evaluation"] = (
+            development_evaluation
+        )
+        if pending_eligible:
+            comparator_parameters = _json_dict(champion.parameters_json)
+            parameters["artifact"]["approval"] = {
+                "state": "pending_prospective",
+                "protocol": STATIC_PROSPECTIVE_PROTOCOL,
+                "minimum_new_days": STATIC_PROSPECTIVE_MIN_DAYS,
+                "strictly_after_ms": cutoff_ms,
+                "development_gate_passed": bool(development_accepted),
+                "freeze_time_ms": now,
+                "source_revision": list(source_revision_before),
+                "max_received_at_ms": max_received_at,
+                "pinned_comparator_version": champion.version,
+                "pinned_comparator_sha256": _model_parameters_hash(
+                    comparator_parameters
+                ),
+            }
         parameters["artifact"]["content_sha256"] = _artifact_content_hash(
             parameters
         )
-        reason = (
-            "Passed the independent-day static promotion gate; explicit activation is required"
-            if accepted
-            else "Rejected: independent-day evidence did not beat the frozen persistence and pinned comparators"
-        )
+        if pending_eligible:
+            reason = (
+                "Frozen pending a preregistered fourteen-day prospective evaluation; "
+                "not eligible for activation"
+            )
+        elif stage_pending and development_accepted:
+            reason = (
+                "Rejected: a prospective artifact must freeze at the latest available reading"
+            )
+        else:
+            reason = (
+                "Development-only gate passed; this artifact cannot be activated"
+                if development_accepted
+                else "Rejected: independent-day evidence did not beat the frozen persistence and pinned comparators"
+            )
         candidate = ForecastModelRecord(
             version=version,
-            status="candidate" if accepted else "rejected",
+            status="pending" if pending_eligible else "rejected",
             architecture=STATIC_PERSONAL_ARCHITECTURE,
             created_at_ms=now,
             trained_at_ms=now,
@@ -4292,14 +5470,810 @@ class ForecastService:
                 sample_count=len(train_windows),
                 metrics={"source_revision_changed": 1},
             )
+        active_pin_version = session.scalar(
+            select(BackendMetadataRecord.value_text).where(
+                BackendMetadataRecord.key == ACTIVE_MODEL_METADATA_KEY
+            )
+        )
+        fresh_champion = session.scalar(
+            select(ForecastModelRecord)
+            .where(ForecastModelRecord.version == champion.version)
+            .execution_options(populate_existing=True)
+        )
+        if (
+            active_pin_version != champion.version
+            or fresh_champion is None
+            or fresh_champion.parameters_json != champion_parameters_json
+            or not self._runtime_model_dependencies_are_valid(
+                session, fresh_champion
+            )
+        ):
+            session.rollback()
+            return ForecastTrainResponse(
+                status="skipped",
+                promoted=False,
+                model_version=champion.version,
+                reason="Active comparator changed during training; retry from a fresh snapshot",
+                sample_count=len(train_windows),
+                metrics={"active_comparator_changed": 1},
+            )
+        if pending_eligible:
+            self._assert_prospective_registration_allowed(
+                session, cutoff_ms=cutoff_ms
+            )
         session.add(candidate)
         session.commit()
         return ForecastTrainResponse(
-            status="accepted" if accepted else "rejected",
+            status="pending" if pending_eligible else "rejected",
             promoted=False,
             model_version=version,
             reason=reason,
             sample_count=len(train_windows),
+            metrics=evaluation,
+        )
+
+    def evaluate_static_candidate(
+        self, session: Session, version: str
+    ) -> ForecastTrainResponse:
+        """Evaluate one frozen pending artifact on strictly future local days.
+
+        This operator-only path never fits, tunes, calibrates, or activates a
+        model.  A conclusive decision replaces only the checksummed prospective
+        evaluation/approval envelope and the database status.  All predictor
+        fields outside ``artifact`` remain byte-for-byte equivalent.
+        """
+
+        with self._training_lock:
+            return self._evaluate_static_candidate_unlocked(session, version)
+
+    @staticmethod
+    def _permanently_reject_pending_candidate(
+        session: Session,
+        record: ForecastModelRecord,
+        *,
+        original_parameters_json: str,
+        reason: str,
+    ) -> ForecastTrainResponse:
+        """Atomically terminalize a pending artifact that can never be replayed.
+
+        A permanent causal/snapshot violation must not leave the singleton
+        preregistration slot occupied forever. The exact original parameter JSON
+        is part of the compare-and-swap so a concurrent evaluator or operator
+        change cannot be overwritten by this rejection.
+        """
+
+        version = record.version
+        sample_count = int(record.sample_count)
+        session.rollback()
+        session.execute(text("BEGIN IMMEDIATE"))
+        outcome = session.execute(
+            update(ForecastModelRecord)
+            .where(
+                ForecastModelRecord.version == version,
+                ForecastModelRecord.status == "pending",
+                ForecastModelRecord.parameters_json == original_parameters_json,
+            )
+            .values(status="rejected", decision_reason=reason),
+            execution_options={"synchronize_session": False},
+        )
+        if outcome.rowcount != 1:
+            session.rollback()
+            raise ValueError(
+                "pending artifact changed while applying permanent invalidation"
+            )
+        session.commit()
+        return ForecastTrainResponse(
+            status="rejected",
+            promoted=False,
+            model_version=version,
+            reason=reason,
+            sample_count=sample_count,
+            metrics={"permanent_invalidation": 1},
+        )
+
+    def _evaluate_static_candidate_unlocked(
+        self, session: Session, version: str
+    ) -> ForecastTrainResponse:
+        selected = session.get(ForecastModelRecord, version)
+        if selected is None:
+            raise ValueError(f"unknown forecast model version: {version}")
+        if selected.status != "pending":
+            raise ValueError(
+                f"forecast model {version} is not a pending prospective candidate"
+            )
+        original_parameters_json = selected.parameters_json
+        if not self._stored_static_model_is_valid(
+            selected, require_approved=False
+        ):
+            return self._permanently_reject_pending_candidate(
+                session,
+                selected,
+                original_parameters_json=original_parameters_json,
+                reason="Permanently rejected: pending forecast artifact is corrupt or incompatible",
+            )
+
+        parameters = _json_dict(original_parameters_json)
+        artifact = parameters.get("artifact", {})
+        approval = artifact.get("approval")
+        predictor_hash = artifact.get("predictor_sha256")
+        comparator_version = (
+            approval.get("pinned_comparator_version")
+            if isinstance(approval, dict)
+            else None
+        )
+        comparator_hash = (
+            approval.get("pinned_comparator_sha256")
+            if isinstance(approval, dict)
+            else None
+        )
+        if (
+            not isinstance(approval, dict)
+            or approval.get("state") != "pending_prospective"
+            or approval.get("protocol") != STATIC_PROSPECTIVE_PROTOCOL
+            or artifact.get("accepted") is not False
+            or not isinstance(predictor_hash, str)
+            or len(predictor_hash) != 64
+            or predictor_hash != _static_predictor_hash(parameters)
+            or not isinstance(comparator_version, str)
+            or not isinstance(comparator_hash, str)
+            or len(comparator_hash) != 64
+            or int(_finite(approval.get("minimum_new_days"), -1))
+            != STATIC_PROSPECTIVE_MIN_DAYS
+        ):
+            return self._permanently_reject_pending_candidate(
+                session,
+                selected,
+                original_parameters_json=original_parameters_json,
+                reason="Permanently rejected: model was not frozen with the prospective protocol",
+            )
+
+        frozen_comparator = session.get(ForecastModelRecord, comparator_version)
+        if (
+            frozen_comparator is None
+            or not self._runtime_model_dependencies_are_valid(
+                session, frozen_comparator
+            )
+            or _model_parameters_hash(_json_dict(frozen_comparator.parameters_json))
+            != comparator_hash
+        ):
+            return self._permanently_reject_pending_candidate(
+                session,
+                selected,
+                original_parameters_json=original_parameters_json,
+                reason="Permanently rejected: frozen pinned comparator is unavailable or changed",
+            )
+        frozen_comparator_parameters_json = frozen_comparator.parameters_json
+
+        cutoff_ms = int(_finite(artifact.get("data_cutoff_ms"), -1))
+        if cutoff_ms <= 0 or cutoff_ms != int(selected.training_cutoff_ms or -1):
+            return self._permanently_reject_pending_candidate(
+                session,
+                selected,
+                original_parameters_json=original_parameters_json,
+                reason="Permanently rejected: pending artifact has an invalid data cutoff",
+            )
+
+        source_revision_before = self._source_revision(session)
+        training_readings = self._load_readings(
+            session, through_ms=cutoff_ms, limit=60_000
+        )
+        training_events = self._load_events(
+            session, through_ms=cutoff_ms, known_through_ms=cutoff_ms
+        )
+        if (
+            not training_readings
+            or int(training_readings[-1].measured_at_ms) != cutoff_ms
+            or _dataset_fingerprint(training_readings, training_events)
+            != artifact.get("dataset_sha256")
+        ):
+            return self._permanently_reject_pending_candidate(
+                session,
+                selected,
+                original_parameters_json=original_parameters_json,
+                reason=(
+                    "Permanently rejected: frozen training snapshot no longer matches "
+                    "the artifact"
+                ),
+            )
+
+        latest_available = session.scalar(
+            select(func.max(GlucoseReadingRecord.measured_at_ms))
+        )
+        if latest_available is None or int(latest_available) <= cutoff_ms:
+            return ForecastTrainResponse(
+                status="skipped",
+                promoted=False,
+                model_version=version,
+                reason="No glucose readings exist after the frozen data cutoff",
+                sample_count=0,
+                metrics={"prospective_dense_days": 0},
+            )
+        readings = self._load_readings(
+            session,
+            through_ms=int(latest_available),
+            from_ms=cutoff_ms - 96 * 60 * 60_000 - MATCH_TOLERANCE_MS,
+            limit=200_000,
+            earliest_first=True,
+        )
+        all_windows, causal_manifest = self._prospective_causal_windows(readings)
+        future_windows, future_manifest = self._prospective_dense_windows(
+            readings, all_windows, strictly_after_ms=cutoff_ms
+        )
+        future_manifest.update(causal_manifest)
+        future_days = int(future_manifest["dense_days"])
+        if (
+            future_days < STATIC_PROSPECTIVE_MIN_DAYS
+            or len(future_windows) < 8 * future_days
+        ):
+            return ForecastTrainResponse(
+                status="skipped",
+                promoted=False,
+                model_version=version,
+                reason=(
+                    "Need the complete preregistered fourteen dense local days strictly after "
+                    "the frozen data cutoff"
+                ),
+                sample_count=len(future_windows),
+                metrics={
+                    "prospective_dense_days": future_days,
+                    "prospective_independent_anchors": len(future_windows),
+                },
+            )
+
+        cohort_start_ms = min(
+            readings[window[0]].measured_at_ms for window in future_windows
+        )
+        cohort_end_ms = max(
+            readings[window[0]].measured_at_ms + HORIZON_MINUTES * 60_000
+            for window in future_windows
+        )
+        freeze_time_ms = int(_finite(approval.get("freeze_time_ms"), -1))
+        received_before_freeze = session.scalar(
+            select(func.count(GlucoseReadingRecord.reading_id)).where(
+                GlucoseReadingRecord.measured_at_ms > cutoff_ms,
+                GlucoseReadingRecord.measured_at_ms
+                <= cohort_end_ms + MATCH_TOLERANCE_MS,
+                GlucoseReadingRecord.received_at_ms <= freeze_time_ms,
+            )
+        )
+        if freeze_time_ms <= 0 or int(received_before_freeze or 0) > 0:
+            return self._permanently_reject_pending_candidate(
+                session,
+                selected,
+                original_parameters_json=original_parameters_json,
+                reason=(
+                    "Permanently rejected: prospective cohort contains readings "
+                    "ingested before the freeze"
+                ),
+            )
+
+        # Current rows retain only their latest edit/tombstone. If such a
+        # mutation happened during or after this cohort, the earlier event value
+        # cannot be replayed exactly without immutable shadow forecasts. Fail
+        # closed and require a newly frozen candidate after the mutation.
+        unreplayable_mutations = session.scalar(
+            select(func.count(IntakeEventRecord.id)).where(
+                IntakeEventRecord.updated_at_ms > IntakeEventRecord.created_at_ms,
+                IntakeEventRecord.updated_at_ms >= cohort_start_ms,
+                IntakeEventRecord.occurred_at_ms <= cohort_end_ms,
+                IntakeEventRecord.occurred_at_ms
+                >= cohort_start_ms - 96 * 60 * 60_000,
+            )
+        )
+        if int(unreplayable_mutations or 0) > 0:
+            return self._permanently_reject_pending_candidate(
+                session,
+                selected,
+                original_parameters_json=original_parameters_json,
+                reason=(
+                    "Permanently rejected: intake edits/deletions overlap the frozen "
+                    "cohort and cannot be replayed exactly; stage a new candidate"
+                ),
+            )
+
+        decision_times_ms = {
+            window[0]: int(readings[window[0]].received_at_ms)
+            for window in future_windows
+        }
+        events = self._load_events(
+            session,
+            through_ms=max(decision_times_ms.values()),
+            known_through_ms=max(decision_times_ms.values()),
+        )
+        features, reference, target = self._dataset_for_parameters(
+            readings,
+            events,
+            future_windows,
+            parameters,
+            decision_times_ms=decision_times_ms,
+        )
+        reference_prediction = np.clip(reference, 20.0, 600.0)
+        raw_prediction = np.clip(
+            reference + _network_predict_batch(features, parameters), 20.0, 600.0
+        )
+        frozen_sigma = np.asarray(
+            parameters["frozen_calibration"]["sigma_mg_dl"], dtype=np.float64
+        )
+        candidate_prediction, candidate_sigma = _apply_static_predictor(
+            raw_prediction,
+            reference_prediction,
+            frozen_sigma,
+            parameters,
+        )
+        reference_sigma = np.asarray(
+            parameters["frozen_calibration"]["reference_sigma_mg_dl"],
+            dtype=np.float64,
+        )
+
+        def comparator_outputs(
+            record: ForecastModelRecord,
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            comparator_parameters = (
+                _baseline_parameters()
+                if record.version == BASELINE_VERSION
+                else (_json_dict(record.parameters_json) or _default_parameters())
+            )
+            comparator_x, comparator_base, comparator_target = (
+                self._dataset_for_parameters(
+                    readings,
+                    events,
+                    future_windows,
+                    comparator_parameters,
+                    decision_times_ms=decision_times_ms,
+                )
+            )
+            comparator_prediction = np.clip(
+                comparator_base
+                + _network_predict_batch(comparator_x, comparator_parameters),
+                20.0,
+                600.0,
+            )
+            comparator_sigma = np.asarray(
+                comparator_parameters.get(
+                    "residual_sigma", _default_parameters()["residual_sigma"]
+                ),
+                dtype=np.float64,
+            )
+            if record.architecture == STATIC_PERSONAL_ARCHITECTURE:
+                comparator_reference = self._reference_for_windows(
+                    readings,
+                    events,
+                    future_windows,
+                    comparator_parameters,
+                    decision_times_ms=decision_times_ms,
+                )
+                comparator_prediction, comparator_sigma = _apply_static_predictor(
+                    comparator_prediction,
+                    comparator_reference,
+                    comparator_sigma,
+                    comparator_parameters,
+                )
+            elif record.version == BASELINE_VERSION:
+                comparator_sigma = comparator_sigma * 1.25
+            if comparator_sigma.shape not in {
+                (HORIZON_STEPS,),
+                comparator_prediction.shape,
+            } or not np.isfinite(comparator_sigma).all():
+                comparator_sigma = np.asarray(
+                    _default_parameters()["residual_sigma"], dtype=np.float64
+                )
+            return comparator_prediction, comparator_sigma, comparator_target
+
+        pinned_prediction, pinned_sigma, pinned_target = comparator_outputs(
+            frozen_comparator
+        )
+        current_champion = self._champion(session)
+        current_champion_parameters_json = current_champion.parameters_json
+        current_prediction: np.ndarray | None = None
+        current_sigma: np.ndarray | None = None
+        current_target: np.ndarray | None = None
+        if current_champion.version != frozen_comparator.version:
+            current_prediction, current_sigma, current_target = comparator_outputs(
+                current_champion
+            )
+
+        candidate_metrics: dict[str, float | None] = {
+            **self._metrics(candidate_prediction, target),
+            **self._interval_metrics(
+                candidate_prediction,
+                target,
+                candidate_sigma,
+                readings=readings,
+                windows=future_windows,
+            ),
+        }
+        reference_metrics: dict[str, float | None] = {
+            **self._metrics(reference_prediction, target),
+            **self._interval_metrics(
+                reference_prediction,
+                target,
+                reference_sigma,
+                readings=readings,
+                windows=future_windows,
+            ),
+        }
+        pinned_metrics: dict[str, float | None] = {
+            **self._metrics(pinned_prediction, pinned_target),
+            **self._interval_metrics(
+                pinned_prediction,
+                pinned_target,
+                pinned_sigma,
+                readings=readings,
+                windows=future_windows,
+            ),
+        }
+        day_results = self._equal_day_results(
+            readings,
+            future_windows,
+            candidate_prediction,
+            reference_prediction,
+            pinned_prediction,
+            target,
+        )
+        gates = self.static_promotion_gates(
+            candidate_metrics,
+            reference_metrics,
+            pinned_metrics,
+            day_results,
+            test_day_count=len(day_results),
+            finite=bool(
+                np.isfinite(candidate_prediction).all()
+                and np.isfinite(candidate_sigma).all()
+            ),
+        )
+        non_hypo_gates = self._non_hypo_promotion_gates(
+            candidate_metrics,
+            reference_metrics,
+            pinned_metrics,
+            day_results,
+            test_day_count=len(day_results),
+            finite=bool(
+                np.isfinite(candidate_prediction).all()
+                and np.isfinite(candidate_sigma).all()
+            ),
+        )
+        current_gates: dict[str, bool | float | int] | None = None
+        current_non_hypo_gates: dict[str, bool | float | int] | None = None
+        current_day_results: list[dict[str, float]] | None = None
+        current_metrics: dict[str, float | None] | None = None
+        if (
+            current_prediction is not None
+            and current_sigma is not None
+            and current_target is not None
+        ):
+            current_metrics = {
+                **self._metrics(current_prediction, current_target),
+                **self._interval_metrics(
+                    current_prediction,
+                    current_target,
+                    current_sigma,
+                    readings=readings,
+                    windows=future_windows,
+                ),
+            }
+            current_day_results = self._equal_day_results(
+                readings,
+                future_windows,
+                candidate_prediction,
+                reference_prediction,
+                current_prediction,
+                target,
+            )
+            current_gates = self.static_promotion_gates(
+                candidate_metrics,
+                reference_metrics,
+                current_metrics,
+                current_day_results,
+                test_day_count=len(current_day_results),
+                finite=bool(np.isfinite(current_prediction).all()),
+            )
+            current_non_hypo_gates = self._non_hypo_promotion_gates(
+                candidate_metrics,
+                reference_metrics,
+                current_metrics,
+                current_day_results,
+                test_day_count=len(current_day_results),
+                finite=bool(np.isfinite(current_prediction).all()),
+            )
+        accepted = bool(gates["accepted"]) and bool(
+            current_gates is None or current_gates["accepted"]
+        )
+        hypo_evidence_sufficient = bool(
+            float(candidate_metrics.get("hypo_low_points") or 0.0) >= 40
+            and float(candidate_metrics.get("hypo_low_episodes") or 0.0) >= 5
+            and float(candidate_metrics.get("hypo_low_days") or 0.0) >= 4
+        )
+        inconclusive = bool(
+            not hypo_evidence_sufficient
+            and non_hypo_gates.get("accepted")
+            and (
+                current_non_hypo_gates is None
+                or current_non_hypo_gates.get("accepted")
+            )
+        )
+        evaluation: dict[str, float | int | None] = {
+            "accepted": int(accepted),
+            "prospective": 1,
+            "inconclusive": int(inconclusive),
+            "current_comparator_gate_passed": int(
+                current_gates is None or bool(current_gates["accepted"])
+            ),
+            "candidate_equal_day_mae": _finite(
+                gates.get("candidate_equal_day_mae"),
+                float(candidate_metrics["mae"] or 0.0),
+            ),
+            "reference_equal_day_mae": _finite(
+                gates.get("reference_equal_day_mae"),
+                float(reference_metrics["mae"] or 0.0),
+            ),
+            "pinned_equal_day_mae": _finite(
+                gates.get("pinned_equal_day_mae"),
+                float(pinned_metrics["mae"] or 0.0),
+            ),
+            "candidate_anchor_mae": float(candidate_metrics["mae"] or 0.0),
+            "reference_anchor_mae": float(reference_metrics["mae"] or 0.0),
+            "pinned_anchor_mae": float(pinned_metrics["mae"] or 0.0),
+            "candidate_rmse": float(candidate_metrics["rmse"] or 0.0),
+            "reference_rmse": float(reference_metrics["rmse"] or 0.0),
+            "pinned_rmse": float(pinned_metrics["rmse"] or 0.0),
+            "candidate_mae_5": float(candidate_metrics["mae_5"] or 0.0),
+            "candidate_mae_15": float(candidate_metrics["mae_15"] or 0.0),
+            "candidate_mae_30": float(candidate_metrics["mae_30"] or 0.0),
+            "candidate_mae_60": float(candidate_metrics["mae_60"] or 0.0),
+            "candidate_mae_120": float(candidate_metrics["mae_120"] or 0.0),
+            "reference_mae_5": float(reference_metrics["mae_5"] or 0.0),
+            "reference_mae_15": float(reference_metrics["mae_15"] or 0.0),
+            "reference_mae_30": float(reference_metrics["mae_30"] or 0.0),
+            "reference_mae_60": float(reference_metrics["mae_60"] or 0.0),
+            "reference_mae_120": float(reference_metrics["mae_120"] or 0.0),
+            "pinned_mae_5": float(pinned_metrics["mae_5"] or 0.0),
+            "pinned_mae_15": float(pinned_metrics["mae_15"] or 0.0),
+            "pinned_mae_30": float(pinned_metrics["mae_30"] or 0.0),
+            "pinned_mae_60": float(pinned_metrics["mae_60"] or 0.0),
+            "pinned_mae_120": float(pinned_metrics["mae_120"] or 0.0),
+            "candidate_coverage_80": float(
+                candidate_metrics["coverage_80"] or 0.0
+            ),
+            "candidate_interval_score_80": float(
+                candidate_metrics["interval_score_80"] or 0.0
+            ),
+            "reference_interval_score_80": float(
+                reference_metrics["interval_score_80"] or 0.0
+            ),
+            "pinned_interval_score_80": float(
+                pinned_metrics["interval_score_80"] or 0.0
+            ),
+            "candidate_hypo_recall": float(
+                candidate_metrics["hypo_recall"] or 0.0
+            ),
+            "reference_hypo_recall": float(
+                reference_metrics["hypo_recall"] or 0.0
+            ),
+            "pinned_hypo_recall": float(pinned_metrics["hypo_recall"] or 0.0),
+            "candidate_hypo_fpr": float(candidate_metrics["hypo_fpr"] or 0.0),
+            "reference_hypo_fpr": float(reference_metrics["hypo_fpr"] or 0.0),
+            "pinned_hypo_fpr": float(pinned_metrics["hypo_fpr"] or 0.0),
+            "candidate_hypo_missed_episodes": float(
+                candidate_metrics["hypo_missed_episodes"] or 0.0
+            ),
+            "reference_hypo_missed_episodes": float(
+                reference_metrics["hypo_missed_episodes"] or 0.0
+            ),
+            "pinned_hypo_missed_episodes": float(
+                pinned_metrics["hypo_missed_episodes"] or 0.0
+            ),
+            "candidate_low_zone_mae": float(
+                candidate_metrics["low_zone_mae"] or 0.0
+            ),
+            "reference_low_zone_mae": float(
+                reference_metrics["low_zone_mae"] or 0.0
+            ),
+            "pinned_low_zone_mae": float(
+                pinned_metrics["low_zone_mae"] or 0.0
+            ),
+            "hypo_low_points": float(candidate_metrics["hypo_low_points"] or 0.0),
+            "hypo_low_episodes": float(
+                candidate_metrics["hypo_low_episodes"] or 0.0
+            ),
+            "hypo_low_days": float(candidate_metrics["hypo_low_days"] or 0.0),
+            "test_days": len(day_results),
+            "test_independent_anchors": len(future_windows),
+            "winning_days": int(gates.get("winning_days", 0)),
+        }
+        for band_index in range(len(STATIC_BANDS)):
+            evaluation[f"candidate_coverage_band_{band_index}"] = float(
+                candidate_metrics[f"coverage_band_{band_index}"] or 0.0
+            )
+        for key, value in gates.items():
+            if key in evaluation or key == "finite":
+                continue
+            if isinstance(value, bool):
+                evaluation[f"gate_{key}"] = int(value)
+            elif isinstance(value, (int, float)) and math.isfinite(float(value)):
+                evaluation[f"gate_{key}"] = value
+
+        prospective_days = len(day_results)
+        candidate_horizon_mae = np.mean(
+            np.abs(candidate_prediction - target), axis=0
+        ).tolist()
+        reference_horizon_mae = np.mean(
+            np.abs(reference_prediction - target), axis=0
+        ).tolist()
+        prospective_reliability = _static_reliability(
+            candidate_metrics,
+            reference_metrics,
+            (
+                gates
+                if "winning_days" in gates
+                else non_hypo_gates
+            ),
+            test_days=prospective_days,
+            independent_anchors=len(future_windows),
+            candidate_horizon_mae=candidate_horizon_mae,
+            reference_horizon_mae=reference_horizon_mae,
+        )
+
+        evaluated_at_ms = _now_ms()
+        evaluated_parameters = json.loads(original_parameters_json)
+        evaluated_artifact = evaluated_parameters["artifact"]
+        evaluated_artifact["evaluation"] = evaluation
+        evaluated_artifact["accepted"] = accepted
+        evaluated_artifact["reliability"] = prospective_reliability
+        evaluated_artifact["approval"] = {
+            **approval,
+            **future_manifest,
+            "state": (
+                "approved_prospective"
+                if accepted
+                else (
+                    "inconclusive_prospective"
+                    if inconclusive
+                    else "rejected_prospective"
+                )
+            ),
+            "protocol": STATIC_PROSPECTIVE_PROTOCOL,
+            "minimum_new_days": STATIC_PROSPECTIVE_MIN_DAYS,
+            "strictly_after_ms": cutoff_ms,
+            "evaluated_at_ms": evaluated_at_ms,
+            "cohort_start_ms": cohort_start_ms,
+            "cohort_end_ms": cohort_end_ms,
+            "last_reading_at_ms": cohort_end_ms,
+            "pinned_comparator_version": frozen_comparator.version,
+            "pinned_comparator_sha256": comparator_hash,
+            "current_comparator_version": current_champion.version,
+            "pinned_day_results": day_results,
+            "current_day_results": (
+                current_day_results
+                if current_day_results is not None
+                else day_results
+            ),
+            "current_metrics": (
+                current_metrics if current_metrics is not None else pinned_metrics
+            ),
+            "candidate_metrics": candidate_metrics,
+            "reference_metrics": reference_metrics,
+            "pinned_metrics": pinned_metrics,
+            "candidate_horizon_mae": candidate_horizon_mae,
+            "reference_horizon_mae": reference_horizon_mae,
+            "predictor_sha256": predictor_hash,
+        }
+        if _static_predictor_hash(evaluated_parameters) != predictor_hash:
+            raise RuntimeError("prospective evaluation attempted to mutate the predictor")
+        evaluated_artifact["content_sha256"] = _artifact_content_hash(
+            evaluated_parameters
+        )
+        if accepted and not _static_artifact_is_valid(
+            evaluated_parameters, require_approved=True
+        ):
+            raise RuntimeError(
+                "constructed prospective approval failed static artifact validation"
+            )
+
+        # Do not hold a write transaction while generating thousands of
+        # forecasts.  Reserve it only for an atomic revision + artifact check.
+        session.rollback()
+        session.execute(text("BEGIN IMMEDIATE"))
+        if self._source_revision(session) != source_revision_before:
+            session.rollback()
+            return ForecastTrainResponse(
+                status="skipped",
+                promoted=False,
+                model_version=version,
+                reason="Source glucose/intake data changed during evaluation; retry",
+                sample_count=len(future_windows),
+                metrics={"source_revision_changed": 1},
+            )
+        active_pin_version = session.scalar(
+            select(BackendMetadataRecord.value_text).where(
+                BackendMetadataRecord.key == ACTIVE_MODEL_METADATA_KEY
+            )
+        )
+        fresh_current_champion = session.scalar(
+            select(ForecastModelRecord)
+            .where(ForecastModelRecord.version == current_champion.version)
+            .execution_options(populate_existing=True)
+        )
+        if (
+            active_pin_version != current_champion.version
+            or fresh_current_champion is None
+            or fresh_current_champion.parameters_json
+            != current_champion_parameters_json
+            or not self._runtime_model_dependencies_are_valid(
+                session, fresh_current_champion
+            )
+        ):
+            session.rollback()
+            return ForecastTrainResponse(
+                status="skipped",
+                promoted=False,
+                model_version=version,
+                reason="Active comparator changed during evaluation; retry",
+                sample_count=len(future_windows),
+                metrics={"active_comparator_changed": 1},
+            )
+        fresh_frozen_comparator = session.scalar(
+            select(ForecastModelRecord)
+            .where(ForecastModelRecord.version == frozen_comparator.version)
+            .execution_options(populate_existing=True)
+        )
+        if (
+            fresh_frozen_comparator is None
+            or fresh_frozen_comparator.parameters_json
+            != frozen_comparator_parameters_json
+            or not self._runtime_model_dependencies_are_valid(
+                session, fresh_frozen_comparator
+            )
+            or _model_parameters_hash(
+                _json_dict(fresh_frozen_comparator.parameters_json)
+            )
+            != comparator_hash
+        ):
+            session.rollback()
+            return self._permanently_reject_pending_candidate(
+                session,
+                selected,
+                original_parameters_json=original_parameters_json,
+                reason=(
+                    "Permanently rejected: frozen pinned comparator changed during "
+                    "prospective evaluation"
+                ),
+            )
+        stored = session.get(ForecastModelRecord, version)
+        if (
+            stored is None
+            or stored.status != "pending"
+            or stored.parameters_json != original_parameters_json
+        ):
+            session.rollback()
+            raise ValueError("pending artifact changed during prospective evaluation")
+        stored.parameters_json = json.dumps(
+            evaluated_parameters, separators=(",", ":"), allow_nan=False
+        )
+        stored.metrics_json = json.dumps(
+            evaluation, separators=(",", ":"), allow_nan=False
+        )
+        stored.status = (
+            "candidate" if accepted else ("inconclusive" if inconclusive else "rejected")
+        )
+        stored.decision_reason = (
+            "Passed prospective frozen-model gates; explicit activation is required"
+            if accepted
+            else (
+                "Prospective cohort was inconclusive because it lacked preregistered "
+                "hypoglycemia evidence"
+                if inconclusive
+                else "Rejected by prospective point, interval, or hypoglycemia safety gates"
+            )
+        )
+        session.commit()
+        return ForecastTrainResponse(
+            status=(
+                "accepted" if accepted else ("inconclusive" if inconclusive else "rejected")
+            ),
+            promoted=False,
+            model_version=version,
+            reason=stored.decision_reason,
+            sample_count=len(future_windows),
             metrics=evaluation,
         )
 
@@ -4484,6 +6458,15 @@ class ForecastService:
         current_event_revision = int(
             session.scalar(select(func.max(SyncChangeRecord.id))) or 0
         )
+        current_glucose_revision = int(
+            session.scalar(
+                select(cast(BackendMetadataRecord.value_text, Integer)).where(
+                    BackendMetadataRecord.key
+                    == GLUCOSE_SOURCE_REVISION_METADATA_KEY
+                )
+            )
+            or 0
+        )
         data_changed_since_training = bool(
             comparison_record is not None
             and isinstance(snapshot, dict)
@@ -4494,6 +6477,13 @@ class ForecastService:
                 != int(current_max_received or -1)
                 or int(_finite(snapshot.get("event_revision"), -1))
                 != current_event_revision
+                or (
+                    "glucose_source_revision" in snapshot
+                    and int(
+                        _finite(snapshot.get("glucose_source_revision"), -1)
+                    )
+                    != current_glucose_revision
+                )
             )
         )
         parameters = (

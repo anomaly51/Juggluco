@@ -277,10 +277,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     train = commands.add_parser(
-        "train", help="Train one static candidate; does not enable background training."
+        "train",
+        help=(
+            "Freeze one static candidate pending preregistered future evaluation; "
+            "does not enable background training."
+        ),
     )
     train.add_argument("--data-cutoff-ms", type=int)
     train.add_argument("--candidate-version")
+
+    evaluate = commands.add_parser(
+        "evaluate",
+        help=(
+            "Make the one-shot decision for a pending candidate on its frozen "
+            "future-day cohort; never retrains or activates."
+        ),
+    )
+    evaluate.add_argument("version")
 
     activate = commands.add_parser(
         "activate", help="Pin an existing compatible model version for inference."
@@ -314,7 +327,10 @@ def execute(
                 session,
                 data_cutoff_ms=args.data_cutoff_ms,
                 candidate_version=args.candidate_version,
+                stage_pending=True,
             )
+        elif args.command == "evaluate":
+            result = service.evaluate_static_candidate(session, args.version)
         elif args.command == "activate":
             result = service.activate_model(session, args.version)
         elif args.command == "rollback":

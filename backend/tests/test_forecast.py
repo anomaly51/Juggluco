@@ -880,7 +880,9 @@ def test_mobile_training_route_is_absent_even_with_sufficient_history(
     }
     ingested = client.post("/v1/glucose/readings", headers=auth_headers, json=payload)
     assert ingested.status_code == 200
-    assert "/v1/forecast/train" not in {route.path for route in client.app.routes}
+    assert "/v1/forecast/train" not in {
+        route.path for route in client.app.routes if hasattr(route, "path")
+    }
     trained = client.post("/v1/forecast/train", headers=auth_headers)
     assert trained.status_code == 404
     with app.state.database.session_factory() as session:
@@ -1412,6 +1414,58 @@ def test_server_instance_id_is_stable_per_database_and_changes_after_recreation(
     assert recreated_id != first_id
 
 
+def test_same_millisecond_cgm_correction_advances_source_revision(
+    app, client, auth_headers, monkeypatch
+):
+    fixed_now_ms = int(time.time() * 1_000)
+    measured_at_ms = fixed_now_ms - STEP_MS
+    reading_id = f"cgm-{measured_at_ms}"
+    reading = {
+        "reading_id": reading_id,
+        "measured_at_ms": measured_at_ms,
+        "glucose_mg_dl": 118,
+        "trend_mg_dl_min": 0.0,
+        "quality": 1.0,
+    }
+    monkeypatch.setattr("app.forecast._now_ms", lambda: fixed_now_ms)
+
+    first = client.post(
+        "/v1/glucose/readings",
+        headers=auth_headers,
+        json={"readings": [reading]},
+    )
+    assert first.status_code == 200
+    with app.state.database.session_factory() as session:
+        before = app.state.forecast_service._source_revision(session)
+
+    retry = client.post(
+        "/v1/glucose/readings",
+        headers=auth_headers,
+        json={"readings": [reading]},
+    )
+    assert retry.status_code == 200
+    assert retry.json()["unchanged"] == 1
+    with app.state.database.session_factory() as session:
+        after_retry = app.state.forecast_service._source_revision(session)
+    assert after_retry == before
+
+    corrected = client.post(
+        "/v1/glucose/readings",
+        headers=auth_headers,
+        json={"readings": [{**reading, "glucose_mg_dl": 148}]},
+    )
+    assert corrected.status_code == 200
+    assert corrected.json()["updated"] == 1
+    with app.state.database.session_factory() as session:
+        after = app.state.forecast_service._source_revision(session)
+
+    # Count, measurement horizon, wall-clock receipt maximum and intake
+    # aggregates are deliberately identical. Only the durable mutation counter
+    # can make this same-millisecond in-place correction observable.
+    assert after[:-1] == before[:-1]
+    assert after[-1] == before[-1] + 1
+
+
 def test_canonical_cgm_correction_rescores_without_mutating_calibration(
     app, client, auth_headers
 ):
@@ -1596,4 +1650,4 @@ def test_legacy_champion_and_colliding_run_are_audit_only(tmp_path):
                     ForecastRunRecord.model_version == BASELINE_VERSION
                 )
             ) == 1
-    assert FORECAST_ENGINE_VERSION == "forecast-engine-v5-static"
+    assert FORECAST_ENGINE_VERSION == "forecast-engine-v6-static-safe"

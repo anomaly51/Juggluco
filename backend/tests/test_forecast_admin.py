@@ -142,9 +142,21 @@ def test_admin_commands_bind_only_to_explicit_service_methods(tmp_path):
             self.calls.append(("status",))
             return {"model_version": "static-v1"}
 
-        def train_static_model(self, session, data_cutoff_ms=None, candidate_version=None):
-            self.calls.append(("train", data_cutoff_ms, candidate_version))
+        def train_static_model(
+            self,
+            session,
+            data_cutoff_ms=None,
+            candidate_version=None,
+            stage_pending=True,
+        ):
+            self.calls.append(
+                ("train", data_cutoff_ms, candidate_version, stage_pending)
+            )
             return {"model_version": candidate_version, "state": "candidate"}
+
+        def evaluate_static_candidate(self, session, version):
+            self.calls.append(("evaluate", version))
+            return {"model_version": version, "state": "candidate"}
 
         def activate_model(self, session, version):
             self.calls.append(("activate", version))
@@ -173,6 +185,10 @@ def test_admin_commands_bind_only_to_explicit_service_methods(tmp_path):
         service_factory=factory,
     )
     forecast_admin.execute(
+        ["--database", str(database_path), "evaluate", "candidate-static-v2"],
+        service_factory=factory,
+    )
+    forecast_admin.execute(
         ["--database", str(database_path), "activate", "candidate-static-v2"],
         service_factory=factory,
     )
@@ -183,7 +199,8 @@ def test_admin_commands_bind_only_to_explicit_service_methods(tmp_path):
 
     assert service.calls == [
         ("status",),
-        ("train", 1_700_000_000_000, "candidate-static-v2"),
+        ("train", 1_700_000_000_000, "candidate-static-v2", True),
+        ("evaluate", "candidate-static-v2"),
         ("activate", "candidate-static-v2"),
         ("rollback", "static-v1"),
     ]
@@ -233,7 +250,7 @@ def test_mobile_api_has_no_training_route_and_ingest_has_no_training_hook(
     client, auth_headers
 ):
     assert "/v1/forecast/train" not in {
-        route.path for route in client.app.routes
+        route.path for route in client.app.routes if hasattr(route, "path")
     }
 
     class IngestOnlyService:

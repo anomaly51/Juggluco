@@ -576,7 +576,9 @@ class ForecastStatusResponse(BaseModel):
 class ForecastTrainResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["skipped", "rejected", "accepted", "promoted"]
+    status: Literal[
+        "skipped", "pending", "inconclusive", "rejected", "accepted", "promoted"
+    ]
     promoted: bool
     model_version: str
     reason: str

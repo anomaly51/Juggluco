@@ -365,11 +365,15 @@ masks from the detailed two-hour trace, progressively coarser samples through 72
 variability/dynamics summaries, daily harmonics, weekday phase, and current state. It receives
 no learned meal/rapid/long channels. The residual is added to event-aware persistence, then
 four separately tuned horizon-band weights can shrink it back toward that safe reference.
-Calibration bias and 80% intervals are frozen inside the checksummed artifact. Later CGM
-values are scored for monitoring only; they never update weights, bias, intervals, confidence,
-or the active version. Derived runs/scores are retained for 35 days; source CGM and intake data
-are not pruned. A persisted random `server_instance_id` lets Android reset its history cursor
-if the backend database is recreated.
+Point-bias calibration is disabled. Exact finite-sample split-conformal 80% intervals and
+their order-statistic rank are frozen inside the checksummed artifact. The one-shot prospective
+approval may replace only the evaluation/reliability envelope; it never updates weights, blend,
+or calibration. Once that decision is final, later CGM values are monitoring scores only and
+never update confidence or the active version. Live sensor-quality and meal uncertainty may
+only widen the same intrinsic interval bounds used by offline scoring; they do not change its
+frozen model calibration. Derived runs/scores are retained for 35 days; source CGM and intake
+data are not pruned. A persisted random `server_instance_id` lets Android reset its history
+cursor if the backend database is recreated.
 
 Training is strictly manual and local: there is no training HTTP endpoint, background task,
 timer, backfill hook, or online calibrator. New source data only makes
@@ -382,17 +386,32 @@ Manual training requires at least fifteen dense local-day blocks: at least eight
 for fitting, one separate tuning day, two frozen-calibration days, and four untouched test
 days. Every split boundary has a 120-minute purge. The primary evaluation samples anchors at
 least 120 minutes apart and weights calendar days equally; overlapping five-minute windows are
-diagnostics only. Promotion requires independent-day accuracy gains over both event-aware
-persistence and the pinned model, safe 30/60/120-minute errors, calibrated 80% coverage, and a
-better proper interval score. A candidate retains its dataset digest, deterministic seed,
-split manifest, comparator metrics, frozen calibration, approval bit, and an envelope checksum.
-Passing training only stages the candidate; it is never silently activated.
+diagnostics only. The four development days can reject a model but can never approve one. A
+development pass at the latest available reading freezes exactly one `pending` candidate, its
+predictor digest, and the exact pinned comparator version/digest. It preregisters the earliest
+fourteen complete, dense later local days as a one-shot prospective cohort; no interim or
+expanding-prefix choice is allowed. Replay uses each anchor's backend receipt time: history must
+already be received, future labels must arrive strictly later, and the anchor must arrive within
+the same 15-minute freshness window required by live forecasts. Equal-timestamp bulk uploads and
+slow sequential historical backfills are therefore excluded. Intake edits/deletions that cannot
+be reconstructed exactly fail closed, atomically terminalize the pending candidate as rejected,
+and release the preregistration slot for a newly frozen candidate.
+
+After all fourteen days exist, `evaluate` applies equal-day point, interval, and hypoglycemia
+gates against event-aware persistence, the frozen comparator, and any different current
+champion. Insufficient preregistered low-glucose evidence is final `inconclusive`, not approval.
+A pass changes only the approval/evaluation/reliability envelope and checksum; network weights,
+blend, event priors, and frozen calibration retain the same predictor hash. The result becomes
+`candidate`, but activation remains a separate explicit operator action. Rejected,
+inconclusive, pending, development-only, corrupt, or comparator-orphaned artifacts cannot be
+activated.
 Run the administration commands from `backend` against the local SQLite database only:
 
 ```powershell
 python -m scripts.forecast_admin status
 python -m scripts.forecast_admin export
 python -m scripts.forecast_admin train --candidate-version personal-review-1
+python -m scripts.forecast_admin evaluate personal-review-1
 python -m scripts.forecast_admin activate personal-review-1
 python -m scripts.forecast_admin rollback
 ```
@@ -403,8 +422,12 @@ text, then writes a minimized `training-snapshot.sqlite`, ordered glucose/intake
 SHA-256 manifest below ignored `backend/data/exports/`. The export directory is mode 0700 and
 its files are mode 0600 on POSIX systems. The command prints only paths and aggregate counts,
 never raw glucose or meal values. Add `--output <new-directory>` to select a different
-destination. `train` accepts optional `--data-cutoff-ms` and
-`--candidate-version`. `activate` pins an existing version; `rollback [version]` pins either
+destination. `train` accepts optional `--data-cutoff-ms` and `--candidate-version`, but only a
+freeze at the latest available reading can enter `pending`; an older cutoff is development-only
+and cannot become runtime-valid. Only one preregistered candidate may be pending, and the next
+freeze must occur after the previous fixed cohort. `evaluate VERSION` is local-only, performs no
+training or activation, and makes one final decision after the fixed cohort. `activate` pins an
+approved candidate; `rollback [version]` pins either
 the prior version or an explicitly named existing version. `GET /v1/forecast/status` reports
 `training.mode=manual`, `automatic_enabled=false`, whether data changed, data coverage,
 30/60/120-minute errors, interval coverage, and rolling 7/30-day error.
