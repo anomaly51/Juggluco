@@ -57,6 +57,7 @@ final class CriticalGlucoseAlarm {
     private static final String KEY_EXPIRES = "expires_at_ms";
     private static final String KEY_SNOOZE = "snooze_until_ms";
     private static final String KEY_SOUND_RES = "sound_res";
+    private static final String KEY_DISPLAY_PAYLOAD = "display_payload";
 
     private static final int ACTUAL_LOW_ID = 8_401;
     private static final int ACTUAL_HIGH_ID = 8_402;
@@ -146,6 +147,14 @@ final class CriticalGlucoseAlarm {
     /** Starts or refreshes an independently detected native actual alarm. */
     static synchronized boolean showActual(Context context, int kind,
             float glucoseValue, String message, boolean trigger) {
+        return showActual(context, kind, glucoseValue, message, trigger,
+                CriticalDisplayPayload.EMPTY);
+    }
+
+    /** Starts or refreshes an actual alarm with bounded graph context. */
+    static synchronized boolean showActual(Context context, int kind,
+            float glucoseValue, String message, boolean trigger,
+            CriticalDisplayPayload displayPayload) {
         if (context == null || Applic.isWearable || !isActualKind(kind)) {
             return false;
         }
@@ -172,7 +181,13 @@ final class CriticalGlucoseAlarm {
         // audio initialization so recovery/fallback decisions remain usable
         // during cold start and in API-level tests.
         incoming.value = glucoseText(app, glucoseValue);
-        incoming.anchorMs = System.currentTimeMillis();
+        incoming.displayPayload = displayPayload == null
+                ? CriticalDisplayPayload.EMPTY : displayPayload;
+        // Alarm ownership and expiry are presentation lifecycle state. A
+        // malformed, stale or differently-scaled chart timestamp must never
+        // make an actionable alarm expire before it is shown.
+        long presentedAtMs = System.currentTimeMillis();
+        incoming.anchorMs = presentedAtMs;
         incoming.expiresAtMs = incoming.anchorMs + ACTUAL_MAX_LIFETIME_MS;
         incoming.soundRes = low ? R.raw.verylow : R.raw.veryhigh;
         boolean replacesNonActual = current != null
@@ -192,6 +207,14 @@ final class CriticalGlucoseAlarm {
     static synchronized boolean showPredictive(Context context, boolean low,
             String title, String body, String glucose, long anchorMs,
             long crossingAtMs, long timeoutMs) {
+        return showPredictive(context, low, title, body, glucose, anchorMs,
+                crossingAtMs, timeoutMs, CriticalDisplayPayload.EMPTY);
+    }
+
+    static synchronized boolean showPredictive(Context context, boolean low,
+            String title, String body, String glucose, long anchorMs,
+            long crossingAtMs, long timeoutMs,
+            CriticalDisplayPayload displayPayload) {
         if (context == null || Applic.isWearable || timeoutMs <= 0L) {
             return false;
         }
@@ -218,6 +241,8 @@ final class CriticalGlucoseAlarm {
                     crossingAtMs + 30L * 60_000L);
         }
         incoming.soundRes = low ? R.raw.lowsoon : R.raw.highsoon;
+        incoming.displayPayload = displayPayload == null
+                ? CriticalDisplayPayload.EMPTY : displayPayload;
         return acceptAndPresent(app, current(app, now), incoming, true);
     }
 
@@ -247,11 +272,35 @@ final class CriticalGlucoseAlarm {
                 stopPresentation(app, current, true);
                 return false;
             }
+            if (consumedByActual && current.direction.equals(
+                    incoming.direction) && incoming.displayPayload != null
+                    && !incoming.displayPayload.isEmpty()
+                    && (current.displayPayload == null
+                    || current.displayPayload.isEmpty()
+                    || incoming.displayPayload.readingAtMs
+                    >= current.displayPayload.readingAtMs)) {
+                // Retain severe episode/audio priority while still showing
+                // the newest measured value and chart. Reposting the
+                // insistent notification here could restart channel audio, so
+                // update the private session and an already-visible surface.
+                current.value = incoming.value;
+                current.body = incoming.body;
+                current.displayPayload = incoming.displayPayload;
+                save(app, current);
+                active = current;
+                notifySurfaces(app, current);
+            }
             return consumedByActual;
         }
         if (transition == CriticalAlarmEpisodePolicy.Transition.UPDATE_WITHOUT_RESTART) {
             incoming.token = current.token;
             incoming.snoozeUntilMs = current.snoozeUntilMs;
+            if ((incoming.displayPayload == null
+                    || incoming.displayPayload.isEmpty())
+                    && current.displayPayload != null
+                    && !current.displayPayload.isEmpty()) {
+                incoming.displayPayload = current.displayPayload;
+            }
             save(app, incoming);
             active = incoming;
             if (incoming.snoozeUntilMs <= System.currentTimeMillis()) {
@@ -262,7 +311,7 @@ final class CriticalGlucoseAlarm {
                     return false;
                 }
             }
-            notifyVisibleActivity(incoming);
+            notifySurfaces(app, incoming);
             // The token is intentionally stable for a same-episode update,
             // so this replaces the old PendingIntent deadline with the newly
             // persisted expiry instead of leaving the session immortal after
@@ -278,7 +327,7 @@ final class CriticalGlucoseAlarm {
         active = incoming;
         boolean posted = postNotification(app, incoming);
         if (posted) {
-            notifyVisibleActivity(incoming);
+            notifySurfaces(app, incoming);
             scheduleExpiry(app, incoming);
             return true;
         }
@@ -372,7 +421,7 @@ final class CriticalGlucoseAlarm {
         session.snoozeUntilMs = System.currentTimeMillis() + durationMs;
         save(app, session);
         active = session;
-        notifyVisibleActivity(session);
+        notifySurfaces(app, session);
         stopSound();
         cancelNotification(app, session);
         if (SOURCE_PREDICTIVE.equals(session.source)) {
@@ -398,7 +447,7 @@ final class CriticalGlucoseAlarm {
         save(context, session);
         active = session;
         if (postNotification(context, session)) {
-            notifyVisibleActivity(session);
+            notifySurfaces(context, session);
         } else {
             // A resumed alarm without a notification would have no reachable
             // acknowledgement UI. Drop controller ownership and let the next
@@ -427,6 +476,24 @@ final class CriticalGlucoseAlarm {
         return session == null ? null : session.copy();
     }
 
+    /** Applies optional chart enrichment only to the exact live alarm token. */
+    static synchronized boolean updateDisplayPayload(Context context,
+            String token, CriticalDisplayPayload displayPayload) {
+        if (context == null || displayPayload == null
+                || displayPayload.isEmpty()) return false;
+        Context app = context.getApplicationContext();
+        Session session = session(app, token);
+        if (session == null || (session.displayPayload != null
+                && !session.displayPayload.isEmpty()
+                && displayPayload.readingAtMs
+                < session.displayPayload.readingAtMs)) return false;
+        session.displayPayload = displayPayload;
+        save(app, session);
+        active = session;
+        notifySurfaces(app, session);
+        return true;
+    }
+
     private static boolean postNotification(Context context, Session session) {
         if (!canPost(context)) return false;
         ensureChannels(context);
@@ -438,9 +505,7 @@ final class CriticalGlucoseAlarm {
                 CriticalGlucoseAlarmReceiver.ACTION_ACK, 1);
         PendingIntent snooze = receiverIntent(context, session,
                 CriticalGlucoseAlarmReceiver.ACTION_SNOOZE, 2);
-        PendingIntent open = PendingIntent.getActivity(context,
-                requestCode(session, 3), openGraphIntent(context),
-                pendingFlags());
+        PendingIntent open = openGraphActivityIntent(context, session);
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(
                 context, channel)
@@ -511,6 +576,23 @@ final class CriticalGlucoseAlarm {
                         | Intent.FLAG_ACTIVITY_CLEAR_TOP
                         | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         return PendingIntent.getActivity(context, requestCode(session, 0),
+                intent, pendingFlags());
+    }
+
+    private static PendingIntent openGraphActivityIntent(Context context,
+            Session session) {
+        Intent intent = new Intent(context,
+                CriticalGlucoseAlarmOpenGraphActivity.class)
+                .setAction(CriticalGlucoseAlarmOpenGraphActivity
+                        .ACTION_OPEN_GRAPH)
+                .putExtra(CriticalGlucoseAlarmReceiver.EXTRA_TOKEN,
+                        session.token)
+                .setData(pendingData(context, "open-graph:3",
+                        session.token))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        return PendingIntent.getActivity(context, requestCode(session, 3),
                 intent, pendingFlags());
     }
 
@@ -670,7 +752,7 @@ final class CriticalGlucoseAlarm {
         if (clear) {
             active = null;
             clearSaved(context);
-            notifyVisibleActivity(null);
+            notifySurfaces(context, null);
         }
     }
 
@@ -713,7 +795,7 @@ final class CriticalGlucoseAlarm {
         }
         active = null;
         clearSaved(context);
-        notifyVisibleActivity(null);
+        notifySurfaces(context, null);
     }
 
     private static void scheduleExpiry(Context context, Session session) {
@@ -785,11 +867,11 @@ final class CriticalGlucoseAlarm {
         }
         active = session;
         if (session.snoozeUntilMs > now) {
-            notifyVisibleActivity(session);
+            notifySurfaces(context, session);
             schedule(context, CriticalGlucoseAlarmReceiver.ACTION_RESUME,
                     session.token, session.snoozeUntilMs);
         } else if (postNotification(context, session)) {
-            notifyVisibleActivity(session);
+            notifySurfaces(context, session);
         } else {
             // Process restore is not allowed to resurrect an unacknowledgeable
             // app-owned loop. Native actual alarms retain their legacy path.
@@ -825,6 +907,9 @@ final class CriticalGlucoseAlarm {
                 .putLong(KEY_EXPIRES, session.expiresAtMs)
                 .putLong(KEY_SNOOZE, session.snoozeUntilMs)
                 .putInt(KEY_SOUND_RES, session.soundRes)
+                .putString(KEY_DISPLAY_PAYLOAD,
+                        session.displayPayload == null ? ""
+                                : session.displayPayload.toJsonString())
                 .commit();
     }
 
@@ -847,6 +932,8 @@ final class CriticalGlucoseAlarm {
             session.expiresAtMs = prefs.getLong(KEY_EXPIRES, 0L);
             session.snoozeUntilMs = prefs.getLong(KEY_SNOOZE, 0L);
             session.soundRes = prefs.getInt(KEY_SOUND_RES, R.raw.siren);
+            session.displayPayload = CriticalDisplayPayload.fromJsonString(
+                    prefs.getString(KEY_DISPLAY_PAYLOAD, ""));
         } catch (RuntimeException corruptPreferences) {
             // Preserve the token so clearInvalidState can cancel token-derived
             // alarms, while validation below rejects the partial session.
@@ -891,8 +978,10 @@ final class CriticalGlucoseAlarm {
         }
     }
 
-    private static void notifyVisibleActivity(Session session) {
+    private static void notifySurfaces(Context context, Session session) {
         CriticalGlucoseAlarmActivity.sessionChanged(
+                session == null ? null : session.token);
+        CriticalGlucoseAlarmOverlay.sessionChanged(context,
                 session == null ? null : session.token);
     }
 
@@ -1000,6 +1089,7 @@ final class CriticalGlucoseAlarm {
         long expiresAtMs;
         long snoozeUntilMs;
         int soundRes;
+        CriticalDisplayPayload displayPayload = CriticalDisplayPayload.EMPTY;
 
         boolean low() {
             return DIRECTION_LOW.equals(direction);
@@ -1026,6 +1116,8 @@ final class CriticalGlucoseAlarm {
             result.expiresAtMs = expiresAtMs;
             result.snoozeUntilMs = snoozeUntilMs;
             result.soundRes = soundRes;
+            result.displayPayload = displayPayload == null
+                    ? CriticalDisplayPayload.EMPTY : displayPayload;
             return result;
         }
     }

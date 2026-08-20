@@ -53,6 +53,7 @@ public final class PredictiveAlertSettingsPage {
     private DiagnosticAction criticalAlarmVolume;
     private DiagnosticAction criticalDndAccess;
     private DiagnosticAction criticalFullScreenAccess;
+    private DiagnosticAction criticalOverlayAccess;
     private DiagnosticAction criticalExactAlarmAccess;
     private Button criticalTest;
     private TextView permissionStatus;
@@ -484,6 +485,9 @@ public final class PredictiveAlertSettingsPage {
         criticalFullScreenAccess = diagnosticAction(
                 R.string.critical_alarm_full_screen_title,
                 () -> CriticalAlarmDiagnostics.openFullScreenSettings(activity));
+        criticalOverlayAccess = diagnosticAction(
+                R.string.critical_alarm_overlay_title,
+                () -> CriticalAlarmDiagnostics.openOverlaySettings(activity));
         criticalExactAlarmAccess = diagnosticAction(
                 R.string.critical_alarm_exact_title,
                 () -> CriticalAlarmDiagnostics.openExactAlarmSettings(activity));
@@ -491,7 +495,7 @@ public final class PredictiveAlertSettingsPage {
                 criticalActualChannels.row, criticalPredictiveChannels.row,
                 criticalNotificationAccess.row, criticalAlarmVolume.row,
                 criticalDndAccess.row, criticalFullScreenAccess.row,
-                criticalExactAlarmAccess.row);
+                criticalOverlayAccess.row, criticalExactAlarmAccess.row);
     }
 
     private DiagnosticAction diagnosticAction(int titleRes, Runnable action) {
@@ -667,6 +671,11 @@ public final class PredictiveAlertSettingsPage {
                         ? R.string.critical_alarm_full_screen_ready
                         : R.string.critical_alarm_full_screen_needed),
                 snapshot.fullScreenAccess);
+        styleCriticalDiagnostic(criticalOverlayAccess,
+                activity.getString(snapshot.overlayAccess
+                        ? R.string.critical_alarm_overlay_ready
+                        : R.string.critical_alarm_overlay_needed),
+                snapshot.overlayAccess);
         styleCriticalDiagnostic(criticalExactAlarmAccess,
                 activity.getString(snapshot.exactAlarmAccess
                         ? R.string.critical_alarm_exact_ready

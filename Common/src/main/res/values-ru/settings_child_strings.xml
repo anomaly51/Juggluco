@@ -97,6 +97,9 @@
     <string name="critical_alarm_full_screen_title">Полноэкранные сигналы</string>
     <string name="critical_alarm_full_screen_ready">Разрешены в Android</string>
     <string name="critical_alarm_full_screen_needed">Специальный доступ не разрешён</string>
+    <string name="critical_alarm_overlay_title">Показ поверх других приложений</string>
+    <string name="critical_alarm_overlay_ready">Разрешено · срочная форма появится сразу поверх другого приложения</string>
+    <string name="critical_alarm_overlay_needed">Разрешите показ поверх других приложений для мгновенной формы на разблокированном экране</string>
     <string name="critical_alarm_exact_title">Точное время повтора</string>
     <string name="critical_alarm_exact_ready">Точные сигналы разрешены</string>
     <string name="critical_alarm_exact_needed">Разрешите «Будильники и напоминания» для точного повтора</string>

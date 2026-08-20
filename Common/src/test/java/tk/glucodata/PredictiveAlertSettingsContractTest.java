@@ -217,7 +217,8 @@ public class PredictiveAlertSettingsContractTest {
         assertTrue(coordinator.contains("activeHandoff(result,"));
         assertTrue(coordinator.contains("deliveredDirection)"));
         assertTrue(coordinator.contains(
-                "shown = PredictiveAlertNotifier.show(application, decision)"));
+                "shown = PredictiveAlertNotifier.show(application, decision,"));
+        assertTrue(coordinator.contains("forecast);"));
         String evidenceGate = between(coordinator,
                 "String direction = decision.direction",
                 "boolean snoozeReplay =");

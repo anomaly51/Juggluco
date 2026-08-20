@@ -18,6 +18,9 @@
     <string name="critical_alarm_actual_badge">ТЕКУЩЕЕ ПОКАЗАНИЕ</string>
     <string name="critical_alarm_predictive_badge">ВЕРОЯТНЫЙ ПРОГНОЗ · ЭКСПЕРИМЕНТАЛЬНО</string>
     <string name="critical_alarm_test_badge">ТЕСТ · ЭТО НЕ СОБЫТИЕ ГЛЮКОЗЫ</string>
+    <string name="critical_alarm_status_current">Требует внимания сейчас</string>
+    <string name="critical_alarm_status_predicted">Вероятное изменение впереди</string>
+    <string name="critical_alarm_status_test">Проверка доставки и экрана</string>
     <string name="critical_alarm_instruction">Проверьте глюкозу и следуйте согласованному плану. Сигнал не рассчитывает дозу инсулина или количество углеводов.</string>
     <string name="critical_alarm_ack_button">Понял — выключить звук</string>
     <string name="critical_alarm_snooze_button">Напомнить через 5 минут</string>
@@ -31,4 +34,24 @@
     <string name="critical_alarm_private_body">Откройте, чтобы подтвердить или отложить</string>
     <string name="critical_alarm_test_title">Тест критической доставки</string>
     <string name="critical_alarm_test_body">Это только тест доставки. Изменение глюкозы не обнаружено. Нажмите «Понял», чтобы выключить звук.</string>
+
+    <string name="critical_alarm_chart_title">Динамика глюкозы</string>
+    <string name="critical_alarm_chart_subtitle_recent">Последние %1$d минут</string>
+    <string name="critical_alarm_chart_subtitle_forecast">Последние %1$d мин · прогноз до %2$d мин</string>
+    <string name="critical_alarm_chart_private_hint">Подробности скрыты, пока телефон заблокирован</string>
+    <string name="critical_alarm_chart_recent">Факт</string>
+    <string name="critical_alarm_chart_forecast">Прогноз</string>
+    <string name="critical_alarm_chart_target">Цель</string>
+    <string name="critical_alarm_chart_past_axis">−%1$d мин</string>
+    <string name="critical_alarm_chart_now_axis">Сейчас</string>
+    <string name="critical_alarm_chart_future_axis">+%1$d мин</string>
+    <string name="critical_alarm_chart_empty">Данные графика временно недоступны</string>
+    <string name="critical_alarm_chart_locked">Разблокируйте телефон, чтобы увидеть график</string>
+    <string name="critical_alarm_chart_description_recent">График недавних значений глюкозы и целевого диапазона</string>
+    <string name="critical_alarm_chart_description_forecast">График недавних значений, целевого диапазона и прогноза на %1$d минут</string>
+    <string name="critical_alarm_trend_rising_fast">Глюкоза быстро растёт</string>
+    <string name="critical_alarm_trend_rising">Глюкоза растёт</string>
+    <string name="critical_alarm_trend_stable">Глюкоза стабильна</string>
+    <string name="critical_alarm_trend_falling">Глюкоза снижается</string>
+    <string name="critical_alarm_trend_falling_fast">Глюкоза быстро снижается</string>
 </resources>

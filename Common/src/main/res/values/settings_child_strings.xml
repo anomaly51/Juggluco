@@ -97,6 +97,9 @@
     <string name="critical_alarm_full_screen_title">Full-screen alerts</string>
     <string name="critical_alarm_full_screen_ready">Allowed by Android</string>
     <string name="critical_alarm_full_screen_needed">Special access is not allowed</string>
+    <string name="critical_alarm_overlay_title">Show above other apps</string>
+    <string name="critical_alarm_overlay_ready">Allowed · the urgent form can open immediately above another app</string>
+    <string name="critical_alarm_overlay_needed">Allow display over other apps for an immediate urgent form while unlocked</string>
     <string name="critical_alarm_exact_title">Reliable snooze timing</string>
     <string name="critical_alarm_exact_ready">Exact alarms allowed</string>
     <string name="critical_alarm_exact_needed">Allow Alarms &amp; reminders for exact snooze timing</string>

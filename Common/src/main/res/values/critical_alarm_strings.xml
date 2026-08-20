@@ -18,6 +18,9 @@
     <string name="critical_alarm_actual_badge">CURRENT READING</string>
     <string name="critical_alarm_predictive_badge">LIKELY FORECAST · EXPERIMENTAL</string>
     <string name="critical_alarm_test_badge">TEST · NOT A GLUCOSE EVENT</string>
+    <string name="critical_alarm_status_current">Requires attention now</string>
+    <string name="critical_alarm_status_predicted">Likely change ahead</string>
+    <string name="critical_alarm_status_test">Delivery and screen preview</string>
     <string name="critical_alarm_instruction">Check your glucose and follow your agreed care plan. This alert never calculates insulin or carbohydrates.</string>
     <string name="critical_alarm_ack_button">I understand — stop sound</string>
     <string name="critical_alarm_snooze_button">Remind me in 5 minutes</string>
@@ -31,4 +34,24 @@
     <string name="critical_alarm_private_body">Open to acknowledge or snooze</string>
     <string name="critical_alarm_test_title">Critical alert delivery test</string>
     <string name="critical_alarm_test_body">This is only a delivery test. No glucose change was detected. Use “I understand” to stop the sound.</string>
+
+    <string name="critical_alarm_chart_title">Glucose timeline</string>
+    <string name="critical_alarm_chart_subtitle_recent">Recent %1$d minutes</string>
+    <string name="critical_alarm_chart_subtitle_forecast">Recent %1$d min · forecast up to %2$d min</string>
+    <string name="critical_alarm_chart_private_hint">Details stay private while the device is locked</string>
+    <string name="critical_alarm_chart_recent">Recent</string>
+    <string name="critical_alarm_chart_forecast">Forecast</string>
+    <string name="critical_alarm_chart_target">Target</string>
+    <string name="critical_alarm_chart_past_axis">−%1$d min</string>
+    <string name="critical_alarm_chart_now_axis">Now</string>
+    <string name="critical_alarm_chart_future_axis">+%1$d min</string>
+    <string name="critical_alarm_chart_empty">Timeline data is temporarily unavailable</string>
+    <string name="critical_alarm_chart_locked">Unlock to view the glucose timeline</string>
+    <string name="critical_alarm_chart_description_recent">Chart of recent glucose readings and the target range</string>
+    <string name="critical_alarm_chart_description_forecast">Chart of recent glucose readings, target range, and a %1$d-minute forecast</string>
+    <string name="critical_alarm_trend_rising_fast">Glucose rising quickly</string>
+    <string name="critical_alarm_trend_rising">Glucose rising</string>
+    <string name="critical_alarm_trend_stable">Glucose steady</string>
+    <string name="critical_alarm_trend_falling">Glucose falling</string>
+    <string name="critical_alarm_trend_falling_fast">Glucose falling quickly</string>
 </resources>

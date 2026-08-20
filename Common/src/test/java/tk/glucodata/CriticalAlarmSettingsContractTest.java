@@ -53,6 +53,7 @@ public class CriticalAlarmSettingsContractTest {
         assertTrue(page.contains("openAlarmSoundSettings(activity)"));
         assertTrue(page.contains("openDndSettings(activity)"));
         assertTrue(page.contains("openFullScreenSettings(activity)"));
+        assertTrue(page.contains("openOverlaySettings(activity)"));
         assertTrue(page.contains("openExactAlarmSettings(activity)"));
         assertTrue(page.contains("CriticalAlarmDiagnostics.showTest(activity, true)"));
 
@@ -62,6 +63,8 @@ public class CriticalAlarmSettingsContractTest {
         assertFalse(diagnostics.contains("setInterruptionFilter"));
         assertFalse(diagnostics.contains("setStreamVolume"));
         assertTrue(diagnostics.contains("canUseFullScreenIntent"));
+        assertTrue(diagnostics.contains("canDrawOverlays"));
+        assertTrue(diagnostics.contains("ACTION_MANAGE_OVERLAY_PERMISSION"));
         assertTrue(diagnostics.contains("canScheduleExactAlarms"));
         assertTrue(diagnostics.contains("USAGE_ALARM"));
     }
@@ -75,6 +78,7 @@ public class CriticalAlarmSettingsContractTest {
         assertTrue(russian.contains("ни одно приложение не гарантирует звук"));
         assertTrue(russian.contains("Громкость будильника"));
         assertTrue(russian.contains("Полноэкранные сигналы"));
+        assertTrue(russian.contains("Показ поверх других приложений"));
         assertTrue(russian.contains("режиму «Не беспокоить»"));
         assertFalse(russian.contains("Звук гарантирован"));
     }

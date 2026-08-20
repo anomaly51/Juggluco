@@ -207,6 +207,56 @@ public class CriticalGlucoseAlarmTest {
     }
 
     @Test
+    public void notificationOpenGraphUsesPrivateActivityGateAndRejectsStale()
+            throws Exception {
+        long now = System.currentTimeMillis();
+        assertTrue(showPrediction(true, "Low", "First", now));
+        String staleToken = token();
+        StatusBarNotification first = activeNotification(
+                CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID);
+        assertNotNull(first);
+        PendingIntent staleOpen = first.getNotification().actions[2].actionIntent;
+        Intent staleIntent = shadowOf(staleOpen).getSavedIntent();
+        assertEquals(CriticalGlucoseAlarmOpenGraphActivity.ACTION_OPEN_GRAPH,
+                staleIntent.getAction());
+        assertNotNull(staleIntent.getComponent());
+        assertEquals(CriticalGlucoseAlarmOpenGraphActivity.class.getName(),
+                staleIntent.getComponent().getClassName());
+        assertEquals(staleToken, staleIntent.getStringExtra(
+                CriticalGlucoseAlarmReceiver.EXTRA_TOKEN));
+        assertNotNull(staleIntent.getData());
+        assertTrue(staleIntent.getData().isOpaque());
+
+        assertTrue(showPrediction(false, "High", "Replacement", now + 1L));
+        String currentToken = token();
+        StatusBarNotification replacement = activeNotification(
+                CriticalAlarmDiagnostics.PREDICTIVE_HIGH_CHANNEL_ID);
+        assertNotNull(replacement);
+        PendingIntent currentOpen = replacement.getNotification()
+                .actions[2].actionIntent;
+        Intent currentIntent = shadowOf(currentOpen).getSavedIntent();
+        assertNotEquals(staleOpen, currentOpen);
+        assertNotEquals(staleIntent.getData(), currentIntent.getData());
+        assertEquals(currentToken, currentIntent.getStringExtra(
+                CriticalGlucoseAlarmReceiver.EXTRA_TOKEN));
+
+        assertFalse(application.getPackageManager().getActivityInfo(
+                staleIntent.getComponent(), 0).exported);
+
+        while (shadowOf(application).getNextStartedActivity() != null) { }
+        Robolectric.buildActivity(CriticalGlucoseAlarmOpenGraphActivity.class,
+                staleIntent).create().destroy();
+        assertNull(shadowOf(application).getNextStartedActivity());
+
+        Robolectric.buildActivity(CriticalGlucoseAlarmOpenGraphActivity.class,
+                currentIntent).create().destroy();
+        Intent graph = shadowOf(application).getNextStartedActivity();
+        assertNotNull(graph);
+        assertEquals(MainActivity.class.getName(),
+                graph.getComponent().getClassName());
+    }
+
+    @Test
     public void staleTokenCannotAcknowledgeReplacementSession() {
         long now = System.currentTimeMillis();
         assertTrue(showPrediction(true, "Low", "First", now));
@@ -675,9 +725,11 @@ public class CriticalGlucoseAlarmTest {
     }
 
     @Test
-    public void manifestAndSourceKeepFsiPrivateAndNeverMutateDndOrVolume()
+    public void manifestAndSourceKeepCriticalSurfacesPrivateAndNeverMutateDndOrVolume()
             throws Exception {
         String manifest = source(Paths.get("src", "mobile",
+                "AndroidManifest.xml"));
+        String mainManifest = source(Paths.get("src", "main",
                 "AndroidManifest.xml"));
         assertTrue(manifest.contains(
                 "android.permission.USE_FULL_SCREEN_INTENT"));
@@ -688,6 +740,8 @@ public class CriticalGlucoseAlarmTest {
         assertTrue(manifest.contains("android:showWhenLocked=\"true\""));
         assertTrue(manifest.contains("android:turnScreenOn=\"true\""));
         assertTrue(manifest.contains("android:exported=\"false\""));
+        assertTrue(mainManifest.contains(
+                "android.permission.SYSTEM_ALERT_WINDOW"));
 
         String controller = source(Paths.get("src", "main", "java", "tk",
                 "glucodata", "CriticalGlucoseAlarm.java"));
@@ -697,6 +751,8 @@ public class CriticalGlucoseAlarmTest {
                 "glucodata", "CriticalGlucoseAlarmReceiver.java"));
         String notify = source(Paths.get("src", "main", "java", "tk",
                 "glucodata", "Notify.java"));
+        String overlay = source(Paths.get("src", "main", "java", "tk",
+                "glucodata", "CriticalGlucoseAlarmOverlay.java"));
 
         assertTrue(controller.contains(".setFullScreenIntent(fullScreen, true)"));
         assertTrue(controller.contains("NotificationCompat.VISIBILITY_PRIVATE"));
@@ -728,15 +784,17 @@ public class CriticalGlucoseAlarmTest {
         assertTrue(activity.contains("setTurnScreenOn(true)"));
         assertTrue(receiver.contains("ACTION_ACK"));
         assertTrue(receiver.contains("ACTION_SNOOZE"));
+        assertTrue(overlay.contains("TYPE_APPLICATION_OVERLAY"));
+        assertTrue(overlay.contains("CriticalGlucoseAlarm.session(app, token)"));
         assertTrue(notify.contains("CriticalGlucoseAlarm.resolveActual"));
         assertTrue(controller.contains(
                 "if (!trigger && current == null) return false"));
 
-        String safetySurface = controller + activity + receiver + notify;
+        String safetySurface = controller + activity + receiver + notify
+                + overlay;
         assertFalse(safetySurface.contains("setInterruptionFilter"));
         assertFalse(safetySurface.contains("setStreamVolume"));
         assertFalse(safetySurface.contains("adjustStreamVolume"));
-        assertFalse(safetySurface.contains("SYSTEM_ALERT_WINDOW"));
     }
 
     private boolean showPrediction(boolean low, String title, String body,

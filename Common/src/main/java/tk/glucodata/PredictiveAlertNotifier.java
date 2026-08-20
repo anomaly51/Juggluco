@@ -82,6 +82,12 @@ final class PredictiveAlertNotifier {
 
     static boolean show(Context context,
             ForecastRiskEvaluator.Decision decision) {
+        return show(context, decision, null);
+    }
+
+    static boolean show(Context context,
+            ForecastRiskEvaluator.Decision decision,
+            ForecastSnapshot forecast) {
         if (context == null || decision == null || !decision.shouldNotify()) {
             return false;
         }
@@ -99,11 +105,22 @@ final class PredictiveAlertNotifier {
         long timeoutMs = notificationTimeoutMs(decision, postedAtMs);
 
         if (usesCriticalDelivery(decision)) {
+            CriticalDisplayPayload displayPayload =
+                    CriticalDisplayPayload.immediatePredictive(forecast,
+                            decision, postedAtMs);
             boolean shown = CriticalGlucoseAlarm.showPredictive(context, low,
                     title, body,
                     glucose(context, decision.predictedMedianMgDl),
-                    decision.anchorMs, decision.crossingAtMs, timeoutMs);
+                    decision.anchorMs, decision.crossingAtMs, timeoutMs,
+                    displayPayload);
             if (shown) {
+                CriticalGlucoseAlarm.Session owner =
+                        CriticalGlucoseAlarm.currentSession(context);
+                if (owner != null && CriticalGlucoseAlarm.SOURCE_PREDICTIVE
+                        .equals(owner.source) && owner.low() == low) {
+                    CriticalDisplayPayload.enrichPredictiveAsync(context,
+                            owner.token, forecast, decision, postedAtMs);
+                }
                 stopLegacyGlucoseAlarmAfterOwnership(
                         () -> Notify.stopGlucoseAlarm());
                 cancelOrdinaryNotification(context, decision.direction);

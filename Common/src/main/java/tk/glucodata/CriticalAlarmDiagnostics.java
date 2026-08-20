@@ -74,6 +74,7 @@ final class CriticalAlarmDiagnostics {
                 || (notifications != null
                 && notifications.isNotificationPolicyAccessGranted());
         boolean fullScreenAccess = fullScreenAccess(app, notifications);
+        boolean overlayAccess = overlayAccess(app);
         boolean exactAlarmAccess = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                 || (alarms != null && alarms.canScheduleExactAlarms());
 
@@ -83,7 +84,8 @@ final class CriticalAlarmDiagnostics {
                 PREDICTIVE_CHANNEL_IDS);
         return new Snapshot(postPermission, notificationsEnabled,
                 alarmVolume, maxAlarmVolume, policyAccess, fullScreenAccess,
-                exactAlarmAccess, actual, predictive, testHook != null);
+                overlayAccess, exactAlarmAccess, actual, predictive,
+                testHook != null);
     }
 
     private static boolean fullScreenAccess(Context context,
@@ -94,6 +96,17 @@ final class CriticalAlarmDiagnostics {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true;
         return ContextCompat.checkSelfPermission(context,
                 Manifest.permission.USE_FULL_SCREEN_INTENT)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** Whether Android allows the urgent surface above another unlocked app. */
+    static boolean overlayAccess(Context context) {
+        if (context == null) return false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            return Settings.canDrawOverlays(context);
+        }
+        return ContextCompat.checkSelfPermission(context,
+                Manifest.permission.SYSTEM_ALERT_WINDOW)
                 == PackageManager.PERMISSION_GRANTED;
     }
 
@@ -174,6 +187,16 @@ final class CriticalAlarmDiagnostics {
         openAppDetails(context);
     }
 
+    static void openOverlaySettings(Context context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + context.getPackageName()));
+            startSettings(context, intent);
+            return;
+        }
+        openAppDetails(context);
+    }
+
     static void openExactAlarmSettings(Context context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             Intent intent = new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
@@ -240,6 +263,7 @@ final class CriticalAlarmDiagnostics {
         final int maxAlarmVolume;
         final boolean dndPolicyAccess;
         final boolean fullScreenAccess;
+        final boolean overlayAccess;
         final boolean exactAlarmAccess;
         final ChannelReadiness actualChannels;
         final ChannelReadiness predictiveChannels;
@@ -247,7 +271,8 @@ final class CriticalAlarmDiagnostics {
 
         Snapshot(boolean postPermission, boolean notificationsEnabled,
                 int alarmVolume, int maxAlarmVolume, boolean dndPolicyAccess,
-                boolean fullScreenAccess, boolean exactAlarmAccess,
+                boolean fullScreenAccess, boolean overlayAccess,
+                boolean exactAlarmAccess,
                 ChannelReadiness actualChannels,
                 ChannelReadiness predictiveChannels, boolean testAvailable) {
             this.postPermission = postPermission;
@@ -256,6 +281,7 @@ final class CriticalAlarmDiagnostics {
             this.maxAlarmVolume = maxAlarmVolume;
             this.dndPolicyAccess = dndPolicyAccess;
             this.fullScreenAccess = fullScreenAccess;
+            this.overlayAccess = overlayAccess;
             this.exactAlarmAccess = exactAlarmAccess;
             this.actualChannels = actualChannels;
             this.predictiveChannels = predictiveChannels;
@@ -264,7 +290,8 @@ final class CriticalAlarmDiagnostics {
 
         static Snapshot unavailable() {
             return new Snapshot(false, false, -1, -1, false, false, false,
-                    ChannelReadiness.missing(), ChannelReadiness.missing(), false);
+                    false, ChannelReadiness.missing(),
+                    ChannelReadiness.missing(), false);
         }
 
         boolean notificationAccess() {
@@ -296,7 +323,8 @@ final class CriticalAlarmDiagnostics {
 
         private boolean commonConfigured() {
             return notificationAccess() && alarmVolumeAudible()
-                    && dndPolicyAccess && fullScreenAccess && exactAlarmAccess;
+                    && dndPolicyAccess && fullScreenAccess && overlayAccess
+                    && exactAlarmAccess;
         }
     }
 }

@@ -109,7 +109,7 @@ public class CriticalAlarmDiagnosticsTest {
                         true, true, true, 2);
         CriticalAlarmDiagnostics.Snapshot ready =
                 new CriticalAlarmDiagnostics.Snapshot(true, true,
-                        5, 10, true, true, true,
+                        5, 10, true, true, true, true,
                         channels, channels, true);
         assertEquals(50, ready.alarmVolumePercent());
         assertTrue(ready.actualConfigured());
@@ -118,7 +118,7 @@ public class CriticalAlarmDiagnosticsTest {
 
         CriticalAlarmDiagnostics.Snapshot silent =
                 new CriticalAlarmDiagnostics.Snapshot(true, true,
-                        0, 10, true, true, true,
+                        0, 10, true, true, true, true,
                         channels, channels, true);
         assertFalse(silent.alarmVolumeAudible());
         assertFalse(silent.maximallyConfigured());
@@ -128,10 +128,17 @@ public class CriticalAlarmDiagnosticsTest {
                         true, true, false, 2);
         CriticalAlarmDiagnostics.Snapshot noOverride =
                 new CriticalAlarmDiagnostics.Snapshot(true, true,
-                        5, 10, true, true, true,
+                        5, 10, true, true, true, true,
                         noDndOverride, channels, true);
         assertFalse(noOverride.actualConfigured());
         assertFalse(noOverride.maximallyConfigured());
+
+        CriticalAlarmDiagnostics.Snapshot noOverlay =
+                new CriticalAlarmDiagnostics.Snapshot(true, true,
+                        5, 10, true, true, false, true,
+                        channels, channels, true);
+        assertFalse(noOverlay.overlayAccess);
+        assertFalse(noOverlay.maximallyConfigured());
     }
 
     @Test

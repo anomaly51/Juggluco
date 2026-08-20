@@ -47,6 +47,7 @@
     <uses-permission android:name="android.permission.FLASHLIGHT" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.HIDE_OVERLAY_WINDOWS" />
 
     <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
 
@@ -106,6 +107,14 @@
             android:taskAffinity=""
             android:theme="@style/AppTheme.AlarmReserved"
             android:turnScreenOn="true" />
+
+        <activity
+            android:name=".CriticalGlucoseAlarmOpenGraphActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
 
         <receiver
             android:name=".CriticalGlucoseAlarmReceiver"

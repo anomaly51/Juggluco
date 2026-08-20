@@ -107,7 +107,8 @@ final class PredictiveAlertCoordinator {
 
         boolean shown = false;
         try {
-            shown = PredictiveAlertNotifier.show(application, decision);
+            shown = PredictiveAlertNotifier.show(application, decision,
+                    forecast);
         } catch (Throwable error) {
             Log.stack("PredictiveAlerts", "show", error);
         }

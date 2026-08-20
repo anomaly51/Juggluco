@@ -700,9 +700,28 @@ void overwriteglucose(int kind) {
     private void arrowglucosealarm(int kind,float glvalue,String message,notGlucose strglucose,String type,boolean alarm) {
         {if(doLog) {Log.i(LOG_ID,"arrowglucosealarm kind="+kind+" "+ message+" alarm="+alarm);};};
         if(!isWearable && (kind==0 || kind==1 || kind==5 || kind==6)) {
+            long capturedAtMs=System.currentTimeMillis();
+            long readingAtMs=CriticalDisplayPayload.readingTimeMillis(
+                    strglucose==null?0L:strglucose.time,capturedAtMs);
+            int canonicalMgDl=Math.round(Applic.unit==1
+                    ?glvalue*18f:glvalue);
+            // Native change/rate is always mg/dL/min; unlike glvalue it is
+            // not converted when the display unit is mmol/L.
+            Float trend=strglucose==null?null:strglucose.rate;
+            CriticalDisplayPayload displayPayload=
+                    CriticalDisplayPayload.immediateActual(readingAtMs,
+                            canonicalMgDl,trend,capturedAtMs);
             boolean handled=CriticalGlucoseAlarm.showActual(Applic.app,kind,
-                    glvalue,message,alarm);
+                    glvalue,message,alarm,displayPayload);
             if(handled) {
+                CriticalGlucoseAlarm.Session owner=
+                        CriticalGlucoseAlarm.currentSession(Applic.app);
+                boolean low=kind==0||kind==5;
+                if(owner!=null&&owner.actual()&&owner.low()==low) {
+                    CriticalDisplayPayload.enrichActualAsync(Applic.app,
+                            owner.token,readingAtMs,canonicalMgDl,trend,
+                            capturedAtMs);
+                }
                 Notify.stopGlucoseAlarm();
                 // Native actual alarms own the episode. Remove both ordinary
                 // and critical predictive presentation, while keeping the
