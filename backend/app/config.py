@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,6 +53,22 @@ class Settings:
     meal_chat_max_photos: int = 24
     meal_chat_max_aggregate_image_bytes: int = 32 * 1024 * 1024
     meal_chat_max_history_messages: int = 40
+    # Optional least-privilege credential for GET-only viewer routes.  Keeping
+    # it separate from ``api_token`` means a companion device never needs the
+    # Android/admin credential that can create or edit health records.
+    viewer_token: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.viewer_token is not None and len(self.viewer_token) < 32:
+            raise ValueError("JUGGLUCO_VIEWER_TOKEN must be at least 32 characters")
+        if (
+            self.viewer_token is not None
+            and self.api_token is not None
+            and secrets.compare_digest(self.viewer_token, self.api_token)
+        ):
+            raise ValueError(
+                "JUGGLUCO_VIEWER_TOKEN must differ from JUGGLUCO_API_TOKEN"
+            )
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -107,6 +124,7 @@ class Settings:
             meal_chat_max_history_messages=_positive_int(
                 "JUGGLUCO_MEAL_CHAT_MAX_HISTORY_MESSAGES", 40
             ),
+            viewer_token=os.getenv("JUGGLUCO_VIEWER_TOKEN") or None,
         )
 
     @property
@@ -116,3 +134,7 @@ class Settings:
     @property
     def openrouter_configured(self) -> bool:
         return bool(self.openrouter_api_key)
+
+    @property
+    def viewer_auth_configured(self) -> bool:
+        return self.viewer_token is not None and len(self.viewer_token) >= 32

@@ -38,6 +38,16 @@ kubectl -n juggluco rollout status deployment/juggluco-backend
 `kustomization.yaml`, so placeholder or real credentials cannot be deployed by
 accident.
 
+Use two different random credentials: `JUGGLUCO_API_TOKEN` for the Android
+writer/admin API and `JUGGLUCO_VIEWER_TOKEN` for the GET-only iOS viewer API.
+Both must contain at least 32 characters. Never copy the writer/admin token to
+an iPhone.
+
+For remote iOS access, place the service behind a valid HTTPS gateway or trusted
+tunnel and add its public host name to `JUGGLUCO_ALLOWED_HOSTS` in
+`deployment.yaml`. The included `ClusterIP` service is intentionally not an
+Internet-facing endpoint.
+
 For a private, temporary connection from the same computer:
 
 ```bash

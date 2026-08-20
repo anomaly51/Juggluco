@@ -92,10 +92,112 @@ review.
 
 ## API contract
 
+### Read-only iOS/viewer API
+
+Generate a second, unrelated credential for companion viewer devices:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Put it in `JUGGLUCO_VIEWER_TOKEN`. It must be at least 32 characters and must
+not equal `JUGGLUCO_API_TOKEN`. Send it as `Authorization: Bearer <token>` only
+to `GET /v1/viewer/*`. The viewer credential is deliberately rejected by all
+existing Android/admin routes, including glucose ingestion and meal/insulin
+create, edit, and delete operations. The admin token remains accepted on the
+viewer routes for backwards-compatible diagnostics, but it should never be
+copied to an iPhone. Store the viewer token in Keychain, not source code or
+`UserDefaults`.
+
+Remote access must use HTTPS with a valid certificate. The local LAN launcher
+is for a trusted private Wi-Fi network only; do not port-forward it. A public
+deployment additionally needs per-device credential rotation, an allowlisted
+host name, edge rate limiting, backups, and the privacy/compliance controls
+appropriate for health data.
+
+`GET /v1/viewer/snapshot` is the bounded dashboard bootstrap. Query parameters:
+
+- `from_ms` / `to_ms`: inclusive graph window, defaulting to the last 24 hours;
+  a request may cover at most 31 days and cannot end more than 10 minutes in the
+  future;
+- `glucose_limit`: 1-2500, default 1500 (enough for a typical one-minute 24-hour
+  CGM graph);
+- `event_limit`: 1-500, default 100.
+
+The response has stable, explicit fields:
+
+```json
+{
+  "api_version": "v1",
+  "server_time_ms": 1787212800000,
+  "from_ms": 1787126400000,
+  "to_ms": 1787212800000,
+  "target_range": {
+    "low_mg_dl": 75.6,
+    "high_mg_dl": 162.0,
+    "low_mmol_l": 4.2,
+    "high_mmol_l": 9.0
+  },
+  "current_glucose": {
+    "reading_id": "cgm-1787212500000",
+    "measured_at_ms": 1787212500000,
+    "glucose_mg_dl": 116.0,
+    "trend_mg_dl_min": -0.4,
+    "sensor_id": null,
+    "sensor_generation": "Libre",
+    "quality": 0.96,
+    "utc_offset_minutes": 180,
+    "received_at_ms": 1787212505000,
+    "age_ms": 300000,
+    "is_stale": false
+  },
+  "glucose_history": [],
+  "glucose_history_order": "oldest_first",
+  "glucose_history_truncated": false,
+  "intake_events": [],
+  "intake_events_order": "oldest_first",
+  "intake_events_truncated": false,
+  "forecast": {"status": "no_data", "points": []}
+}
+```
+
+`current_glucose` is always the newest stored reading, independently of the
+requested graph window. `age_ms` is measured against `server_time_ms`, and
+`is_stale` becomes true after 15 minutes so a cached or delayed value is never
+presented as live. History and timeline arrays are oldest-first for direct chart
+rendering. When a limit is reached, the endpoint keeps the newest entries,
+returns the corresponding `*_truncated=true`, and the client can load older
+entries through the page endpoints. Intake entries expose only active
+`meal`, `rapid`, or `long` events; deleted records and internal client/analysis
+identifiers are not returned. The nested forecast uses the existing
+`ForecastCurrentResponse` contract and remains a conditional visualization,
+never a dose recommendation.
+
+Older history is available from:
+
+- `GET /v1/viewer/glucose?cursor=&limit=&from_ms=&to_ms=`;
+- `GET /v1/viewer/intakes?cursor=&limit=&from_ms=&to_ms=`.
+
+Both return `items`, nullable `next_cursor`, `has_more`, and
+`order="newest_first"`. `limit` is 1-500. The first request defaults to a
+31-day window ending at server time. Rows with identical timestamps are ordered
+by their stable ID, so pagination neither merges nor drops simultaneous meals,
+rapid insulin, long insulin, or CGM samples. Treat `next_cursor` as opaque: it is
+HMAC-signed and bound to the route and exact time window; tampering, using it on
+the other endpoint, or supplying different window parameters returns `422`.
+
+These are browsing cursors, not durable synchronization revisions. A corrected
+CGM row keeps its source ID/time, and the active-only intake view omits
+tombstones. An iOS viewer that caches data should periodically replace its
+bounded rolling window with a fresh snapshot rather than treating page cursors
+as change cursors. Android incremental synchronization continues to use
+`GET /v1/intakes?after_sync_version=...` unchanged.
+
 ### Health
 
 `GET /v1/health` is intentionally unauthenticated and returns only generic readiness
-flags. It never returns credentials, provider names, endpoints, or model IDs.
+flags, including whether a dedicated viewer credential is configured. It never
+returns credentials, provider names, endpoints, or model IDs.
 
 ### Transcribe an editable voice draft
 

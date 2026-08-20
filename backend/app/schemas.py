@@ -340,6 +340,7 @@ class HealthResponse(BaseModel):
     api_version: str
     database: str
     auth_configured: bool
+    viewer_auth_configured: bool = False
     ai_configured: bool
 
 
@@ -420,6 +421,85 @@ class GlucoseReadingsResponse(BaseModel):
     updated: int = Field(ge=0)
     latest_reading_at_ms: int | None
     forecast_generated: bool
+
+
+class ViewerTargetRange(BaseModel):
+    """The application's fixed display target in both supported units."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    low_mg_dl: Literal[75.6] = 75.6
+    high_mg_dl: Literal[162.0] = 162.0
+    low_mmol_l: Literal[4.2] = 4.2
+    high_mmol_l: Literal[9.0] = 9.0
+
+
+class ViewerGlucoseReading(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reading_id: str = Field(min_length=1, max_length=160)
+    measured_at_ms: int = Field(gt=0)
+    glucose_mg_dl: float = Field(ge=20, le=600, allow_inf_nan=False)
+    trend_mg_dl_min: float | None = Field(
+        default=None, ge=-30, le=30, allow_inf_nan=False
+    )
+    sensor_id: str | None = Field(default=None, max_length=160)
+    sensor_generation: str | None = Field(default=None, max_length=80)
+    quality: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    utc_offset_minutes: int | None = Field(
+        default=None, ge=-14 * 60, le=14 * 60
+    )
+    received_at_ms: int = Field(gt=0)
+
+
+class ViewerCurrentGlucose(ViewerGlucoseReading):
+    age_ms: int = Field(ge=0)
+    is_stale: bool
+
+
+class ViewerIntakeEvent(BaseModel):
+    """Minimized, active-only event projection for a read-only timeline."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    kind: Literal["meal", "rapid", "long"]
+    occurred_at_ms: int = Field(gt=0)
+    meal_text: str | None = Field(default=None, max_length=4_000)
+    carbs_g: float | None = Field(default=None, ge=0, le=1_000)
+    portion_g: float | None = Field(default=None, ge=0, le=10_000)
+    original_portion_g: float | None = Field(default=None, ge=0, le=10_000)
+    original_carbs_g: float | None = Field(default=None, ge=0, le=1_000)
+    carbs_source: str | None = Field(default=None, max_length=64)
+    insulin_units: float | None = Field(default=None, gt=0, le=500)
+    insulin_type: Literal["rapid", "long"] | None = None
+    insulin_name: str | None = Field(default=None, max_length=120)
+    ai_confidence: float = Field(ge=0, le=1)
+    absorption_speed: float | None = Field(default=None, ge=0, le=1)
+    absorption_peak_minutes: int | None = Field(default=None, ge=5, le=720)
+    absorption_duration_minutes: int | None = Field(
+        default=None, ge=15, le=1_440
+    )
+    absorption_confidence: float | None = Field(default=None, ge=0, le=1)
+    updated_at_ms: int = Field(gt=0)
+
+
+class ViewerGlucosePage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ViewerGlucoseReading]
+    next_cursor: str | None
+    has_more: bool
+    order: Literal["newest_first"] = "newest_first"
+
+
+class ViewerIntakePage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ViewerIntakeEvent]
+    next_cursor: str | None
+    has_more: bool
+    order: Literal["newest_first"] = "newest_first"
 
 
 class ForecastPoint(BaseModel):
@@ -571,6 +651,26 @@ class ForecastCurrentResponse(BaseModel):
     # before the predictive-alert contract existed. New backend responses fill
     # it for every status, including explicit fail-closed states.
     alert_assessment: ForecastAlertAssessment | None = None
+
+
+class ViewerSnapshot(BaseModel):
+    """Bounded initial payload for a companion dashboard and timeline."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_version: Literal["v1"] = "v1"
+    server_time_ms: int = Field(gt=0)
+    from_ms: int = Field(ge=0)
+    to_ms: int = Field(gt=0)
+    target_range: ViewerTargetRange
+    current_glucose: ViewerCurrentGlucose | None
+    glucose_history: list[ViewerGlucoseReading]
+    glucose_history_order: Literal["oldest_first"] = "oldest_first"
+    glucose_history_truncated: bool
+    intake_events: list[ViewerIntakeEvent]
+    intake_events_order: Literal["oldest_first"] = "oldest_first"
+    intake_events_truncated: bool
+    forecast: ForecastCurrentResponse
 
 
 class ForecastTrainingStatus(BaseModel):

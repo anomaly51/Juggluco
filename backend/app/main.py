@@ -69,6 +69,7 @@ from .schemas import (
     TranscriptionResponse,
 )
 from .security import require_api_token
+from .viewer import create_viewer_router
 
 
 logger = logging.getLogger(__name__)
@@ -515,7 +516,14 @@ def create_app(
     @application.middleware("http")
     async def security_headers(request: Request, call_next):
         response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
+        if request.url.path.startswith("/v1/viewer/"):
+            # Viewer responses contain health data and may traverse a remote
+            # reverse proxy.  Explicitly forbid both shared and private caches
+            # and keep credential-dependent representations separated.
+            response.headers["Cache-Control"] = "no-store, private"
+            response.headers["Vary"] = "Authorization"
+        else:
+            response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Request-ID"] = request.headers.get(
             "X-Request-ID", str(uuid4())
@@ -532,6 +540,7 @@ def create_app(
             api_version="v1",
             database=database_state,
             auth_configured=current_settings.auth_configured,
+            viewer_auth_configured=current_settings.viewer_auth_configured,
             ai_configured=current_settings.openrouter_configured,
         )
 
@@ -1321,6 +1330,7 @@ def create_app(
         )
 
     application.include_router(router)
+    application.include_router(create_viewer_router(get_session, _event_response))
     return application
 
 
