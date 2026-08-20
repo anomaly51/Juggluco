@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="critical_alarm_channel_actual_low">Urgent current low glucose</string>
+    <string name="critical_alarm_channel_actual_low_description">Alarm-stream sound and lock-screen presentation for a current low glucose alert</string>
+    <string name="critical_alarm_channel_actual_high">Urgent current high glucose</string>
+    <string name="critical_alarm_channel_actual_high_description">Alarm-stream sound and lock-screen presentation for a current high glucose alert</string>
+    <string name="critical_alarm_channel_predictive_low">Likely predicted low glucose</string>
+    <string name="critical_alarm_channel_predictive_low_description">Urgent warning when an approved forecast likely crosses below target</string>
+    <string name="critical_alarm_channel_predictive_high">Likely predicted high glucose</string>
+    <string name="critical_alarm_channel_predictive_high_description">Urgent warning when an approved forecast likely crosses above target</string>
+
+    <string name="critical_alarm_actual_low_title">Current glucose is low</string>
+    <string name="critical_alarm_actual_very_low_title">Current glucose is critically low</string>
+    <string name="critical_alarm_actual_high_title">Current glucose is high</string>
+    <string name="critical_alarm_actual_very_high_title">Current glucose is critically high</string>
+    <string name="critical_alarm_low_direction">LOW GLUCOSE</string>
+    <string name="critical_alarm_high_direction">HIGH GLUCOSE</string>
+    <string name="critical_alarm_actual_badge">CURRENT READING</string>
+    <string name="critical_alarm_predictive_badge">LIKELY FORECAST · EXPERIMENTAL</string>
+    <string name="critical_alarm_test_badge">TEST · NOT A GLUCOSE EVENT</string>
+    <string name="critical_alarm_instruction">Check your glucose and follow your agreed care plan. This alert never calculates insulin or carbohydrates.</string>
+    <string name="critical_alarm_ack_button">I understand — stop sound</string>
+    <string name="critical_alarm_snooze_button">Remind me in 5 minutes</string>
+    <string name="critical_alarm_open_graph_button">Open glucose graph</string>
+    <string name="critical_alarm_ack_action">I understand</string>
+    <string name="critical_alarm_snooze_action">Snooze 5 min</string>
+    <string name="critical_alarm_open_graph_action">Open graph</string>
+    <string name="critical_alarm_unlock_for_value">Unlock to view the exact value</string>
+    <string name="critical_alarm_lockscreen_body">Open the alert to review details. Check glucose before making a treatment decision.</string>
+    <string name="critical_alarm_private_title">Urgent glucose alert</string>
+    <string name="critical_alarm_private_body">Open to acknowledge or snooze</string>
+    <string name="critical_alarm_test_title">Critical alert delivery test</string>
+    <string name="critical_alarm_test_body">This is only a delivery test. No glucose change was detected. Use “I understand” to stop the sound.</string>
+</resources>

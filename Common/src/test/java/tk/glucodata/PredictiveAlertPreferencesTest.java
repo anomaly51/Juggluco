@@ -94,7 +94,9 @@ public class PredictiveAlertPreferencesTest {
     @Test
     public void coordinatorLifecycleSurvivesProcessRecreationAndDisableClearsEpisode() {
         PredictiveAlertPreferences first = new PredictiveAlertPreferences(context);
-        first.recordAlert("LOW", 1_900_000_000_000L, 1_899_999_700_000L);
+        first.recordAlert("LOW", 1_900_000_000_000L,
+                1_899_999_700_000L,
+                PredictiveAlertPreferences.EVIDENCE_POSSIBLE);
         first.setSnoozeUntil(1_900_000_900_000L);
 
         PredictiveAlertPreferences restored =
@@ -102,11 +104,14 @@ public class PredictiveAlertPreferencesTest {
         assertEquals(1_900_000_000_000L, restored.lastAlertAt("low"));
         assertEquals("low", restored.activeEpisodeDirection());
         assertEquals(1_899_999_700_000L, restored.activeAnchorMs());
+        assertEquals(PredictiveAlertPreferences.EVIDENCE_POSSIBLE,
+                restored.activeEvidence());
         assertEquals(1_900_000_900_000L, restored.snoozeUntil());
 
         restored.setEnabled(false);
         assertEquals("", restored.activeEpisodeDirection());
         assertEquals(0L, restored.activeAnchorMs());
+        assertEquals("", restored.activeEvidence());
         assertEquals(0L, restored.snoozeUntil());
         assertEquals(1_900_000_000_000L, restored.lastAlertAt("low"));
 
@@ -114,6 +119,46 @@ public class PredictiveAlertPreferencesTest {
         assertEquals(0L, restored.lastAlertAt("low"));
         assertEquals("", restored.activeEpisodeDirection());
         assertEquals(0L, restored.snoozeUntil());
+    }
+
+    @Test
+    public void validatedDirectionalSnoozeAllowsOneReplayAfterExpiry() {
+        long anchor = 1_900_000_000_000L;
+        long until = anchor + 10 * 60_000L;
+        PredictiveAlertPreferences preferences =
+                new PredictiveAlertPreferences(context);
+        preferences.recordAlert(PredictiveAlertPreferences.DIRECTION_LOW,
+                anchor, anchor,
+                PredictiveAlertPreferences.EVIDENCE_LIKELY);
+
+        preferences.snoozePrediction(
+                PredictiveAlertPreferences.DIRECTION_LOW, anchor, until);
+
+        assertTrue(preferences.snoozeBlocks(
+                PredictiveAlertPreferences.DIRECTION_LOW, until - 1L));
+        assertFalse(preferences.snoozeBlocks(
+                PredictiveAlertPreferences.DIRECTION_HIGH, until - 1L));
+        assertFalse(preferences.snoozeReplayDue(
+                PredictiveAlertPreferences.DIRECTION_LOW, anchor, until - 1L));
+        assertTrue(preferences.snoozeReplayDue(
+                PredictiveAlertPreferences.DIRECTION_LOW, anchor, until));
+        assertTrue(preferences.snoozeReplayDue(
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                anchor + 5 * 60_000L, until));
+        assertFalse(preferences.snoozeReplayDue(
+                PredictiveAlertPreferences.DIRECTION_HIGH, anchor, until));
+
+        preferences.recordAlert(PredictiveAlertPreferences.DIRECTION_HIGH,
+                anchor + 1L, anchor + 1L,
+                PredictiveAlertPreferences.EVIDENCE_LIKELY);
+        assertTrue(preferences.snoozeBlocks(
+                PredictiveAlertPreferences.DIRECTION_LOW, until - 1L));
+
+        preferences.recordAlert(PredictiveAlertPreferences.DIRECTION_LOW,
+                until, anchor, PredictiveAlertPreferences.EVIDENCE_LIKELY);
+        assertEquals(0L, preferences.snoozeUntil());
+        assertFalse(preferences.snoozeReplayDue(
+                PredictiveAlertPreferences.DIRECTION_LOW, anchor, until + 1L));
     }
 
     @Test(expected = IllegalArgumentException.class)

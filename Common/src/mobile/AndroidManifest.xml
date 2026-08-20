@@ -46,6 +46,7 @@
 
     <uses-permission android:name="android.permission.FLASHLIGHT" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
 
@@ -93,6 +94,23 @@
             </intent-filter>
 
         </activity>
+
+        <activity
+            android:name=".CriticalGlucoseAlarmActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:screenOrientation="fullUser"
+            android:showWhenLocked="true"
+            android:taskAffinity=""
+            android:theme="@style/AppTheme.AlarmReserved"
+            android:turnScreenOn="true" />
+
+        <receiver
+            android:name=".CriticalGlucoseAlarmReceiver"
+            android:enabled="true"
+            android:exported="false" />
   <activity-alias
       android:name="ViewPermissionUsageActivity"
       android:exported="true"

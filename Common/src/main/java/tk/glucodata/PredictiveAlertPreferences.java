@@ -18,6 +18,8 @@ final class PredictiveAlertPreferences {
 
     static final String DIRECTION_LOW = "low";
     static final String DIRECTION_HIGH = "high";
+    static final String EVIDENCE_POSSIBLE = "possible";
+    static final String EVIDENCE_LIKELY = "likely";
 
     static final float TARGET_LOW_MG_DL = 75.6f;
     static final float TARGET_HIGH_MG_DL = 162.0f;
@@ -39,7 +41,10 @@ final class PredictiveAlertPreferences {
     private static final String KEY_ACTIVE_EPISODE_DIRECTION =
             "active_episode_direction";
     private static final String KEY_ACTIVE_ANCHOR = "active_anchor_ms";
+    private static final String KEY_ACTIVE_EVIDENCE = "active_evidence";
     private static final String KEY_SNOOZE_UNTIL = "snooze_until_ms";
+    private static final String KEY_SNOOZE_DIRECTION = "snooze_direction";
+    private static final String KEY_SNOOZE_ANCHOR = "snooze_anchor_ms";
     // v2 corrects the old JNI float-to-uint truncation (75.6 could become 75.5).
     private static final String KEY_TARGET_MIGRATED =
             "target_4_2_9_0_migrated_v2";
@@ -132,19 +137,38 @@ final class PredictiveAlertPreferences {
         return preferences.getLong(KEY_ACTIVE_ANCHOR, 0L);
     }
 
+    String activeEvidence() {
+        return preferences.getString(KEY_ACTIVE_EVIDENCE, "");
+    }
+
     void recordAlert(String direction, long atMs, long anchorMs) {
+        recordAlert(direction, atMs, anchorMs, "");
+    }
+
+    void recordAlert(String direction, long atMs, long anchorMs,
+            String evidence) {
         String normalized = normalizedDirection(direction);
-        preferences.edit()
+        SharedPreferences.Editor editor = preferences.edit()
                 .putLong(KEY_LAST_ALERT_PREFIX + normalized, Math.max(0L, atMs))
                 .putString(KEY_ACTIVE_EPISODE_DIRECTION, normalized)
                 .putLong(KEY_ACTIVE_ANCHOR, Math.max(0L, anchorMs))
-                .apply();
+                .putString(KEY_ACTIVE_EVIDENCE, normalizedEvidence(evidence));
+        String snoozedDirection = preferences.getString(
+                KEY_SNOOZE_DIRECTION, "");
+        if (snoozedDirection.isEmpty()
+                || snoozedDirection.equals(normalized)) {
+            editor.remove(KEY_SNOOZE_UNTIL)
+                    .remove(KEY_SNOOZE_DIRECTION)
+                    .remove(KEY_SNOOZE_ANCHOR);
+        }
+        editor.apply();
     }
 
     void clearEpisode() {
         preferences.edit()
                 .remove(KEY_ACTIVE_EPISODE_DIRECTION)
                 .remove(KEY_ACTIVE_ANCHOR)
+                .remove(KEY_ACTIVE_EVIDENCE)
                 .apply();
     }
 
@@ -154,20 +178,79 @@ final class PredictiveAlertPreferences {
                 .remove(KEY_LAST_ALERT_PREFIX + DIRECTION_HIGH)
                 .remove(KEY_ACTIVE_EPISODE_DIRECTION)
                 .remove(KEY_ACTIVE_ANCHOR)
+                .remove(KEY_ACTIVE_EVIDENCE)
                 .remove(KEY_SNOOZE_UNTIL)
+                .remove(KEY_SNOOZE_DIRECTION)
+                .remove(KEY_SNOOZE_ANCHOR)
                 .apply();
     }
 
     void setSnoozeUntil(long atMs) {
         if (atMs <= 0L) {
-            preferences.edit().remove(KEY_SNOOZE_UNTIL).apply();
+            clearSnooze();
         } else {
-            preferences.edit().putLong(KEY_SNOOZE_UNTIL, atMs).apply();
+            // Kept as a process-recreation-compatible fallback for callers
+            // that do not have a session direction/anchor.
+            preferences.edit()
+                    .putLong(KEY_SNOOZE_UNTIL, atMs)
+                    .remove(KEY_SNOOZE_DIRECTION)
+                    .remove(KEY_SNOOZE_ANCHOR)
+                    .apply();
         }
+    }
+
+    /** Called only after the shared alarm controller validates its session. */
+    void snoozePrediction(String direction, long anchorMs, long untilMs) {
+        if (untilMs <= 0L) {
+            clearSnooze();
+            return;
+        }
+        preferences.edit()
+                .putLong(KEY_SNOOZE_UNTIL, untilMs)
+                .putString(KEY_SNOOZE_DIRECTION,
+                        normalizedDirection(direction))
+                .putLong(KEY_SNOOZE_ANCHOR, Math.max(0L, anchorMs))
+                .apply();
     }
 
     long snoozeUntil() {
         return preferences.getLong(KEY_SNOOZE_UNTIL, 0L);
+    }
+
+    boolean snoozeBlocks(String direction, long nowMs) {
+        long untilMs = snoozeUntil();
+        if (untilMs <= nowMs) return false;
+        String snoozedDirection = preferences.getString(
+                KEY_SNOOZE_DIRECTION, "");
+        return snoozedDirection.isEmpty()
+                || snoozedDirection.equals(normalizedDirection(direction));
+    }
+
+    /**
+     * An expired, validated snooze is a one-shot bypass of both the active
+     * anchor and cooldown gates. A refreshed forecast may have a newer anchor,
+     * so the original anchor is treated as a lower bound.
+     */
+    boolean snoozeReplayDue(String direction, long anchorMs, long nowMs) {
+        long untilMs = snoozeUntil();
+        if (untilMs <= 0L || nowMs < untilMs) return false;
+        String normalized = normalizedDirection(direction);
+        String snoozedDirection = preferences.getString(
+                KEY_SNOOZE_DIRECTION, "");
+        if (!snoozedDirection.isEmpty()
+                && !snoozedDirection.equals(normalized)) {
+            return false;
+        }
+        long snoozedAnchor = preferences.getLong(KEY_SNOOZE_ANCHOR, 0L);
+        return anchorMs >= snoozedAnchor;
+    }
+
+    void clearSnooze() {
+        preferences.edit()
+                .remove(KEY_SNOOZE_UNTIL)
+                .remove(KEY_SNOOZE_DIRECTION)
+                .remove(KEY_SNOOZE_ANCHOR)
+                .apply();
     }
 
     private boolean effectiveEnabled() {
@@ -241,6 +324,13 @@ final class PredictiveAlertPreferences {
             return normalized;
         }
         throw new IllegalArgumentException("Unknown alert direction: " + direction);
+    }
+
+    private static String normalizedEvidence(String evidence) {
+        if (evidence == null) return "";
+        String normalized = evidence.trim().toLowerCase(Locale.ROOT);
+        return EVIDENCE_POSSIBLE.equals(normalized)
+                || EVIDENCE_LIKELY.equals(normalized) ? normalized : "";
     }
 
     static final class Snapshot {

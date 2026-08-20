@@ -46,6 +46,15 @@ public final class PredictiveAlertSettingsPage {
     private ChoiceGroup highHorizon;
     private ChoiceGroup sensitivity;
     private ChoiceGroup cooldown;
+    private TextView criticalSummary;
+    private DiagnosticAction criticalActualChannels;
+    private DiagnosticAction criticalPredictiveChannels;
+    private DiagnosticAction criticalNotificationAccess;
+    private DiagnosticAction criticalAlarmVolume;
+    private DiagnosticAction criticalDndAccess;
+    private DiagnosticAction criticalFullScreenAccess;
+    private DiagnosticAction criticalExactAlarmAccess;
+    private Button criticalTest;
     private TextView permissionStatus;
     private TextView channelStatus;
     private TextView forecastStatus;
@@ -192,6 +201,26 @@ public final class PredictiveAlertSettingsPage {
                 snapshot.cooldownMinutes);
         addWithTopGap(sensitivity.container, 0);
         addWithTopGap(cooldown.container, 12);
+
+        content.addView(ClinicalUi.sectionLabel(activity,
+                activity.getString(R.string.critical_alarm_delivery_section)));
+        TextView criticalIntro = ClinicalUi.body(activity,
+                activity.getString(R.string.critical_alarm_delivery_intro));
+        criticalIntro.setPaddingRelative(ClinicalUi.dp(activity, 4), 0,
+                ClinicalUi.dp(activity, 4), ClinicalUi.dp(activity, 8));
+        content.addView(criticalIntro);
+        content.addView(criticalDeliveryCard());
+        criticalTest = ClinicalUi.button(activity,
+                activity.getString(R.string.critical_alarm_test_button),
+                ClinicalUi.ButtonRole.SECONDARY);
+        criticalTest.setMinimumHeight(ClinicalUi.dp(activity,
+                MIN_TOUCH_TARGET_DP));
+        LinearLayout.LayoutParams criticalTestParams =
+                new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
+        criticalTestParams.topMargin = ClinicalUi.dp(activity, 12);
+        criticalTest.setLayoutParams(criticalTestParams);
+        criticalTest.setOnClickListener(view -> sendCriticalTest());
+        content.addView(criticalTest);
 
         content.addView(ClinicalUi.sectionLabel(activity,
                 activity.getString(R.string.predictive_alert_delivery_section)));
@@ -428,6 +457,55 @@ public final class PredictiveAlertSettingsPage {
         return new ChoiceGroup(card, group);
     }
 
+    private View criticalDeliveryCard() {
+        criticalSummary = diagnosticRow(R.string.critical_alarm_summary_title);
+        criticalActualChannels = diagnosticAction(
+                R.string.critical_alarm_actual_channels_title,
+                () -> CriticalAlarmDiagnostics.openNotificationSettings(activity));
+        criticalPredictiveChannels = diagnosticAction(
+                R.string.critical_alarm_predictive_channels_title,
+                () -> CriticalAlarmDiagnostics.openNotificationSettings(activity));
+        criticalNotificationAccess = diagnosticAction(
+                R.string.critical_alarm_notification_access_title, () -> {
+                    CriticalAlarmDiagnostics.Snapshot snapshot =
+                            CriticalAlarmDiagnostics.inspect(activity);
+                    if (Build.VERSION.SDK_INT >= 33 && !snapshot.postPermission) {
+                        activity.askNotify();
+                    } else {
+                        CriticalAlarmDiagnostics.openNotificationSettings(activity);
+                    }
+                });
+        criticalAlarmVolume = diagnosticAction(
+                R.string.critical_alarm_volume_title,
+                () -> CriticalAlarmDiagnostics.openAlarmSoundSettings(activity));
+        criticalDndAccess = diagnosticAction(
+                R.string.critical_alarm_dnd_title,
+                () -> CriticalAlarmDiagnostics.openDndSettings(activity));
+        criticalFullScreenAccess = diagnosticAction(
+                R.string.critical_alarm_full_screen_title,
+                () -> CriticalAlarmDiagnostics.openFullScreenSettings(activity));
+        criticalExactAlarmAccess = diagnosticAction(
+                R.string.critical_alarm_exact_title,
+                () -> CriticalAlarmDiagnostics.openExactAlarmSettings(activity));
+        return ClinicalUi.card(activity, criticalSummary,
+                criticalActualChannels.row, criticalPredictiveChannels.row,
+                criticalNotificationAccess.row, criticalAlarmVolume.row,
+                criticalDndAccess.row, criticalFullScreenAccess.row,
+                criticalExactAlarmAccess.row);
+    }
+
+    private DiagnosticAction diagnosticAction(int titleRes, Runnable action) {
+        LinearLayout row = ClinicalUi.actionRow(activity,
+                activity.getString(titleRes), "…");
+        LinearLayout copy = (LinearLayout) row.getChildAt(0);
+        TextView status = (TextView) copy.getChildAt(1);
+        row.setContentDescription(activity.getString(titleRes));
+        row.setOnClickListener(view -> {
+            if (action != null) action.run();
+        });
+        return new DiagnosticAction(row, status, titleRes);
+    }
+
     private TextView diagnosticRow(int titleRes) {
         TextView row = new TextView(activity);
         row.setText(titleRes);
@@ -512,6 +590,7 @@ public final class PredictiveAlertSettingsPage {
     }
 
     private void updateDiagnostics() {
+        updateCriticalDiagnostics();
         boolean canPost = PredictiveAlertNotifier.canPost(activity);
         PredictiveAlertPreferences.Snapshot selected = preferences.snapshot();
         boolean channels = PredictiveAlertNotifier.channelsEnabled(activity,
@@ -531,6 +610,71 @@ public final class PredictiveAlertSettingsPage {
                     channels ? R.string.predictive_alert_status_channels_ready
                             : R.string.predictive_alert_status_channels_blocked,
                     channels);
+        }
+    }
+
+    private void updateCriticalDiagnostics() {
+        if (criticalSummary == null) return;
+        CriticalAlarmDiagnostics.Snapshot snapshot =
+                CriticalAlarmDiagnostics.inspect(activity);
+        boolean configured = snapshot.maximallyConfigured();
+        styleDiagnostic(criticalSummary,
+                R.string.critical_alarm_summary_title,
+                configured ? R.string.critical_alarm_summary_configured
+                        : R.string.critical_alarm_summary_action_needed,
+                configured);
+
+        boolean actualChannelsReady = snapshot.actualChannels.ready()
+                && snapshot.actualChannels.bypassDnd;
+        boolean predictiveChannelsReady = snapshot.predictiveChannels.ready()
+                && snapshot.predictiveChannels.bypassDnd;
+        styleCriticalDiagnostic(criticalActualChannels,
+                actualChannelsReady
+                        ? activity.getString(
+                        R.string.critical_alarm_channels_configured)
+                        : activity.getString(
+                        R.string.critical_alarm_channels_action_needed),
+                actualChannelsReady);
+        styleCriticalDiagnostic(criticalPredictiveChannels,
+                predictiveChannelsReady
+                        ? activity.getString(
+                        R.string.critical_alarm_channels_configured)
+                        : activity.getString(
+                        R.string.critical_alarm_channels_action_needed),
+                predictiveChannelsReady);
+        styleCriticalDiagnostic(criticalNotificationAccess,
+                activity.getString(snapshot.notificationAccess()
+                        ? R.string.critical_alarm_notification_access_ready
+                        : R.string.critical_alarm_notification_access_needed),
+                snapshot.notificationAccess());
+
+        int volumePercent = snapshot.alarmVolumePercent();
+        boolean volumeReady = snapshot.alarmVolumeAudible();
+        styleCriticalDiagnostic(criticalAlarmVolume,
+                volumeReady
+                        ? activity.getString(R.string.critical_alarm_volume_ready,
+                        Math.max(0, volumePercent))
+                        : activity.getString(
+                        R.string.critical_alarm_volume_silent),
+                volumeReady);
+        styleCriticalDiagnostic(criticalDndAccess,
+                activity.getString(snapshot.dndPolicyAccess
+                        ? R.string.critical_alarm_dnd_ready
+                        : R.string.critical_alarm_dnd_needed),
+                snapshot.dndPolicyAccess);
+        styleCriticalDiagnostic(criticalFullScreenAccess,
+                activity.getString(snapshot.fullScreenAccess
+                        ? R.string.critical_alarm_full_screen_ready
+                        : R.string.critical_alarm_full_screen_needed),
+                snapshot.fullScreenAccess);
+        styleCriticalDiagnostic(criticalExactAlarmAccess,
+                activity.getString(snapshot.exactAlarmAccess
+                        ? R.string.critical_alarm_exact_ready
+                        : R.string.critical_alarm_exact_needed),
+                snapshot.exactAlarmAccess);
+        if (criticalTest != null) {
+            criticalTest.setEnabled(snapshot.testAvailable);
+            criticalTest.setAlpha(snapshot.testAvailable ? 1f : .55f);
         }
     }
 
@@ -596,6 +740,32 @@ public final class PredictiveAlertSettingsPage {
                 activity.getString(titleRes), activity.getString(statusRes)));
         target.setTextColor(ready ? ClinicalUi.accent(activity)
                 : ClinicalUi.danger(activity));
+    }
+
+    private void styleCriticalDiagnostic(DiagnosticAction target,
+            String status, boolean ready) {
+        if (target == null) return;
+        target.status.setText(status);
+        target.status.setTextColor(ready ? ClinicalUi.accent(activity)
+                : ClinicalUi.danger(activity));
+        target.row.setContentDescription(activity.getString(target.titleRes)
+                + ". " + status);
+    }
+
+    private void sendCriticalTest() {
+        CriticalAlarmDiagnostics.Snapshot snapshot =
+                CriticalAlarmDiagnostics.inspect(activity);
+        if (!snapshot.testAvailable) {
+            Toast.makeText(activity, R.string.critical_alarm_test_unavailable,
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        boolean shown = CriticalAlarmDiagnostics.showTest(activity, true);
+        updateDiagnostics();
+        Toast.makeText(activity, shown
+                        ? R.string.critical_alarm_test_sent
+                        : R.string.critical_alarm_test_failed,
+                Toast.LENGTH_LONG).show();
     }
 
     private void sendTest() {
@@ -690,6 +860,18 @@ public final class PredictiveAlertSettingsPage {
         ToggleControl(LinearLayout row, SwitchCompat toggle) {
             this.row = row;
             this.toggle = toggle;
+        }
+    }
+
+    private static final class DiagnosticAction {
+        final LinearLayout row;
+        final TextView status;
+        final int titleRes;
+
+        DiagnosticAction(LinearLayout row, TextView status, int titleRes) {
+            this.row = row;
+            this.status = status;
+            this.titleRes = titleRes;
         }
     }
 

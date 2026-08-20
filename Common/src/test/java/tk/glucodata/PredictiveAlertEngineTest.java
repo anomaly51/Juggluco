@@ -3,13 +3,16 @@ package tk.glucodata;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.robolectric.Shadows.shadowOf;
 
 import android.Manifest;
 import android.app.Application;
+import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.media.AudioAttributes;
 
 import org.json.JSONObject;
 import org.junit.Test;
@@ -37,6 +40,7 @@ public class PredictiveAlertEngineTest {
                         20, 30), now);
 
         assertTrue(result.shouldNotify());
+        assertTrue(PredictiveAlertNotifier.usesCriticalDelivery(result));
         assertEquals(ForecastRiskEvaluator.Direction.LOW, result.direction);
         assertEquals(20, result.leadMinutes);
         assertEquals(75.6f, result.targetMgDl, .001f);
@@ -52,9 +56,60 @@ public class PredictiveAlertEngineTest {
         assertFalse(ForecastRiskEvaluator.evaluate(forecast,
                 policy(ForecastRiskEvaluator.SENSITIVITY_BALANCED, 20, 30),
                 now).shouldNotify());
-        assertTrue(ForecastRiskEvaluator.evaluate(forecast,
+        ForecastRiskEvaluator.Decision early = ForecastRiskEvaluator.evaluate(
+                forecast,
                 policy(ForecastRiskEvaluator.SENSITIVITY_EARLY, 20, 30),
-                now).shouldNotify());
+                now);
+        assertTrue(early.shouldNotify());
+        assertFalse(PredictiveAlertNotifier.usesCriticalDelivery(early));
+    }
+
+    @Test
+    public void onlyPossibleToLikelyInSameDirectionBypassesEpisodeCooldown() {
+        assertTrue(PredictiveAlertCoordinator.isEvidenceUpgrade(
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_POSSIBLE,
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_LIKELY));
+        assertFalse(PredictiveAlertCoordinator.isEvidenceUpgrade(
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_LIKELY,
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_LIKELY));
+        assertFalse(PredictiveAlertCoordinator.isEvidenceUpgrade(
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_POSSIBLE,
+                PredictiveAlertPreferences.DIRECTION_HIGH,
+                PredictiveAlertPreferences.EVIDENCE_LIKELY));
+        assertFalse(PredictiveAlertCoordinator.isEvidenceUpgrade(
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_LIKELY,
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_POSSIBLE));
+    }
+
+    @Test
+    public void likelyToPossibleDowngradeBlocksOnlyTheSameDirection() {
+        assertTrue(PredictiveAlertCoordinator.isEvidenceDowngrade(
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_LIKELY,
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_POSSIBLE));
+        assertFalse(PredictiveAlertCoordinator.isEvidenceDowngrade(
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_LIKELY,
+                PredictiveAlertPreferences.DIRECTION_HIGH,
+                PredictiveAlertPreferences.EVIDENCE_POSSIBLE));
+        assertFalse(PredictiveAlertCoordinator.isEvidenceDowngrade(
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_POSSIBLE,
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_LIKELY));
+        assertFalse(PredictiveAlertCoordinator.isEvidenceDowngrade(
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_LIKELY,
+                PredictiveAlertPreferences.DIRECTION_LOW,
+                PredictiveAlertPreferences.EVIDENCE_LIKELY));
     }
 
     @Test
@@ -500,7 +555,7 @@ public class PredictiveAlertEngineTest {
     }
 
     @Test
-    public void channelIdsAreVersionedAndCreatedWithDifferentImportance() {
+    public void v2PredictiveChannelsAreSharedAlarmUsageChannels() {
         Application application = RuntimeEnvironment.getApplication();
         shadowOf(application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS);
 
@@ -515,9 +570,19 @@ public class PredictiveAlertEngineTest {
                 PredictiveAlertNotifier.HIGH_CHANNEL_ID);
         assertNotNull(low);
         assertNotNull(high);
+        assertEquals(CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID,
+                PredictiveAlertNotifier.LOW_CHANNEL_ID);
+        assertEquals(CriticalAlarmDiagnostics.PREDICTIVE_HIGH_CHANNEL_ID,
+                PredictiveAlertNotifier.HIGH_CHANNEL_ID);
         assertEquals(NotificationManager.IMPORTANCE_HIGH, low.getImportance());
-        assertEquals(NotificationManager.IMPORTANCE_DEFAULT,
+        assertEquals(NotificationManager.IMPORTANCE_HIGH,
                 high.getImportance());
+        assertNotNull(low.getSound());
+        assertNotNull(high.getSound());
+        assertEquals(AudioAttributes.USAGE_ALARM,
+                low.getAudioAttributes().getUsage());
+        assertEquals(AudioAttributes.USAGE_ALARM,
+                high.getAudioAttributes().getUsage());
         assertTrue(PredictiveAlertNotifier.canPost(application));
         assertTrue(PredictiveAlertNotifier.channelEnabled(application,
                 PredictiveAlertNotifier.LOW_CHANNEL_ID));
@@ -528,7 +593,50 @@ public class PredictiveAlertEngineTest {
                         false, true));
         assertEquals(PredictiveAlertNotifier.HIGH_CHANNEL_ID,
                 PredictiveAlertNotifier.settingsChannelId(application,
-                        false, true));
+                false, true));
+    }
+
+    @Test
+    public void possibleBuilderIsPrivateWithGenericPublicVersionAndHeadsUp() {
+        Application application = RuntimeEnvironment.getApplication();
+        shadowOf(application).grantPermissions(
+                Manifest.permission.POST_NOTIFICATIONS);
+        PredictiveAlertNotifier.ensureChannels(application);
+
+        String privateTitle = "Possible low in 15 minutes — 72 mg/dL";
+        String privateBody = "Predicted 72 mg/dL; target 76–162 mg/dL";
+        Notification notification = PredictiveAlertNotifier.baseBuilder(
+                application, PredictiveAlertNotifier.LOW_CHANNEL_ID,
+                privateTitle, privateBody, true).build();
+
+        assertNull(notification.fullScreenIntent);
+        assertEquals(Notification.CATEGORY_RECOMMENDATION,
+                notification.category);
+        assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility);
+        assertEquals(0, notification.flags & Notification.FLAG_ONGOING_EVENT);
+        assertEquals(privateTitle, notification.extras.getCharSequence(
+                Notification.EXTRA_TITLE));
+        assertEquals(privateBody, notification.extras.getCharSequence(
+                Notification.EXTRA_TEXT));
+
+        Notification publicVersion = notification.publicVersion;
+        assertNotNull(publicVersion);
+        assertEquals(Notification.VISIBILITY_PUBLIC, publicVersion.visibility);
+        assertEquals(application.getString(R.string.app_name),
+                publicVersion.extras.getCharSequence(Notification.EXTRA_TITLE));
+        assertNull(publicVersion.extras.getCharSequence(Notification.EXTRA_TEXT));
+        assertNull(publicVersion.extras.getCharSequence(
+                Notification.EXTRA_BIG_TEXT));
+        assertNull(publicVersion.fullScreenIntent);
+        assertTrue(publicVersion.actions == null
+                || publicVersion.actions.length == 0);
+
+        NotificationChannel channel = application.getSystemService(
+                NotificationManager.class).getNotificationChannel(
+                notification.getChannelId());
+        assertNotNull(channel);
+        assertEquals(NotificationManager.IMPORTANCE_HIGH,
+                channel.getImportance());
     }
 
     private static ForecastRiskEvaluator.Policy policy(int sensitivity,

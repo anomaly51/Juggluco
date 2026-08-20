@@ -260,6 +260,7 @@ static RemoteGlucose arrowNotify;
         mkunitstr(cont,Natives.getunit());
         notificationManager =(NotificationManager) Applic.app.getSystemService(NOTIFICATION_SERVICE);
         createNotificationChannel(Applic.app);
+        CriticalGlucoseAlarm.ensureChannels(Applic.app);
         mkpaint();
     }
 
@@ -387,6 +388,7 @@ private static void showoldglucose() {
     }
 
     void normalglucose(notGlucose strgl,float gl,float rate,boolean waiting) {
+        if(!isWearable) CriticalGlucoseAlarm.resolveActual(Applic.app);
         stopGlucoseAlarm();
         MainActivity.showmessage=null;
         var act=MainActivity.thisone;
@@ -523,18 +525,11 @@ static void stopGlucoseAlarm() {
                 }
         final boolean[] doplaysound={true};
         if(sound) {
-            if(disturb) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    int filt=notificationManager.getCurrentInterruptionFilter();
-                    {if(doLog) {Log.i(LOG_ID,"getCurrentInterruptionFilter()="+filt);};};
-
-                    if(filt!=NotificationManager.INTERRUPTION_FILTER_ALL) {
-                            if(notificationManager.isNotificationPolicyAccessGranted()) {
-                            //    curfilter[0]=filt;
-                                notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL);
-                            }
-                        }
-                    }
+            if(disturb && doLog) {
+                // Never rewrite the user's global Do Not Disturb state. The
+                // versioned critical channels request DND bypass explicitly;
+                // Android and the user retain final control.
+                Log.i(LOG_ID,"DND override is owned by critical channel policy");
                 }
             if(doLog) {
                 {if(doLog) {Log.d(LOG_ID,"play "+ring.getTitle(app));};};
@@ -704,6 +699,18 @@ void overwriteglucose(int kind) {
     }
     private void arrowglucosealarm(int kind,float glvalue,String message,notGlucose strglucose,String type,boolean alarm) {
         {if(doLog) {Log.i(LOG_ID,"arrowglucosealarm kind="+kind+" "+ message+" alarm="+alarm);};};
+        if(!isWearable && (kind==0 || kind==1 || kind==5 || kind==6)) {
+            boolean handled=CriticalGlucoseAlarm.showActual(Applic.app,kind,
+                    glvalue,message,alarm);
+            if(handled) {
+                Notify.stopGlucoseAlarm();
+                // Native actual alarms own the episode. Remove both ordinary
+                // and critical predictive presentation, while keeping the
+                // backend completely out of the actual alarm path.
+                PredictiveAlertNotifier.cancelAll(Applic.app);
+                return;
+                }
+            }
         if(alarm) {
             if(kind!=2)
                 showpopupalarm(message,true);

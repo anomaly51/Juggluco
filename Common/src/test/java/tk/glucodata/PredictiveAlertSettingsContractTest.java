@@ -101,9 +101,42 @@ public class PredictiveAlertSettingsContractTest {
                 "glucodata", "PredictiveAlertNotifier.java"));
         assertTrue(notifier.contains("NotificationManagerCompat.from(context)"));
         assertTrue(notifier.contains("setTimeoutAfter(timeoutMs)"));
+        assertTrue(notifier.contains(
+                "CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID"));
+        assertTrue(notifier.contains(
+                "CriticalAlarmDiagnostics.PREDICTIVE_HIGH_CHANNEL_ID"));
         String show = between(notifier, "static boolean show(Context context,",
                 "static long notificationTimeoutMs");
         assertFalse(show.contains("notificationActive("));
+        assertTrue(show.contains("usesCriticalDelivery(decision)"));
+        assertTrue(show.contains("CriticalGlucoseAlarm.showPredictive("));
+        assertFalse(show.contains(".setFullScreenIntent("));
+        assertFalse(notifier.contains("android.media.Ringtone"));
+        assertFalse(notifier.contains("setLooping("));
+        String possibleBuilder = between(notifier,
+                "static NotificationCompat.Builder baseBuilder(",
+                "private static Notification genericPublicVersion(");
+        assertTrue(possibleBuilder.contains(
+                ".setVisibility(NotificationCompat.VISIBILITY_PRIVATE)"));
+        assertTrue(possibleBuilder.contains(
+                ".setPublicVersion(genericPublicVersion(context, channel))"));
+        String publicVersion = between(notifier,
+                "private static Notification genericPublicVersion(",
+                "private static void cancelOrdinaryNotification(");
+        assertTrue(publicVersion.contains("R.string.app_name"));
+        assertTrue(publicVersion.contains(
+                ".setVisibility(NotificationCompat.VISIBILITY_PUBLIC)"));
+        assertFalse(publicVersion.contains("setContentText("));
+        assertFalse(publicVersion.contains("setStyle("));
+        assertFalse(publicVersion.contains("setContentIntent("));
+        assertFalse(publicVersion.contains("addAction("));
+        assertFalse(publicVersion.contains("glucose("));
+        String activeCheck = between(notifier,
+                "static boolean notificationActive(Context context,",
+                "private static void setPossibleActiveUntil(");
+        assertTrue(activeCheck.contains(
+                "CriticalGlucoseAlarm.predictiveActive("));
+        assertTrue(activeCheck.contains("expectedChannel.equals("));
     }
 
     @Test
@@ -185,6 +218,19 @@ public class PredictiveAlertSettingsContractTest {
         assertTrue(coordinator.contains("deliveredDirection)"));
         assertTrue(coordinator.contains(
                 "shown = PredictiveAlertNotifier.show(application, decision)"));
+        String evidenceGate = between(coordinator,
+                "String direction = decision.direction",
+                "boolean snoozeReplay =");
+        assertTrue(evidenceGate.contains(
+                "isEvidenceDowngrade(preferences.activeEpisodeDirection(),"));
+        assertTrue(evidenceGate.contains(
+                "preferences.activeEvidence(), direction,"));
+        String successfulDelivery = between(coordinator,
+                "if (shown) {", "} else {");
+        assertTrue(successfulDelivery.contains(
+                "PredictiveAlertNotifier.cancel(application, opposite)"));
+        assertTrue(successfulDelivery.contains(
+                "preferences.recordAlert(direction,"));
         assertTrue(coordinator.contains("scheduleDeliveryConfirmation("));
         String confirmation = between(coordinator,
                 "private synchronized void confirmDelivery(",
@@ -197,13 +243,24 @@ public class PredictiveAlertSettingsContractTest {
         String unavailable = between(coordinator,
                 "synchronized void onForecastUnavailable()",
                 "synchronized void onSettingsChanged()");
-        assertTrue(unavailable.contains("preferences.clearEpisode()"));
-        assertFalse(unavailable.contains("invalidateActiveEpisode()"));
+        assertTrue(unavailable.contains(
+                "preferences.setLegacyPredictionSuppression(false, false)"));
+        assertFalse(unavailable.contains("PredictiveAlertNotifier.cancelAll("));
+        assertFalse(unavailable.contains("preferences.clearEpisode()"));
+        String settingsChanged = between(coordinator,
+                "synchronized void onSettingsChanged()",
+                "static LegacySuppression legacySuppressionFor(");
+        assertFalse(settingsChanged.contains(
+                "replacement.anyReplacementOperational()"));
+        assertTrue(settingsChanged.contains(
+                "preferences.activeEpisodeDirection()"));
         String outsideTarget = between(coordinator,
                 "if (current < forecast.alertAssessment.targetLowMgDl",
                 "ForecastRiskEvaluator.Policy policy");
         assertTrue(outsideTarget.contains(
                 "preferences.setLegacyPredictionSuppression(false, false)"));
+        assertFalse(outsideTarget.contains("clearEpisodeAndNotifications()"));
+        assertFalse(outsideTarget.contains("PredictiveAlertNotifier.cancel"));
 
         String calibration = source(Paths.get("src", "main", "java", "tk",
                 "glucodata", "settings", "Calibration.java"));

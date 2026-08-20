@@ -52,16 +52,20 @@ final class PredictiveAlertCoordinator {
         LegacySuppression replacement = updateLegacySuppression(settings,
                 forecast, nowMs);
         if (!replacement.anyReplacementOperational()) {
-            clearEpisodeAndNotifications();
+            // Model/backend/readiness state is not evidence that a previously
+            // delivered risk resolved. Native early warnings fail open above,
+            // while an acknowledged/snoozed shared alarm session keeps owning
+            // its own lifecycle.
             return;
         }
         float current = forecast.basedOnGlucoseMgDl;
         if (current < forecast.alertAssessment.targetLowMgDl
                 || current > forecast.alertAssessment.targetHighMgDl) {
-            // The independent native current-low/current-high path owns the
-            // episode once the measured value has actually left target.
+            // Crossing the predictive target is not the same as the native
+            // actual-low/high threshold firing. Keep any delivered prediction
+            // alive until explicit user action, safe resolution, or the shared
+            // controller's actual-alarm handoff.
             preferences.setLegacyPredictionSuppression(false, false);
-            clearEpisodeAndNotifications();
             return;
         }
 
@@ -81,14 +85,25 @@ final class PredictiveAlertCoordinator {
         String direction = decision.direction == ForecastRiskEvaluator.Direction.LOW
                 ? PredictiveAlertPreferences.DIRECTION_LOW
                 : PredictiveAlertPreferences.DIRECTION_HIGH;
-        if (nowMs < preferences.snoozeUntil()) return;
-        if (decision.anchorMs <= preferences.activeAnchorMs()
+        if (preferences.snoozeBlocks(direction, nowMs)) return;
+        if (isEvidenceDowngrade(preferences.activeEpisodeDirection(),
+                preferences.activeEvidence(), direction,
+                decision.evidence)) return;
+        boolean snoozeReplay = preferences.snoozeReplayDue(direction,
+                decision.anchorMs, nowMs);
+        boolean evidenceUpgrade = isEvidenceUpgrade(
+                preferences.activeEpisodeDirection(),
+                preferences.activeEvidence(), direction, decision.evidence);
+        boolean bypassEpisodeGates = snoozeReplay || evidenceUpgrade;
+        if (!bypassEpisodeGates
+                && decision.anchorMs <= preferences.activeAnchorMs()
                 && direction.equals(preferences.activeEpisodeDirection())) {
             return;
         }
         long cooldownMs = settings.cooldownMinutes * 60_000L;
         long lastAlertAt = preferences.lastAlertAt(direction);
-        if (lastAlertAt > 0L && nowMs - lastAlertAt < cooldownMs) return;
+        if (!bypassEpisodeGates && lastAlertAt > 0L
+                && nowMs - lastAlertAt < cooldownMs) return;
 
         boolean shown = false;
         try {
@@ -102,7 +117,8 @@ final class PredictiveAlertCoordinator {
                             ? ForecastRiskEvaluator.Direction.HIGH
                             : ForecastRiskEvaluator.Direction.LOW;
             PredictiveAlertNotifier.cancel(application, opposite);
-            preferences.recordAlert(direction, nowMs, decision.anchorMs);
+            preferences.recordAlert(direction, nowMs, decision.anchorMs,
+                    decision.evidence);
             long notificationExpiresAtMs = PredictiveAlertNotifier.activeUntilMs(
                     decision.direction);
             long forecastExpiresAtMs = decision.anchorMs
@@ -139,28 +155,26 @@ final class PredictiveAlertCoordinator {
     synchronized void onForecastUnavailable() {
         lastForecast = null;
         clearRuntimeDeliveryProof();
+        // Transport/model unavailability fails open for the native legacy
+        // path, but it is not proof that an already-delivered risk resolved.
         preferences.setLegacyPredictionSuppression(false, false);
-        PredictiveAlertNotifier.cancelAll(application);
-        // Preserve last delivery timestamps so a flapping service cannot
-        // bypass the user-selected cooldown when it reconnects.
-        preferences.clearEpisode();
     }
 
     synchronized void onSettingsChanged() {
         PredictiveAlertPreferences.Snapshot settings = preferences.snapshot();
-        LegacySuppression replacement = updateLegacySuppression(settings,
-                lastForecast, System.currentTimeMillis());
-        String active = runtimeDelivery.direction();
+        updateLegacySuppression(settings, lastForecast,
+                System.currentTimeMillis());
+        String active = preferences.activeEpisodeDirection();
         boolean activeDirectionDisabled =
                 PredictiveAlertPreferences.DIRECTION_LOW.equals(active)
-                        ? !replacement.low
+                        ? !settings.lowEnabled
                         : PredictiveAlertPreferences.DIRECTION_HIGH.equals(active)
-                        && !replacement.high;
-        if (!replacement.anyReplacementOperational()
-                || activeDirectionDisabled) {
+                        && !settings.highEnabled;
+        if (!settings.enabled || activeDirectionDisabled) {
             clearRuntimeDeliveryProof();
             PredictiveAlertNotifier.cancelAll(application);
             preferences.clearEpisode();
+            preferences.clearSnooze();
         }
     }
 
@@ -275,6 +289,24 @@ final class PredictiveAlertCoordinator {
                         .equals(deliveredDirection));
     }
 
+    static boolean isEvidenceUpgrade(String activeDirection,
+            String activeEvidence, String nextDirection, String nextEvidence) {
+        return nextDirection != null && nextDirection.equals(activeDirection)
+                && PredictiveAlertPreferences.EVIDENCE_POSSIBLE.equals(
+                activeEvidence)
+                && PredictiveAlertPreferences.EVIDENCE_LIKELY.equals(
+                nextEvidence);
+    }
+
+    static boolean isEvidenceDowngrade(String activeDirection,
+            String activeEvidence, String nextDirection, String nextEvidence) {
+        return nextDirection != null && nextDirection.equals(activeDirection)
+                && PredictiveAlertPreferences.EVIDENCE_LIKELY.equals(
+                activeEvidence)
+                && PredictiveAlertPreferences.EVIDENCE_POSSIBLE.equals(
+                nextEvidence);
+    }
+
     private boolean notificationActive(String direction, long nowMs) {
         ForecastRiskEvaluator.Direction value =
                 PredictiveAlertPreferences.DIRECTION_LOW.equals(direction)
@@ -383,5 +415,6 @@ final class PredictiveAlertCoordinator {
         preferences.setLegacyPredictionSuppression(false, false);
         PredictiveAlertNotifier.cancelAll(application);
         preferences.clearEpisode();
+        preferences.clearSnooze();
     }
 }

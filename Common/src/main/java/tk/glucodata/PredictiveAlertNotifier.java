@@ -18,17 +18,18 @@ import androidx.core.content.ContextCompat;
 
 import java.util.Locale;
 
-/** Posts versioned, non-full-screen forecast notifications. */
+/** Routes likely forecasts to the shared alarm and possible ones to a HUN. */
 final class PredictiveAlertNotifier {
     static final String EXTRA_OPEN_FORECAST =
             "tk.glucodata.extra.OPEN_PREDICTIVE_FORECAST";
-    static final String LOW_CHANNEL_ID = "predictive_glucose_low_v1";
-    static final String HIGH_CHANNEL_ID = "predictive_glucose_high_v1";
+    static final String LOW_CHANNEL_ID =
+            CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID;
+    static final String HIGH_CHANNEL_ID =
+            CriticalAlarmDiagnostics.PREDICTIVE_HIGH_CHANNEL_ID;
     private static final int LOW_NOTIFICATION_ID = 8_201;
     private static final int HIGH_NOTIFICATION_ID = 8_202;
-    private static final int TEST_NOTIFICATION_ID = 8_203;
-    private static volatile long lowActiveUntilMs;
-    private static volatile long highActiveUntilMs;
+    private static volatile long lowPossibleActiveUntilMs;
+    private static volatile long highPossibleActiveUntilMs;
 
     private PredictiveAlertNotifier() {}
 
@@ -42,28 +43,7 @@ final class PredictiveAlertNotifier {
     }
 
     static void ensureChannels(Context context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-        NotificationManager manager = context.getSystemService(
-                NotificationManager.class);
-        if (manager == null) return;
-
-        NotificationChannel low = new NotificationChannel(LOW_CHANNEL_ID,
-                context.getString(R.string.predictive_alert_channel_low),
-                NotificationManager.IMPORTANCE_HIGH);
-        low.setDescription(context.getString(
-                R.string.predictive_alert_channel_low_description));
-        low.enableVibration(true);
-        low.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-        manager.createNotificationChannel(low);
-
-        NotificationChannel high = new NotificationChannel(HIGH_CHANNEL_ID,
-                context.getString(R.string.predictive_alert_channel_high),
-                NotificationManager.IMPORTANCE_DEFAULT);
-        high.setDescription(context.getString(
-                R.string.predictive_alert_channel_high_description));
-        high.enableVibration(true);
-        high.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-        manager.createNotificationChannel(high);
+        CriticalGlucoseAlarm.ensureChannels(context);
     }
 
     static boolean canPost(Context context) {
@@ -92,8 +72,8 @@ final class PredictiveAlertNotifier {
 
     static boolean channelEnabled(Context context, String channelId) {
         if (!supportsExpiringAlerts() || !canPost(context)) return false;
-        NotificationManager manager = context.getSystemService(
-                NotificationManager.class);
+        NotificationManager manager = (NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return false;
         NotificationChannel channel = manager.getNotificationChannel(channelId);
         return channel != null
@@ -118,11 +98,22 @@ final class PredictiveAlertNotifier {
         long postedAtMs = System.currentTimeMillis();
         long timeoutMs = notificationTimeoutMs(decision, postedAtMs);
 
+        if (usesCriticalDelivery(decision)) {
+            boolean shown = CriticalGlucoseAlarm.showPredictive(context, low,
+                    title, body,
+                    glucose(context, decision.predictedMedianMgDl),
+                    decision.anchorMs, decision.crossingAtMs, timeoutMs);
+            if (shown) {
+                stopLegacyGlucoseAlarmAfterOwnership(
+                        () -> Notify.stopGlucoseAlarm());
+                cancelOrdinaryNotification(context, decision.direction);
+            }
+            return shown;
+        }
+
         Notification notification = baseBuilder(context, channel, title, body,
                 low)
                 .setWhen(decision.anchorMs)
-                // Cooldown/episode policy already suppresses duplicates. A
-                // legitimate repeat after that interval must make sound again.
                 .setOnlyAlertOnce(false)
                 .setTimeoutAfter(timeoutMs)
                 .build();
@@ -130,8 +121,28 @@ final class PredictiveAlertNotifier {
                 context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return false;
         manager.notify(notificationId, notification);
-        setActiveUntil(decision.direction, postedAtMs + timeoutMs);
+        setPossibleActiveUntil(decision.direction, postedAtMs + timeoutMs);
         return true;
+    }
+
+    static boolean usesCriticalDelivery(
+            ForecastRiskEvaluator.Decision decision) {
+        return decision != null
+                && PredictiveAlertPreferences.EVIDENCE_LIKELY.equalsIgnoreCase(
+                decision.evidence);
+    }
+
+    static boolean stopLegacyGlucoseAlarmAfterOwnership(Runnable legacyStop) {
+        if (legacyStop == null) return false;
+        try {
+            legacyStop.run();
+            return true;
+        } catch (Throwable failure) {
+            android.util.Log.e("PredictiveAlerts",
+                    "Legacy glucose alarm stop failed after ownership",
+                    failure);
+            return false;
+        }
     }
 
     static long notificationTimeoutMs(ForecastRiskEvaluator.Decision decision,
@@ -143,11 +154,14 @@ final class PredictiveAlertNotifier {
     }
 
     static long activeUntilMs(ForecastRiskEvaluator.Direction direction) {
+        boolean low = direction == ForecastRiskEvaluator.Direction.LOW;
+        long critical = direction == null ? 0L
+                : CriticalGlucoseAlarm.predictiveActiveUntil(low);
         if (direction == ForecastRiskEvaluator.Direction.LOW) {
-            return lowActiveUntilMs;
+            return Math.max(lowPossibleActiveUntilMs, critical);
         }
         if (direction == ForecastRiskEvaluator.Direction.HIGH) {
-            return highActiveUntilMs;
+            return Math.max(highPossibleActiveUntilMs, critical);
         }
         return 0L;
     }
@@ -159,20 +173,29 @@ final class PredictiveAlertNotifier {
      */
     static boolean notificationActive(Context context,
             ForecastRiskEvaluator.Direction direction, long nowMs) {
-        long activeUntilMs = activeUntilMs(direction);
-        if (context == null || direction == null || activeUntilMs <= nowMs
+        if (context == null || direction == null) return false;
+        boolean low = direction == ForecastRiskEvaluator.Direction.LOW;
+        if (CriticalGlucoseAlarm.predictiveActive(context, low, nowMs)) {
+            return true;
+        }
+        long possibleUntilMs = low ? lowPossibleActiveUntilMs
+                : highPossibleActiveUntilMs;
+        if (possibleUntilMs <= nowMs
                 || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
             return false;
         }
-        NotificationManager manager = context.getSystemService(
-                NotificationManager.class);
+        NotificationManager manager = (NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return false;
-        int expectedId = direction == ForecastRiskEvaluator.Direction.LOW
-                ? LOW_NOTIFICATION_ID : HIGH_NOTIFICATION_ID;
+        int expectedId = low ? LOW_NOTIFICATION_ID : HIGH_NOTIFICATION_ID;
+        String expectedChannel = low ? LOW_CHANNEL_ID : HIGH_CHANNEL_ID;
         try {
             for (StatusBarNotification notification
                     : manager.getActiveNotifications()) {
-                if (notification != null && notification.getId() == expectedId) {
+                if (notification != null && notification.getId() == expectedId
+                        && (Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                        || expectedChannel.equals(notification.getNotification()
+                        .getChannelId()))) {
                     return true;
                 }
             }
@@ -184,12 +207,12 @@ final class PredictiveAlertNotifier {
         return false;
     }
 
-    private static void setActiveUntil(
+    private static void setPossibleActiveUntil(
             ForecastRiskEvaluator.Direction direction, long expiresAtMs) {
         if (direction == ForecastRiskEvaluator.Direction.LOW) {
-            lowActiveUntilMs = Math.max(0L, expiresAtMs);
+            lowPossibleActiveUntilMs = Math.max(0L, expiresAtMs);
         } else if (direction == ForecastRiskEvaluator.Direction.HIGH) {
-            highActiveUntilMs = Math.max(0L, expiresAtMs);
+            highPossibleActiveUntilMs = Math.max(0L, expiresAtMs);
         }
     }
 
@@ -204,37 +227,30 @@ final class PredictiveAlertNotifier {
         String channelId = testChannelId(context, lowEnabled, highEnabled);
         if (!channelEnabled(context, channelId)) return false;
         boolean low = LOW_CHANNEL_ID.equals(channelId);
-        Notification notification = baseBuilder(context, channelId,
-                context.getString(R.string.predictive_alert_test_title),
-                context.getString(R.string.predictive_alert_test_body), low)
-                .setOnlyAlertOnce(false)
-                .build();
-        NotificationManager manager = (NotificationManager)
-                context.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager == null) return false;
-        manager.notify(TEST_NOTIFICATION_ID, notification);
-        return true;
+        return CriticalGlucoseAlarm.showTest(context, low);
     }
 
     static void cancel(Context context, ForecastRiskEvaluator.Direction direction) {
         if (direction == ForecastRiskEvaluator.Direction.LOW) {
-            lowActiveUntilMs = 0L;
+            lowPossibleActiveUntilMs = 0L;
         } else if (direction == ForecastRiskEvaluator.Direction.HIGH) {
-            highActiveUntilMs = 0L;
+            highPossibleActiveUntilMs = 0L;
         }
+        if (context == null || direction == null) return;
+        boolean low = direction == ForecastRiskEvaluator.Direction.LOW;
+        CriticalGlucoseAlarm.cancelPredictive(context, low);
         NotificationManager manager = (NotificationManager)
                 context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
-        if (direction == ForecastRiskEvaluator.Direction.LOW) {
-            manager.cancel(LOW_NOTIFICATION_ID);
-        } else if (direction == ForecastRiskEvaluator.Direction.HIGH) {
-            manager.cancel(HIGH_NOTIFICATION_ID);
-        }
+        manager.cancel(low ? LOW_NOTIFICATION_ID : HIGH_NOTIFICATION_ID);
     }
 
     static void cancelAll(Context context) {
-        lowActiveUntilMs = 0L;
-        highActiveUntilMs = 0L;
+        lowPossibleActiveUntilMs = 0L;
+        highPossibleActiveUntilMs = 0L;
+        if (context == null) return;
+        CriticalGlucoseAlarm.cancelPredictive(context, true);
+        CriticalGlucoseAlarm.cancelPredictive(context, false);
         NotificationManager manager = (NotificationManager)
                 context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
@@ -317,7 +333,7 @@ final class PredictiveAlertNotifier {
         return context.getString(resource, intervalEdge, median, target);
     }
 
-    private static NotificationCompat.Builder baseBuilder(Context context,
+    static NotificationCompat.Builder baseBuilder(Context context,
             String channel, String title, String body, boolean low) {
         Intent open = new Intent(context, MainActivity.class)
                 .putExtra(EXTRA_OPEN_FORECAST, true)
@@ -337,14 +353,35 @@ final class PredictiveAlertNotifier {
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
                 .setContentIntent(content)
                 .setAutoCancel(true)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPublicVersion(genericPublicVersion(context, channel))
                 .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
-                .setPriority(low ? NotificationCompat.PRIORITY_HIGH
-                        : NotificationCompat.PRIORITY_DEFAULT)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setColor(low ? ClinicalUi.danger(context) : 0xFFF2B84B)
                 .addAction(0,
                         context.getString(R.string.predictive_alert_open_forecast),
                         content);
+    }
+
+    private static Notification genericPublicVersion(Context context,
+            String channel) {
+        return new NotificationCompat.Builder(context, channel)
+                .setSmallIcon(R.drawable.novalue)
+                .setContentTitle(context.getString(R.string.app_name))
+                .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .build();
+    }
+
+    private static void cancelOrdinaryNotification(Context context,
+            ForecastRiskEvaluator.Direction direction) {
+        setPossibleActiveUntil(direction, 0L);
+        NotificationManager manager = (NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.cancel(direction == ForecastRiskEvaluator.Direction.LOW
+                    ? LOW_NOTIFICATION_ID : HIGH_NOTIFICATION_ID);
+        }
     }
 
     private static String glucose(Context context, float mgDl) {
