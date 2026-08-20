@@ -491,6 +491,22 @@ public class ForecastAndroidContractTest {
     }
 
     @Test
+    public void forecastPublicationKeysAreLexicographicAndNonDecreasing() {
+        assertTrue(ForecastRepository.isForecastKeyMonotonic(
+                Long.MIN_VALUE, Long.MIN_VALUE, 0L, 0L));
+        assertFalse(ForecastRepository.isForecastKeyMonotonic(
+                2_000L, 100L, 1_999L, Long.MAX_VALUE));
+        assertFalse(ForecastRepository.isForecastKeyMonotonic(
+                2_000L, 100L, 2_000L, 99L));
+        assertTrue(ForecastRepository.isForecastKeyMonotonic(
+                2_000L, 100L, 2_000L, 100L));
+        assertTrue(ForecastRepository.isForecastKeyMonotonic(
+                2_000L, 100L, 2_000L, 101L));
+        assertTrue(ForecastRepository.isForecastKeyMonotonic(
+                2_000L, Long.MAX_VALUE, 2_001L, 0L));
+    }
+
+    @Test
     public void liveOmitsAndHistoryDeclaresBackfillBoundary() throws Exception {
         ForecastReading reading = ForecastReading.historical(
                 1_800_000_000_000L, 118, .25f);
@@ -700,6 +716,69 @@ public class ForecastAndroidContractTest {
         assertFalse(preview.contains("ForecastReading."));
         assertTrue(applic.contains("ForecastRepository.enqueueLiveReading(app"));
         assertTrue(repository.contains("LIVE_ENTRY_EXECUTOR.execute"));
+        assertTrue(repository.contains("LIVE_PENDING_MS.getAndSet(0L)"));
+        assertTrue(repository.contains("LIVE_DRAIN_SCHEDULED.compareAndSet"));
+        assertTrue(repository.contains(
+                "wakeLock.acquire(LIVE_WAKE_LOCK_TIMEOUT_MS)"));
+        assertFalse(liveSync.contains("executor.execute"));
+        assertFalse(liveSync.contains("operationSequence"));
+        assertFalse(liveSync.contains("LIVE_HIGH_WATER_MS"));
+
+        String drain = between(repository,
+                "private static void drainLiveReadings", "State snapshot()");
+        assertFalse(drain.contains("while ("));
+        assertEquals(1, occurrences(drain,
+                "LIVE_PENDING_MS.getAndSet(0L)"));
+
+        assertTrue(repository.contains(
+                "AtomicLong forecastPublicationSequence"));
+        assertTrue(repository.contains("lastAcceptedForecastAnchorMs"));
+        assertTrue(repository.contains("lastAcceptedForecastGeneratedAtMs"));
+
+        String fetch = between(repository, "private void fetchAndPublish",
+                "private ForecastApiClient client");
+        assertTrue(fetch.indexOf("acceptForecast(")
+                < fetch.indexOf("api.forecastStatus()"));
+        String accept = between(repository,
+                "private AcceptedForecast acceptForecast",
+                "static boolean isForecastKeyMonotonic");
+        assertTrue(accept.contains("onForecast("));
+        assertTrue(accept.contains("onForecastUnavailable()"));
+        assertTrue(repository.contains("CurrentForecastGate"));
+        assertTrue(repository.contains("markUnresolved(measuredAtMs)"));
+        assertFalse(fetch.contains("isCurrentOperation"));
+        assertFalse(fetch.contains("operationSequence"));
+        assertFalse(fetch.contains("LIVE_HIGH_WATER_MS"));
+
+        String refreshError = between(repository,
+                "private void publishRefreshError",
+                "private void publishLiveError");
+        assertFalse(refreshError.contains("onForecastUnavailable"));
+        String liveError = between(repository,
+                "private void publishLiveError", "private static String errorMessage");
+        assertTrue(liveError.contains("onForecastUnavailable"));
+        assertTrue(liveError.contains("forecastPublicationSequence.get()"));
+
+        String doglucose = between(applic, "static void doglucose",
+                "static boolean updateDevices");
+        assertTrue(doglucose.contains(
+                "wakelock.acquire(GLUCOSE_WAKE_LOCK_TIMEOUT_MS)"));
+        assertTrue(doglucose.contains("finally"));
+        assertTrue(doglucose.contains("wakelock.isHeld()"));
+        assertTrue(doglucose.indexOf("finally")
+                < doglucose.indexOf("wakelock.release()"));
+        assertFalse(doglucose.contains("uploadReadings"));
+        assertFalse(doglucose.contains("currentForecast"));
+    }
+
+    private static int occurrences(String value, String needle) {
+        int count = 0;
+        int offset = 0;
+        while ((offset = value.indexOf(needle, offset)) >= 0) {
+            count++;
+            offset += needle.length();
+        }
+        return count;
     }
 
     private static String between(String value, String start, String end) {

@@ -532,6 +532,11 @@ void handleIntent(Intent intent) {
         return;
     final Bundle extras = intent.getExtras();
     if(extras!=null)  {
+        if(extras.getBoolean(PredictiveAlertNotifier.EXTRA_OPEN_FORECAST,false)) {
+            {if(doLog) {Log.i(LOG_ID,"open predictive forecast");};};
+            showForecastDetails();
+            return;
+            }
         if(extras.getBoolean(Notify.fromnotification, false)) {
             {if(doLog) {Log.i(LOG_ID,"fromnotification");};};
             Notify.stopalarm();

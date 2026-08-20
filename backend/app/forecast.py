@@ -33,6 +33,8 @@ from .schemas import (
     ForecastAccuracyStatus,
     ForecastActivity,
     ForecastActivityPoint,
+    ForecastAlertAssessment,
+    ForecastAlertCrossing,
     ForecastCapabilityStatus,
     ForecastCurrentResponse,
     ForecastDataStatus,
@@ -113,6 +115,42 @@ CONDITIONAL_NOTICE = (
     "Experimental estimate only. It assumes no unrecorded food, insulin, exercise, "
     "illness, or sensor error. Never use this forecast to calculate a dose."
 )
+ALERT_TARGET_LOW_MMOL_L = 4.2
+ALERT_TARGET_HIGH_MMOL_L = 9.0
+# Juggluco's canonical display conversion is 18.0 mg/dL per mmol/L. Keeping
+# both exact wire values avoids a rounded Android label becoming a different
+# threshold from the backend assessment.
+ALERT_TARGET_LOW_MG_DL = 75.6
+ALERT_TARGET_HIGH_MG_DL = 162.0
+ALERT_MAX_LEAD_MINUTES = 60
+ALERT_REQUIRED_CONSECUTIVE_POINTS = 2
+ALERT_DELIVERY_MAX_ANCHOR_AGE_MINUTES = 10
+ALERT_VALIDATION_DELIVERY_MARGIN_SECONDS = 60
+ALERT_VALIDATION_PROTOCOL = "frozen-14d-episode-alert-v3"
+ALERT_VALIDATION_POLICY_SENSITIVITY = "early"
+ALERT_VALIDATION_MIN_USER_HORIZON_MINUTES = 15
+ALERT_VALIDATION_COOLDOWN_MINUTES = 15
+ALERT_VALIDATION_EPISODE_REARM_MINUTES = 15
+# Each accepted dense day spans at least twenty hours at >=80% five-minute
+# density. Requiring eight observed decisions/hour prevents alert validation
+# from silently falling back to the sparse 120-minute promotion anchors.
+ALERT_VALIDATION_MIN_ANCHORS_PER_DAY = 20 * 8
+ALERT_VALIDATION_MIN_ANCHORS = (
+    STATIC_PROSPECTIVE_MIN_DAYS * ALERT_VALIDATION_MIN_ANCHORS_PER_DAY
+)
+ALERT_VALIDATION_MAX_ANCHORS = (
+    STATIC_PROSPECTIVE_MIN_DAYS * 24 * 60 // STEP_MINUTES
+)
+ALERT_VALIDATION_MIN_EPISODES = 5
+ALERT_VALIDATION_MIN_EPISODE_DAYS = 4
+ALERT_VALIDATION_MIN_LOW_RECALL = 0.80
+ALERT_VALIDATION_MIN_HIGH_RECALL = 0.75
+ALERT_VALIDATION_MAX_MISSED_LOW_EPISODES = 1
+ALERT_VALIDATION_MAX_FALSE_ALERTS_PER_DAY = 1.0
+ALERT_VALIDATION_MIN_MEDIAN_LEAD_MINUTES = 15.0
+ALERT_VALIDATION_RECALL_TOLERANCE = 0.05
+ALERT_VALIDATION_FALSE_ALERT_TOLERANCE_PER_DAY = 0.25
+ALERT_VALIDATION_LEAD_TOLERANCE_MINUTES = 5.0
 logger = logging.getLogger(__name__)
 
 
@@ -193,6 +231,173 @@ def _json_dict(raw: str | None) -> dict[str, Any]:
     except (TypeError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _safe_glucose_mg_dl(value: Any) -> float | None:
+    """Return a public-contract glucose value or fail closed for legacy rows."""
+
+    parsed = _finite(value, math.nan)
+    return parsed if 20.0 <= parsed <= 600.0 else None
+
+
+def _alert_crossing(
+    points: Sequence[ForecastPoint],
+    anchor_ms: int,
+    *,
+    direction: str,
+    evidence: str,
+) -> ForecastAlertCrossing | None:
+    """Return a bounded qualitative crossing supported by two 5-minute points.
+
+    Evidence is searched independently so an early interval-edge crossing and
+    a later median crossing can both reach the phone's sensitivity policy. The
+    labels are intentionally qualitative; an 80% marginal forecast interval is
+    not a calibrated probability of ever crossing a threshold.
+    """
+
+    if (
+        direction not in {"low", "high"}
+        or evidence not in {"possible", "likely"}
+        or anchor_ms <= 0
+    ):
+        return None
+    horizon_end_ms = anchor_ms + ALERT_MAX_LEAD_MINUTES * 60_000
+    ordered = sorted(
+        (
+            point
+            for point in points
+            if anchor_ms < point.at_ms <= horizon_end_ms
+            and (point.at_ms - anchor_ms) % STEP_MS == 0
+            and 20.0 <= point.low_mg_dl <= point.median_mg_dl
+            and point.median_mg_dl <= point.high_mg_dl <= 600.0
+        ),
+        key=lambda point: point.at_ms,
+    )
+    if len(ordered) < ALERT_REQUIRED_CONSECUTIVE_POINTS:
+        return None
+
+    def outside(point: ForecastPoint, evidence: str) -> bool:
+        if direction == "low":
+            value = (
+                point.median_mg_dl
+                if evidence == "likely"
+                else point.low_mg_dl
+            )
+            return value < ALERT_TARGET_LOW_MG_DL
+        value = (
+            point.median_mg_dl
+            if evidence == "likely"
+            else point.high_mg_dl
+        )
+        return value > ALERT_TARGET_HIGH_MG_DL
+
+    for index in range(len(ordered) - 1):
+        first = ordered[index]
+        second = ordered[index + 1]
+        if second.at_ms - first.at_ms != STEP_MS:
+            continue
+        if not (outside(first, evidence) and outside(second, evidence)):
+            continue
+        lead_minutes = int((first.at_ms - anchor_ms) // 60_000)
+        interval_edge = (
+            first.low_mg_dl if direction == "low" else first.high_mg_dl
+        )
+        return ForecastAlertCrossing(
+            direction=direction,
+            evidence=evidence,
+            crossing_at_ms=first.at_ms,
+            lead_minutes=lead_minutes,
+            predicted_median_mg_dl=first.median_mg_dl,
+            interval_edge_mg_dl=interval_edge,
+        )
+    return None
+
+
+def _alert_assessment(
+    *,
+    status: str,
+    anchor_ms: int | None,
+    points: Sequence[ForecastPoint],
+    model_version: str,
+    reading_fresh: bool,
+    alert_approved: bool,
+) -> ForecastAlertAssessment:
+    """Build a read-only target assessment with fail-closed delivery state."""
+
+    common = {
+        "target_low_mg_dl": ALERT_TARGET_LOW_MG_DL,
+        "target_high_mg_dl": ALERT_TARGET_HIGH_MG_DL,
+        "target_low_mmol_l": ALERT_TARGET_LOW_MMOL_L,
+        "target_high_mmol_l": ALERT_TARGET_HIGH_MMOL_L,
+    }
+    unavailable_reason = {
+        "no_data": "no_data",
+        "stale": "stale",
+        "low_confidence": "low_confidence",
+    }.get(status)
+    if unavailable_reason is not None or not reading_fresh or anchor_ms is None:
+        reasons = [
+            unavailable_reason
+            or ("no_data" if anchor_ms is None else "reading_not_fresh")
+        ]
+        return ForecastAlertAssessment(
+            monitoring_status="unavailable",
+            delivery_eligible=False,
+            suppressed_reasons=reasons,
+            low_possible=None,
+            low_likely=None,
+            high_possible=None,
+            high_likely=None,
+            low=None,
+            high=None,
+            **common,
+        )
+
+    low_possible = _alert_crossing(
+        points, anchor_ms, direction="low", evidence="possible"
+    )
+    low_likely = _alert_crossing(
+        points, anchor_ms, direction="low", evidence="likely"
+    )
+    high_possible = _alert_crossing(
+        points, anchor_ms, direction="high", evidence="possible"
+    )
+    high_likely = _alert_crossing(
+        points, anchor_ms, direction="high", evidence="likely"
+    )
+    # Backward-compatible summaries keep the original conservative preference.
+    low = low_likely or low_possible
+    high = high_likely or high_possible
+    crossings = {
+        "low_possible": low_possible,
+        "low_likely": low_likely,
+        "high_possible": high_possible,
+        "high_likely": high_likely,
+        "low": low,
+        "high": high,
+    }
+    if status == "ready" and alert_approved:
+        return ForecastAlertAssessment(
+            monitoring_status="eligible",
+            delivery_eligible=True,
+            suppressed_reasons=[],
+            **crossings,
+            **common,
+        )
+
+    if model_version == BASELINE_VERSION:
+        reason = "baseline_model"
+    elif status != "ready":
+        reason = "model_not_ready"
+    else:
+        reason = "alert_not_approved"
+    return ForecastAlertAssessment(
+        monitoring_status="shadow",
+        delivery_eligible=False,
+        suppressed_reasons=[reason],
+        **crossings,
+        **common,
+    )
 
 
 def _validated_vector(value: Any, *, positive: bool = False) -> np.ndarray | None:
@@ -358,6 +563,667 @@ def _forecast_interval_bounds(
         np.clip(point - half_width, 20.0, 600.0),
         np.clip(point + half_width, 20.0, 600.0),
     )
+
+
+def _alert_validation_thresholds() -> dict[str, float | int | str]:
+    """Return the preregistered, code-owned alert validation thresholds."""
+
+    return {
+        "protocol": ALERT_VALIDATION_PROTOCOL,
+        "target_low_mg_dl": ALERT_TARGET_LOW_MG_DL,
+        "target_high_mg_dl": ALERT_TARGET_HIGH_MG_DL,
+        "horizon_minutes": ALERT_MAX_LEAD_MINUTES,
+        "minimum_user_horizon_minutes": (
+            ALERT_VALIDATION_MIN_USER_HORIZON_MINUTES
+        ),
+        "policy_sensitivity": ALERT_VALIDATION_POLICY_SENSITIVITY,
+        "evidence_arbitration": "earliest_crossing_likely_on_tie",
+        "direction_arbitration": "earliest_crossing_likely_then_low_on_tie",
+        "maximum_deliveries_per_issue": 1,
+        "required_consecutive_points": ALERT_REQUIRED_CONSECUTIVE_POINTS,
+        "maximum_anchor_age_minutes": ALERT_DELIVERY_MAX_ANCHOR_AGE_MINUTES,
+        "delivery_margin_seconds": ALERT_VALIDATION_DELIVERY_MARGIN_SECONDS,
+        "cooldown_minutes": ALERT_VALIDATION_COOLDOWN_MINUTES,
+        "episode_rearm_minutes": ALERT_VALIDATION_EPISODE_REARM_MINUTES,
+        "minimum_days": STATIC_PROSPECTIVE_MIN_DAYS,
+        "minimum_anchors": ALERT_VALIDATION_MIN_ANCHORS,
+        "minimum_anchors_per_day": ALERT_VALIDATION_MIN_ANCHORS_PER_DAY,
+        "maximum_anchors": ALERT_VALIDATION_MAX_ANCHORS,
+        "minimum_episodes_per_direction": ALERT_VALIDATION_MIN_EPISODES,
+        "minimum_episode_days_per_direction": ALERT_VALIDATION_MIN_EPISODE_DAYS,
+        "minimum_low_episode_recall": ALERT_VALIDATION_MIN_LOW_RECALL,
+        "minimum_high_episode_recall": ALERT_VALIDATION_MIN_HIGH_RECALL,
+        "maximum_missed_low_episodes": ALERT_VALIDATION_MAX_MISSED_LOW_EPISODES,
+        "maximum_selected_false_alerts_per_day": (
+            ALERT_VALIDATION_MAX_FALSE_ALERTS_PER_DAY
+        ),
+        "minimum_median_lead_minutes": ALERT_VALIDATION_MIN_MEDIAN_LEAD_MINUTES,
+        "comparator_recall_tolerance": ALERT_VALIDATION_RECALL_TOLERANCE,
+        "comparator_false_alert_tolerance_per_day": (
+            ALERT_VALIDATION_FALSE_ALERT_TOLERANCE_PER_DAY
+        ),
+        "comparator_lead_tolerance_minutes": (
+            ALERT_VALIDATION_LEAD_TOLERANCE_MINUTES
+        ),
+    }
+
+
+def _alert_episode_metrics(
+    prediction: np.ndarray,
+    target: np.ndarray,
+    sigma: np.ndarray,
+    *,
+    anchor_times_ms: Sequence[int],
+    decision_times_ms: Sequence[int],
+    anchor_glucose_mg_dl: Sequence[float],
+    anchor_utc_offset_minutes: Sequence[int],
+    delivery_ready: Sequence[bool],
+) -> dict[str, float | None]:
+    """Score target-crossing alerts as deduplicated clinical episodes.
+
+    The function is deterministic and read-only. It replays Android's Early
+    sensitivity at the maximum selectable 60-minute horizon, including its
+    single-direction arbitration, with the shortest selectable cooldown.
+    Actual episodes require two adjacent five-minute readings outside the exact
+    4.2--9.0 mmol/L target.
+    """
+
+    point = np.asarray(prediction, dtype=np.float64)
+    actual = np.asarray(target, dtype=np.float64)
+    scale = np.asarray(sigma, dtype=np.float64)
+    row_count = point.shape[0] if point.ndim == 2 else 0
+    empty: dict[str, float | None] = {
+        "finite": 0.0,
+        "evaluation_days": 0.0,
+        "evaluated_anchors": float(row_count),
+        "low_episode_count": 0.0,
+        "high_episode_count": 0.0,
+        "low_episode_days": 0.0,
+        "high_episode_days": 0.0,
+        "low_selected_alert_count": 0.0,
+        "high_selected_alert_count": 0.0,
+        "low_selected_possible_count": 0.0,
+        "high_selected_possible_count": 0.0,
+        "low_selected_likely_count": 0.0,
+        "high_selected_likely_count": 0.0,
+        "low_selected_episode_recall": None,
+        "high_selected_episode_recall": None,
+        "low_selected_missed_episodes": 0.0,
+        "high_selected_missed_episodes": 0.0,
+        "low_selected_median_lead_minutes": None,
+        "high_selected_median_lead_minutes": None,
+        "low_selected_false_alerts": 0.0,
+        "high_selected_false_alerts": 0.0,
+        "selected_false_alerts_per_day": None,
+    }
+    if (
+        point.ndim != 2
+        or point.shape != actual.shape
+        or point.shape[1:] != (HORIZON_STEPS,)
+        or row_count <= 0
+        or len(anchor_times_ms) != row_count
+        or len(decision_times_ms) != row_count
+        or len(anchor_glucose_mg_dl) != row_count
+        or len(anchor_utc_offset_minutes) != row_count
+        or len(delivery_ready) != row_count
+        or scale.shape not in {(HORIZON_STEPS,), point.shape}
+        or not np.isfinite(point).all()
+        or not np.isfinite(actual).all()
+        or not np.isfinite(scale).all()
+    ):
+        return empty
+    anchors = [int(value) for value in anchor_times_ms]
+    decisions = [int(value) for value in decision_times_ms]
+    currents = [_finite(value, math.nan) for value in anchor_glucose_mg_dl]
+    offsets = [int(value) for value in anchor_utc_offset_minutes]
+    if (
+        any(value <= 0 for value in anchors)
+        or any(
+            decision_ms < anchor_ms
+            for anchor_ms, decision_ms in zip(anchors, decisions)
+        )
+        or any(not math.isfinite(value) or not 20.0 <= value <= 600.0 for value in currents)
+        or np.any(actual < 20.0)
+        or np.any(actual > 600.0)
+    ):
+        return empty
+
+    low, high = _forecast_interval_bounds(point, scale)
+    actual_by_time: dict[int, float] = {}
+    offset_by_time: dict[int, int] = {}
+    for row_index, anchor_ms in enumerate(anchors):
+        for horizon_index in range(HORIZON_STEPS):
+            at_ms = anchor_ms + (horizon_index + 1) * STEP_MS
+            value = float(actual[row_index, horizon_index])
+            previous = actual_by_time.get(at_ms)
+            if previous is not None and not math.isclose(
+                previous, value, rel_tol=0.0, abs_tol=1e-6
+            ):
+                return empty
+            actual_by_time[at_ms] = value
+            offset_by_time.setdefault(at_ms, offsets[row_index])
+
+    def episodes(direction: str) -> list[tuple[int, int, int]]:
+        threshold = (
+            ALERT_TARGET_LOW_MG_DL
+            if direction == "low"
+            else ALERT_TARGET_HIGH_MG_DL
+        )
+        result: list[tuple[int, int, int]] = []
+        run: list[int] = []
+
+        def finish() -> None:
+            if len(run) >= ALERT_REQUIRED_CONSECUTIVE_POINTS:
+                start_ms = run[0]
+                end_ms = run[-1]
+                offset_ms = offset_by_time.get(start_ms, 0) * 60_000
+                result.append(
+                    (start_ms, end_ms, (start_ms + offset_ms) // 86_400_000)
+                )
+            run.clear()
+
+        previous_at: int | None = None
+        for at_ms, value in sorted(actual_by_time.items()):
+            outside = (
+                value < threshold if direction == "low" else value > threshold
+            )
+            adjacent = previous_at is not None and at_ms - previous_at == STEP_MS
+            if outside:
+                if run and not adjacent:
+                    finish()
+                run.append(at_ms)
+            else:
+                finish()
+            previous_at = at_ms
+        finish()
+        merged: list[tuple[int, int, int]] = []
+        rearm_ms = ALERT_VALIDATION_EPISODE_REARM_MINUTES * 60_000
+        for start_ms, end_ms, day in result:
+            if merged and start_ms - merged[-1][1] <= rearm_ms:
+                previous_start, _previous_end, previous_day = merged[-1]
+                merged[-1] = (previous_start, end_ms, previous_day)
+            else:
+                merged.append((start_ms, end_ms, day))
+        return merged
+
+    low_episodes = episodes("low")
+    high_episodes = episodes("high")
+
+    # Exactly one candidate can reach Android's coordinator for each issue.
+    # Tuples are (issue_ms, crossing_ms, evidence).
+    raw_alerts: dict[str, list[tuple[int, int, str]]] = {
+        "low": [],
+        "high": [],
+    }
+    evaluated_local_days: set[int] = set()
+    first_hour_steps = ALERT_MAX_LEAD_MINUTES // STEP_MINUTES
+    for row_index, anchor_ms in sorted(
+        enumerate(anchors), key=lambda item: item[1]
+    ):
+        # Receipt is only the earliest possible delivery. Account for backend
+        # response, networking, and Android dispatch with a preregistered fixed
+        # margin so validation cannot claim a crossing that would already be
+        # stale by the time the phone can act on it.
+        issue_ms = (
+            decisions[row_index]
+            + ALERT_VALIDATION_DELIVERY_MARGIN_SECONDS * 1_000
+        )
+        offset_ms = offsets[row_index] * 60_000
+        evaluated_local_days.add((anchor_ms + offset_ms) // 86_400_000)
+        current = currents[row_index]
+        if (
+            not bool(delivery_ready[row_index])
+            or
+            issue_ms - anchor_ms
+            > ALERT_DELIVERY_MAX_ANCHOR_AGE_MINUTES * 60_000
+            or not ALERT_TARGET_LOW_MG_DL <= current <= ALERT_TARGET_HIGH_MG_DL
+        ):
+            continue
+        sources = {
+            ("low", "possible"): low[row_index, :first_hour_steps],
+            ("low", "likely"): point[row_index, :first_hour_steps],
+            ("high", "possible"): high[row_index, :first_hour_steps],
+            ("high", "likely"): point[row_index, :first_hour_steps],
+        }
+        crossings: dict[tuple[str, str], tuple[int, int, str] | None] = {}
+        for (direction, evidence), values in sources.items():
+            threshold = (
+                ALERT_TARGET_LOW_MG_DL
+                if direction == "low"
+                else ALERT_TARGET_HIGH_MG_DL
+            )
+            outside = values < threshold if direction == "low" else values > threshold
+            for index in range(first_hour_steps - 1):
+                if bool(outside[index]) and bool(outside[index + 1]):
+                    crossing_ms = anchor_ms + (index + 1) * STEP_MS
+                    # Android evaluates remaining lead at delivery time and
+                    # rejects a crossing that has already happened. Preserve
+                    # that exact first-crossing behavior in prospective replay.
+                    if crossing_ms > issue_ms:
+                        crossings[(direction, evidence)] = (
+                            issue_ms,
+                            crossing_ms,
+                            evidence,
+                        )
+                    break
+            crossings.setdefault((direction, evidence), None)
+
+        def choose_evidence(direction: str) -> tuple[int, int, str] | None:
+            possible = crossings[(direction, "possible")]
+            likely = crossings[(direction, "likely")]
+            if possible is None:
+                return likely
+            if likely is None:
+                return possible
+            # ForecastRiskEvaluator Early policy: earliest crossing wins and a
+            # likely crossing wins an exact time tie.
+            return likely if likely[1] <= possible[1] else possible
+
+        low_candidate = choose_evidence("low")
+        high_candidate = choose_evidence("high")
+        selected: tuple[str, tuple[int, int, str]] | None
+        if low_candidate is None:
+            selected = (
+                None if high_candidate is None else ("high", high_candidate)
+            )
+        elif high_candidate is None:
+            selected = ("low", low_candidate)
+        elif low_candidate[1] != high_candidate[1]:
+            selected = (
+                ("low", low_candidate)
+                if low_candidate[1] < high_candidate[1]
+                else ("high", high_candidate)
+            )
+        elif low_candidate[2] != high_candidate[2]:
+            selected = (
+                ("low", low_candidate)
+                if low_candidate[2] == "likely"
+                else ("high", high_candidate)
+            )
+        else:
+            # Android's final deterministic tie-break gives low precedence.
+            selected = ("low", low_candidate)
+        if selected is not None:
+            direction, candidate = selected
+            raw_alerts[direction].append(candidate)
+
+    cooldown_ms = ALERT_VALIDATION_COOLDOWN_MINUTES * 60_000
+
+    def deduplicate(
+        items: Sequence[tuple[int, int, str]],
+    ) -> list[tuple[int, int, str]]:
+        result: list[tuple[int, int, str]] = []
+        last_issued_ms: int | None = None
+        for issued_ms, crossing_ms, evidence in sorted(items):
+            if last_issued_ms is not None and issued_ms - last_issued_ms < cooldown_ms:
+                continue
+            result.append((issued_ms, crossing_ms, evidence))
+            last_issued_ms = issued_ms
+        return result
+
+    alerts = {key: deduplicate(value) for key, value in raw_alerts.items()}
+
+    def score(
+        episode_values: Sequence[tuple[int, int, int]],
+        alert_values: Sequence[tuple[int, int, str]],
+    ) -> tuple[float | None, int, float | None, int]:
+        leads: list[float] = []
+        matched = 0
+        used_alert_indexes: set[int] = set()
+        horizon_ms = ALERT_MAX_LEAD_MINUTES * 60_000
+        for start_ms, _end_ms, _day in episode_values:
+            eligible = [
+                (index, issued_ms)
+                for index, (issued_ms, _crossing_ms, _evidence) in enumerate(
+                    alert_values
+                )
+                if index not in used_alert_indexes
+                if issued_ms < start_ms <= issued_ms + horizon_ms
+            ]
+            if eligible:
+                matched += 1
+                alert_index, issued_ms = min(eligible, key=lambda item: item[1])
+                used_alert_indexes.add(alert_index)
+                leads.append((start_ms - issued_ms) / 60_000.0)
+        # One delivered alert may validate at most one distinct rearmed episode;
+        # repeats that cannot be paired remain false alerts rather than being
+        # hidden behind the same eventual threshold crossing.
+        false_alerts = len(alert_values) - len(used_alert_indexes)
+        count = len(episode_values)
+        return (
+            float(matched / count) if count else None,
+            count - matched,
+            float(np.median(leads)) if leads else None,
+            false_alerts,
+        )
+
+    low_selected = score(low_episodes, alerts["low"])
+    high_selected = score(high_episodes, alerts["high"])
+
+    evaluation_days = len(evaluated_local_days)
+    selected_false = low_selected[3] + high_selected[3]
+
+    def evidence_count(direction: str, evidence: str) -> float:
+        return float(sum(item[2] == evidence for item in alerts[direction]))
+
+    return {
+        "finite": 1.0,
+        "evaluation_days": float(evaluation_days),
+        "evaluated_anchors": float(row_count),
+        "low_episode_count": float(len(low_episodes)),
+        "high_episode_count": float(len(high_episodes)),
+        "low_episode_days": float(len({item[2] for item in low_episodes})),
+        "high_episode_days": float(len({item[2] for item in high_episodes})),
+        "low_selected_alert_count": float(len(alerts["low"])),
+        "high_selected_alert_count": float(len(alerts["high"])),
+        "low_selected_possible_count": evidence_count("low", "possible"),
+        "high_selected_possible_count": evidence_count("high", "possible"),
+        "low_selected_likely_count": evidence_count("low", "likely"),
+        "high_selected_likely_count": evidence_count("high", "likely"),
+        "low_selected_episode_recall": low_selected[0],
+        "high_selected_episode_recall": high_selected[0],
+        "low_selected_missed_episodes": float(low_selected[1]),
+        "high_selected_missed_episodes": float(high_selected[1]),
+        "low_selected_median_lead_minutes": low_selected[2],
+        "high_selected_median_lead_minutes": high_selected[2],
+        "low_selected_false_alerts": float(low_selected[3]),
+        "high_selected_false_alerts": float(high_selected[3]),
+        "selected_false_alerts_per_day": (
+            float(selected_false / evaluation_days) if evaluation_days else None
+        ),
+    }
+
+
+def _alert_validation_gates(
+    candidate_metrics: dict[str, float | None],
+    reference_metrics: dict[str, float | None],
+    pinned_metrics: dict[str, float | None],
+    current_metrics: dict[str, float | None] | None = None,
+) -> dict[str, bool | float | int]:
+    """Apply preregistered episode-level gates without affecting model training."""
+
+    comparators = [reference_metrics, pinned_metrics]
+    if current_metrics is not None:
+        comparators.append(current_metrics)
+
+    def metric(values: dict[str, float | None], name: str) -> float:
+        return _finite(values.get(name), math.nan)
+
+    finite_names = (
+        "finite",
+        "evaluation_days",
+        "evaluated_anchors",
+        "low_episode_count",
+        "high_episode_count",
+        "low_episode_days",
+        "high_episode_days",
+        "low_selected_episode_recall",
+        "high_selected_episode_recall",
+        "low_selected_missed_episodes",
+        "high_selected_missed_episodes",
+        "selected_false_alerts_per_day",
+    )
+    finite = all(
+        math.isfinite(metric(values, name))
+        for values in (candidate_metrics, *comparators)
+        for name in finite_names
+    ) and all(
+        math.isfinite(metric(candidate_metrics, name))
+        for name in (
+            "low_selected_median_lead_minutes",
+            "high_selected_median_lead_minutes",
+        )
+    ) and all(
+        metric(values, "finite") == 1.0
+        for values in (candidate_metrics, *comparators)
+    )
+    cohort_consistent = all(
+        metric(values, name) == metric(candidate_metrics, name)
+        for values in comparators
+        for name in (
+            "evaluation_days",
+            "evaluated_anchors",
+            "low_episode_count",
+            "high_episode_count",
+            "low_episode_days",
+            "high_episode_days",
+        )
+    )
+
+    def internally_consistent(values: dict[str, float | None]) -> bool:
+        low_count = metric(values, "low_episode_count")
+        high_count = metric(values, "high_episode_count")
+        low_missed = metric(values, "low_selected_missed_episodes")
+        high_missed = metric(values, "high_selected_missed_episodes")
+        low_recall = metric(values, "low_selected_episode_recall")
+        high_recall = metric(values, "high_selected_episode_recall")
+        false_rate = metric(values, "selected_false_alerts_per_day")
+        return bool(
+            low_count > 0.0
+            and high_count > 0.0
+            and all(
+                math.isclose(value, round(value), abs_tol=1e-9)
+                for value in (
+                    low_count,
+                    high_count,
+                    low_missed,
+                    high_missed,
+                    metric(values, "evaluation_days"),
+                    metric(values, "evaluated_anchors"),
+                )
+            )
+            and 0.0 <= low_missed <= low_count
+            and 0.0 <= high_missed <= high_count
+            and math.isclose(
+                low_recall,
+                (low_count - low_missed) / low_count,
+                abs_tol=1e-9,
+            )
+            and math.isclose(
+                high_recall,
+                (high_count - high_missed) / high_count,
+                abs_tol=1e-9,
+            )
+            and false_rate >= 0.0
+        )
+
+    metrics_consistent = bool(
+        finite
+        and all(
+            internally_consistent(values)
+            for values in (candidate_metrics, *comparators)
+        )
+    )
+    evidence_sufficient = bool(
+        finite
+        and cohort_consistent
+        and metrics_consistent
+        and metric(candidate_metrics, "finite") == 1.0
+        and metric(candidate_metrics, "evaluation_days")
+        == STATIC_PROSPECTIVE_MIN_DAYS
+        and metric(candidate_metrics, "evaluated_anchors")
+        >= ALERT_VALIDATION_MIN_ANCHORS
+        and metric(candidate_metrics, "evaluated_anchors")
+        <= ALERT_VALIDATION_MAX_ANCHORS
+        and metric(candidate_metrics, "low_episode_count")
+        >= ALERT_VALIDATION_MIN_EPISODES
+        and metric(candidate_metrics, "high_episode_count")
+        >= ALERT_VALIDATION_MIN_EPISODES
+        and metric(candidate_metrics, "low_episode_days")
+        >= ALERT_VALIDATION_MIN_EPISODE_DAYS
+        and metric(candidate_metrics, "high_episode_days")
+        >= ALERT_VALIDATION_MIN_EPISODE_DAYS
+    )
+    low_recall_absolute = bool(
+        evidence_sufficient
+        and metric(candidate_metrics, "low_selected_episode_recall")
+        >= ALERT_VALIDATION_MIN_LOW_RECALL
+    )
+    high_recall_absolute = bool(
+        evidence_sufficient
+        and metric(candidate_metrics, "high_selected_episode_recall")
+        >= ALERT_VALIDATION_MIN_HIGH_RECALL
+    )
+    low_recall_comparator_safe = bool(
+        evidence_sufficient
+        and all(
+            metric(candidate_metrics, "low_selected_episode_recall")
+            >= metric(values, "low_selected_episode_recall")
+            - ALERT_VALIDATION_RECALL_TOLERANCE
+            for values in comparators
+        )
+    )
+    high_recall_comparator_safe = bool(
+        evidence_sufficient
+        and all(
+            metric(candidate_metrics, "high_selected_episode_recall")
+            >= metric(values, "high_selected_episode_recall")
+            - ALERT_VALIDATION_RECALL_TOLERANCE
+            for values in comparators
+        )
+    )
+    missed_low_absolute = bool(
+        evidence_sufficient
+        and metric(candidate_metrics, "low_selected_missed_episodes")
+        <= ALERT_VALIDATION_MAX_MISSED_LOW_EPISODES
+    )
+    missed_low_comparator_safe = bool(
+        evidence_sufficient
+        and all(
+            metric(candidate_metrics, "low_selected_missed_episodes")
+            <= metric(values, "low_selected_missed_episodes")
+            for values in comparators
+        )
+    )
+    false_alert_rate_absolute = bool(
+        evidence_sufficient
+        and metric(candidate_metrics, "selected_false_alerts_per_day")
+        <= ALERT_VALIDATION_MAX_FALSE_ALERTS_PER_DAY
+    )
+    false_alert_rate_comparator_safe = bool(
+        evidence_sufficient
+        and all(
+            metric(candidate_metrics, "selected_false_alerts_per_day")
+            <= metric(values, "selected_false_alerts_per_day")
+            + ALERT_VALIDATION_FALSE_ALERT_TOLERANCE_PER_DAY
+            for values in comparators
+        )
+    )
+    median_lead_absolute = bool(
+        evidence_sufficient
+        and metric(candidate_metrics, "low_selected_median_lead_minutes")
+        >= ALERT_VALIDATION_MIN_MEDIAN_LEAD_MINUTES
+        and metric(candidate_metrics, "high_selected_median_lead_minutes")
+        >= ALERT_VALIDATION_MIN_MEDIAN_LEAD_MINUTES
+    )
+
+    def lead_comparator_safe(name: str) -> bool:
+        candidate = metric(candidate_metrics, name)
+        for values in comparators:
+            comparator = metric(values, name)
+            if math.isfinite(comparator) and (
+                candidate
+                < comparator - ALERT_VALIDATION_LEAD_TOLERANCE_MINUTES
+            ):
+                return False
+        return True
+
+    median_lead_comparator_safe = bool(
+        evidence_sufficient
+        and lead_comparator_safe("low_selected_median_lead_minutes")
+        and lead_comparator_safe("high_selected_median_lead_minutes")
+    )
+    result: dict[str, bool | float | int] = {
+        "finite": bool(finite),
+        "cohort_consistent": bool(cohort_consistent),
+        "metrics_consistent": metrics_consistent,
+        "evidence_sufficient": evidence_sufficient,
+        "low_recall_absolute": low_recall_absolute,
+        "high_recall_absolute": high_recall_absolute,
+        "low_recall_comparator_safe": low_recall_comparator_safe,
+        "high_recall_comparator_safe": high_recall_comparator_safe,
+        "missed_low_absolute": missed_low_absolute,
+        "missed_low_comparator_safe": missed_low_comparator_safe,
+        "false_alert_rate_absolute": false_alert_rate_absolute,
+        "false_alert_rate_comparator_safe": false_alert_rate_comparator_safe,
+        "median_lead_absolute": median_lead_absolute,
+        "median_lead_comparator_safe": median_lead_comparator_safe,
+        "minimum_low_recall": ALERT_VALIDATION_MIN_LOW_RECALL,
+        "minimum_high_recall": ALERT_VALIDATION_MIN_HIGH_RECALL,
+        "maximum_missed_low_episodes": (
+            ALERT_VALIDATION_MAX_MISSED_LOW_EPISODES
+        ),
+        "maximum_selected_false_alerts_per_day": (
+            ALERT_VALIDATION_MAX_FALSE_ALERTS_PER_DAY
+        ),
+        "minimum_median_lead_minutes": (
+            ALERT_VALIDATION_MIN_MEDIAN_LEAD_MINUTES
+        ),
+        "accepted": False,
+    }
+    result["accepted"] = bool(
+        evidence_sufficient
+        and low_recall_absolute
+        and high_recall_absolute
+        and low_recall_comparator_safe
+        and high_recall_comparator_safe
+        and missed_low_absolute
+        and missed_low_comparator_safe
+        and false_alert_rate_absolute
+        and false_alert_rate_comparator_safe
+        and median_lead_absolute
+        and median_lead_comparator_safe
+    )
+    return result
+
+
+def _alert_approval_envelope_is_valid(approval: dict[str, Any]) -> bool:
+    """Validate the checksummed alert claim independently of forecast approval."""
+
+    if approval.get("alert_approved") is not True:
+        return True
+    validation = approval.get("alert_validation")
+    if not isinstance(validation, dict):
+        return False
+    thresholds = validation.get("thresholds")
+    candidate = validation.get("candidate_metrics")
+    reference = validation.get("reference_metrics")
+    pinned = validation.get("pinned_metrics")
+    current = validation.get("current_metrics")
+    gates = validation.get("gates")
+    selected_days = approval.get("selected_local_days")
+    if not all(
+        isinstance(item, dict)
+        for item in (thresholds, candidate, reference, pinned, current, gates)
+    ):
+        return False
+    if (
+        validation.get("protocol") != ALERT_VALIDATION_PROTOCOL
+        or thresholds != _alert_validation_thresholds()
+        or not isinstance(selected_days, list)
+        or len(selected_days) != STATIC_PROSPECTIVE_MIN_DAYS
+        or any(not isinstance(day, int) for day in selected_days)
+        or selected_days != sorted(set(selected_days))
+        or not isinstance(approval.get("local_days_sha256"), str)
+        or len(approval.get("local_days_sha256", "")) != 64
+        or hashlib.sha256(
+            ",".join(str(day) for day in selected_days).encode("ascii")
+        ).hexdigest()
+        != approval.get("local_days_sha256")
+        or validation.get("local_days_sha256")
+        != approval.get("local_days_sha256")
+        or int(_finite(validation.get("cohort_start_ms"), -1))
+        != int(_finite(approval.get("cohort_start_ms"), -2))
+        or int(_finite(validation.get("cohort_end_ms"), -1))
+        != int(_finite(approval.get("cohort_end_ms"), -2))
+        or int(_finite(validation.get("dense_days"), -1))
+        != STATIC_PROSPECTIVE_MIN_DAYS
+        or int(_finite(candidate.get("evaluated_anchors"), -1))
+        != int(_finite(approval.get("alert_validation_anchors"), -2))
+    ):
+        return False
+    computed = _alert_validation_gates(candidate, reference, pinned, current)
+    return gates == computed and computed.get("accepted") is True
 
 
 def _static_reliability(
@@ -712,6 +1578,7 @@ def _static_artifact_is_valid(
             not isinstance(approval, dict)
             or approval.get("state") != "approved_prospective"
             or approval.get("protocol") != STATIC_PROSPECTIVE_PROTOCOL
+            or not _alert_approval_envelope_is_valid(approval)
             or int(_finite(approval.get("minimum_new_days"), -1))
             != STATIC_PROSPECTIVE_MIN_DAYS
             or int(_finite(approval.get("strictly_after_ms"), -1))
@@ -3127,6 +3994,30 @@ class ForecastService:
         confidence = _clamp(0.18 + 0.52 * coverage * quality, 0.1, 0.72)
         return ("low_confidence" if poor else "ok"), confidence, coverage
 
+    @classmethod
+    def _runtime_forecast_adjustments(
+        cls,
+        readings: Sequence[GlucoseReadingRecord],
+        events: Sequence[_Event],
+        anchor_ms: int,
+        parameters: dict[str, Any],
+    ) -> tuple[str, float, float, np.ndarray, float]:
+        """Return the exact quality/meal transform shared by live and replay."""
+
+        quality_status, quality_confidence, coverage = cls._quality_status(
+            readings, anchor_ms
+        )
+        meal_sigma, event_confidence = _meal_event_uncertainty(
+            events, anchor_ms, parameters
+        )
+        return (
+            quality_status,
+            quality_confidence,
+            coverage,
+            meal_sigma,
+            event_confidence,
+        )
+
     def _activities(
         self,
         events: Sequence[_Event],
@@ -3426,39 +4317,111 @@ class ForecastService:
             )
         return activities
 
+    @classmethod
+    def _alert_delivery_is_approved(
+        cls, session: Session, record: ForecastModelRecord | None
+    ) -> bool:
+        """Require a runtime-valid artifact with an explicitly checksummed alert bit."""
+
+        if (
+            record is None
+            or record.version == BASELINE_VERSION
+            or record.status != "champion"
+            or not cls._runtime_model_dependencies_are_valid(session, record)
+        ):
+            return False
+        parameters = _json_dict(record.parameters_json)
+        approval = parameters.get("artifact", {}).get("approval", {})
+        # The runtime validator above recomputes the complete artifact digest,
+        # so this exact boolean cannot be added or changed without invalidating
+        # the model. Missing flags remain shadow-only for backward compatibility.
+        return isinstance(approval, dict) and approval.get("alert_approved") is True
+
     @staticmethod
+    def _based_on_reading(
+        session: Session, measured_at_ms: int
+    ) -> GlucoseReadingRecord | None:
+        return session.scalar(
+            select(GlucoseReadingRecord)
+            .where(GlucoseReadingRecord.measured_at_ms == measured_at_ms)
+            .order_by(GlucoseReadingRecord.reading_id.desc())
+        )
+
+    @staticmethod
+    def _reading_is_fresh_for_alerts(
+        reading: GlucoseReadingRecord | None, now_ms: int
+    ) -> bool:
+        if reading is None or _safe_glucose_mg_dl(reading.glucose_mg_dl) is None:
+            return False
+        measurement_age = now_ms - int(reading.measured_at_ms)
+        receipt_delay = int(reading.received_at_ms) - int(reading.measured_at_ms)
+        receipt_age = now_ms - int(reading.received_at_ms)
+        maximum_age_ms = ALERT_DELIVERY_MAX_ANCHOR_AGE_MINUTES * 60_000
+        return bool(
+            0 <= measurement_age <= maximum_age_ms
+            and 0 <= receipt_delay <= maximum_age_ms
+            and 0 <= receipt_age <= maximum_age_ms
+        )
+
+    @classmethod
     def _run_response(
-        session: Session, run: ForecastRunRecord
+        cls,
+        session: Session,
+        run: ForecastRunRecord,
+        *,
+        now_ms: int | None = None,
     ) -> ForecastCurrentResponse:
-        points = list(
+        point_records = list(
             session.scalars(
                 select(ForecastPointRecord)
                 .where(ForecastPointRecord.run_id == run.id)
                 .order_by(ForecastPointRecord.step_minutes)
             )
         )
+        points = [
+            ForecastPoint(
+                at_ms=point.at_ms,
+                median_mg_dl=point.median_mg_dl,
+                low_mg_dl=point.low_mg_dl,
+                high_mg_dl=point.high_mg_dl,
+            )
+            for point in point_records
+        ]
         try:
             activities = [ForecastActivity.model_validate(item) for item in json.loads(run.activities_json)]
         except (TypeError, ValueError, json.JSONDecodeError):
             activities = []
+        response_now_ms = now_ms if now_ms is not None else _now_ms()
+        based_on_reading = cls._based_on_reading(
+            session, run.based_on_reading_at_ms
+        )
+        based_on_glucose_mg_dl = (
+            _safe_glucose_mg_dl(based_on_reading.glucose_mg_dl)
+            if based_on_reading is not None
+            else None
+        )
+        model = session.get(ForecastModelRecord, run.model_version)
         return ForecastCurrentResponse(
             status=run.status,
             generated_at_ms=run.generated_at_ms,
             based_on_reading_at_ms=run.based_on_reading_at_ms,
+            based_on_glucose_mg_dl=based_on_glucose_mg_dl,
             horizon_minutes=120,
             model_version=run.model_version,
             confidence=run.confidence,
-            points=[
-                ForecastPoint(
-                    at_ms=point.at_ms,
-                    median_mg_dl=point.median_mg_dl,
-                    low_mg_dl=point.low_mg_dl,
-                    high_mg_dl=point.high_mg_dl,
-                )
-                for point in points
-            ],
+            points=points,
             activities=activities,
             conditional_notice=run.conditional_notice,
+            alert_assessment=_alert_assessment(
+                status=run.status,
+                anchor_ms=run.based_on_reading_at_ms,
+                points=points,
+                model_version=run.model_version,
+                reading_fresh=cls._reading_is_fresh_for_alerts(
+                    based_on_reading, response_now_ms
+                ),
+                alert_approved=cls._alert_delivery_is_approved(session, model),
+            ),
         )
 
     def current(self, session: Session, now_ms: int | None = None) -> ForecastCurrentResponse:
@@ -3475,14 +4438,24 @@ class ForecastService:
                 status="no_data",
                 generated_at_ms=now,
                 based_on_reading_at_ms=None,
+                based_on_glucose_mg_dl=None,
                 horizon_minutes=120,
                 model_version=champion.version,
                 confidence=0.0,
                 points=[],
                 activities=[],
                 conditional_notice=CONDITIONAL_NOTICE,
+                alert_assessment=_alert_assessment(
+                    status="no_data",
+                    anchor_ms=None,
+                    points=[],
+                    model_version=champion.version,
+                    reading_fresh=False,
+                    alert_approved=False,
+                ),
             )
         anchor_ms = latest.measured_at_ms
+        based_on_glucose_mg_dl = _safe_glucose_mg_dl(latest.glucose_mg_dl)
         parameters = (
             _baseline_parameters()
             if champion.version == BASELINE_VERSION
@@ -3507,23 +4480,45 @@ class ForecastService:
             ),
             limit=20_000,
         )
-        if now - anchor_ms > STALE_AFTER_MS:
+        terminal_status = (
+            "stale"
+            if now - anchor_ms > STALE_AFTER_MS
+            else ("low_confidence" if based_on_glucose_mg_dl is None else None)
+        )
+        if terminal_status is not None:
             activities = self._activities(
                 events, anchor_ms, parameters, readings=readings
             )
             return ForecastCurrentResponse(
-                status="stale",
+                status=terminal_status,
                 generated_at_ms=now,
                 based_on_reading_at_ms=anchor_ms,
+                based_on_glucose_mg_dl=based_on_glucose_mg_dl,
                 horizon_minutes=120,
                 model_version=champion.version,
                 confidence=0.0,
                 points=[],
                 activities=activities,
                 conditional_notice=CONDITIONAL_NOTICE,
+                alert_assessment=_alert_assessment(
+                    status=terminal_status,
+                    anchor_ms=anchor_ms,
+                    points=[],
+                    model_version=champion.version,
+                    reading_fresh=False,
+                    alert_approved=False,
+                ),
             )
 
-        quality_status, quality_confidence, coverage = self._quality_status(readings, anchor_ms)
+        (
+            quality_status,
+            quality_confidence,
+            coverage,
+            meal_uncertainty_sigma,
+            event_confidence_multiplier,
+        ) = self._runtime_forecast_adjustments(
+            readings, events, anchor_ms, parameters
+        )
         occupied_bins = self._occupied_bin_count(session, through_ms=anchor_ms)
         personalization_days = occupied_bins / (24 * 60 / STEP_MINUTES)
         status_value = quality_status
@@ -3540,9 +4535,6 @@ class ForecastService:
             model_confidence = _clamp(
                 _finite(reliability.get("overall"), 0.30), 0.12, 0.65
             )
-        meal_uncertainty_sigma, event_confidence_multiplier = _meal_event_uncertainty(
-            events, anchor_ms, parameters
-        )
         confidence = _clamp(
             min(quality_confidence, model_confidence) * event_confidence_multiplier,
             0.05,
@@ -3562,7 +4554,7 @@ class ForecastService:
             .order_by(ForecastRunRecord.generated_at_ms.desc())
         )
         if existing is not None:
-            return self._run_response(session, existing)
+            return self._run_response(session, existing, now_ms=now)
 
         median, sigma = _forecast_arrays(readings, events, anchor_ms, parameters)
         if champion.architecture == STATIC_PERSONAL_ARCHITECTURE:
@@ -3638,7 +4630,7 @@ class ForecastService:
                 )
             )
         session.commit()
-        return self._run_response(session, run)
+        return self._run_response(session, run, now_ms=now)
 
     @staticmethod
     def _training_windows(
@@ -4379,6 +5371,7 @@ class ForecastService:
                 "dense_days": 0,
                 "independent_anchors": 0,
                 "local_days_sha256": hashlib.sha256(b"").hexdigest(),
+                "selected_local_days": [],
             }
         cutoff_row = max(cutoff_rows, key=lambda row: row.measured_at_ms)
         cutoff_offset_ms = int(cutoff_row.utc_offset_minutes or 0) * 60_000
@@ -4443,6 +5436,7 @@ class ForecastService:
             "available_dense_days": available_days,
             "independent_anchors": len(independent),
             "local_days_sha256": day_digest,
+            "selected_local_days": day_ids,
             "minimum_day_hours": 20.0,
             "minimum_day_density": STATIC_MIN_DAY_DENSITY,
             "edge_tolerance_minutes": 60,
@@ -5405,6 +6399,10 @@ class ForecastService:
             parameters["artifact"]["approval"] = {
                 "state": "pending_prospective",
                 "protocol": STATIC_PROSPECTIVE_PROTOCOL,
+                # Forecast approval and predictive-alert approval are separate
+                # safety claims. Prospective forecast evaluation never enables
+                # notification delivery implicitly.
+                "alert_approved": False,
                 "minimum_new_days": STATIC_PROSPECTIVE_MIN_DAYS,
                 "strictly_after_ms": cutoff_ms,
                 "development_gate_passed": bool(development_accepted),
@@ -5720,12 +6718,29 @@ class ForecastService:
                 },
             )
 
+        selected_local_days = {
+            int(value)
+            for value in future_manifest.get("selected_local_days", [])
+        }
+        # Point-model promotion remains based on non-overlapping anchors. Alert
+        # validation replays every causal five-minute decision on those exact
+        # preregistered days so false-alert rate matches live polling rather than
+        # being diluted by the independent-window downsampling.
+        alert_windows = [
+            window
+            for window in all_windows
+            if readings[window[0]].measured_at_ms > cutoff_ms
+            and self._window_local_day(readings, window) in selected_local_days
+        ]
+        future_manifest["alert_validation_anchors"] = len(alert_windows)
+
+        cohort_windows = alert_windows or future_windows
         cohort_start_ms = min(
-            readings[window[0]].measured_at_ms for window in future_windows
+            readings[window[0]].measured_at_ms for window in cohort_windows
         )
         cohort_end_ms = max(
             readings[window[0]].measured_at_ms + HORIZON_MINUTES * 60_000
-            for window in future_windows
+            for window in cohort_windows
         )
         freeze_time_ms = int(_finite(approval.get("freeze_time_ms"), -1))
         received_before_freeze = session.scalar(
@@ -5775,10 +6790,18 @@ class ForecastService:
             window[0]: int(readings[window[0]].received_at_ms)
             for window in future_windows
         }
+        alert_decision_times_ms = {
+            window[0]: int(readings[window[0]].received_at_ms)
+            for window in alert_windows
+        }
         events = self._load_events(
             session,
-            through_ms=max(decision_times_ms.values()),
-            known_through_ms=max(decision_times_ms.values()),
+            through_ms=max(
+                [*decision_times_ms.values(), *alert_decision_times_ms.values()]
+            ),
+            known_through_ms=max(
+                [*decision_times_ms.values(), *alert_decision_times_ms.values()]
+            ),
         )
         features, reference, target = self._dataset_for_parameters(
             readings,
@@ -5805,21 +6828,26 @@ class ForecastService:
             dtype=np.float64,
         )
 
-        def comparator_outputs(
-            record: ForecastModelRecord,
-        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-            comparator_parameters = (
+        def parameters_for_record(record: ForecastModelRecord) -> dict[str, Any]:
+            return (
                 _baseline_parameters()
                 if record.version == BASELINE_VERSION
                 else (_json_dict(record.parameters_json) or _default_parameters())
             )
+
+        def comparator_outputs(
+            record: ForecastModelRecord,
+            evaluation_windows: Sequence[tuple[int, np.ndarray]],
+            evaluation_decision_times_ms: dict[int, int],
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            comparator_parameters = parameters_for_record(record)
             comparator_x, comparator_base, comparator_target = (
                 self._dataset_for_parameters(
                     readings,
                     events,
-                    future_windows,
+                    evaluation_windows,
                     comparator_parameters,
-                    decision_times_ms=decision_times_ms,
+                    decision_times_ms=evaluation_decision_times_ms,
                 )
             )
             comparator_prediction = np.clip(
@@ -5838,9 +6866,9 @@ class ForecastService:
                 comparator_reference = self._reference_for_windows(
                     readings,
                     events,
-                    future_windows,
+                    evaluation_windows,
                     comparator_parameters,
-                    decision_times_ms=decision_times_ms,
+                    decision_times_ms=evaluation_decision_times_ms,
                 )
                 comparator_prediction, comparator_sigma = _apply_static_predictor(
                     comparator_prediction,
@@ -5860,7 +6888,7 @@ class ForecastService:
             return comparator_prediction, comparator_sigma, comparator_target
 
         pinned_prediction, pinned_sigma, pinned_target = comparator_outputs(
-            frozen_comparator
+            frozen_comparator, future_windows, decision_times_ms
         )
         current_champion = self._champion(session)
         current_champion_parameters_json = current_champion.parameters_json
@@ -5869,7 +6897,7 @@ class ForecastService:
         current_target: np.ndarray | None = None
         if current_champion.version != frozen_comparator.version:
             current_prediction, current_sigma, current_target = comparator_outputs(
-                current_champion
+                current_champion, future_windows, decision_times_ms
             )
 
         candidate_metrics: dict[str, float | None] = {
@@ -5975,9 +7003,191 @@ class ForecastService:
                 test_day_count=len(current_day_results),
                 finite=bool(np.isfinite(current_prediction).all()),
             )
+
+        alert_features, alert_reference, alert_target = self._dataset_for_parameters(
+            readings,
+            events,
+            alert_windows,
+            parameters,
+            decision_times_ms=alert_decision_times_ms,
+        )
+        alert_reference_prediction = np.clip(alert_reference, 20.0, 600.0)
+        alert_raw_prediction = np.clip(
+            alert_reference
+            + _network_predict_batch(alert_features, parameters),
+            20.0,
+            600.0,
+        )
+        alert_candidate_prediction, alert_candidate_sigma = _apply_static_predictor(
+            alert_raw_prediction,
+            alert_reference_prediction,
+            frozen_sigma,
+            parameters,
+        )
+        alert_pinned_prediction, alert_pinned_sigma, alert_pinned_target = (
+            comparator_outputs(
+                frozen_comparator, alert_windows, alert_decision_times_ms
+            )
+        )
+        if current_champion.version != frozen_comparator.version:
+            (
+                alert_current_prediction,
+                alert_current_sigma,
+                alert_current_target,
+            ) = comparator_outputs(
+                current_champion, alert_windows, alert_decision_times_ms
+            )
+        else:
+            alert_current_prediction = alert_pinned_prediction
+            alert_current_sigma = alert_pinned_sigma
+            alert_current_target = alert_pinned_target
+        alert_anchor_times = [
+            int(readings[window[0]].measured_at_ms) for window in alert_windows
+        ]
+        alert_issue_times = [
+            int(alert_decision_times_ms[window[0]]) for window in alert_windows
+        ]
+        alert_anchor_glucose = [
+            float(readings[window[0]].glucose_mg_dl) for window in alert_windows
+        ]
+        alert_anchor_offsets = [
+            int(readings[window[0]].utc_offset_minutes or 0)
+            for window in alert_windows
+        ]
+
+        reading_times = [row.measured_at_ms for row in readings]
+        sorted_events = sorted(events, key=lambda item: item.occurred_at_ms)
+        alert_runtime_contexts: list[
+            tuple[list[GlucoseReadingRecord], list[_Event], int]
+        ] = []
+        for window in alert_windows:
+            anchor_index = window[0]
+            anchor = readings[anchor_index]
+            decision_ms = alert_decision_times_ms[anchor_index]
+            history_start = (
+                anchor.measured_at_ms
+                - CONTEXT_HISTORY_MINUTES * 60_000
+                - MATCH_TOLERANCE_MS
+            )
+            history_index = bisect.bisect_left(reading_times, history_start)
+            causal_readings = [
+                row
+                for row in readings[history_index : anchor_index + 1]
+                if int(row.received_at_ms) <= decision_ms
+            ]
+            causal_events = [
+                event
+                for event in sorted_events
+                if event.occurred_at_ms <= decision_ms
+                and _event_known_at(event) <= decision_ms
+                and event.occurred_at_ms
+                >= anchor.measured_at_ms - 96 * 60 * 60_000
+            ]
+            alert_runtime_contexts.append(
+                (causal_readings, causal_events, anchor.measured_at_ms)
+            )
+
+        def runtime_adjustments(
+            runtime_parameters: dict[str, Any],
+        ) -> tuple[np.ndarray, list[bool]]:
+            meal_sigmas: list[np.ndarray] = []
+            delivery_ready: list[bool] = []
+            for causal_readings, causal_events, anchor_ms in alert_runtime_contexts:
+                status, _confidence, _coverage, meal_sigma, _event_confidence = (
+                    self._runtime_forecast_adjustments(
+                        causal_readings,
+                        causal_events,
+                        anchor_ms,
+                        runtime_parameters,
+                    )
+                )
+                meal_sigmas.append(meal_sigma)
+                delivery_ready.append(status == "ok")
+            return np.vstack(meal_sigmas), delivery_ready
+
+        candidate_meal_sigma, alert_delivery_ready = runtime_adjustments(parameters)
+        pinned_parameters = parameters_for_record(frozen_comparator)
+        pinned_meal_sigma, pinned_delivery_ready = runtime_adjustments(
+            pinned_parameters
+        )
+        if current_champion.version == frozen_comparator.version:
+            current_meal_sigma = pinned_meal_sigma
+            current_delivery_ready = pinned_delivery_ready
+        else:
+            current_meal_sigma, current_delivery_ready = runtime_adjustments(
+                parameters_for_record(current_champion)
+            )
+
+        # This transform is identical to live `current()`: uncertain confirmed
+        # meals may only widen the interval, never alter the frozen median.
+        alert_candidate_sigma = np.sqrt(
+            alert_candidate_sigma * alert_candidate_sigma
+            + candidate_meal_sigma * candidate_meal_sigma
+        )
+        alert_reference_sigma = np.sqrt(
+            reference_sigma * reference_sigma
+            + candidate_meal_sigma * candidate_meal_sigma
+        )
+        alert_pinned_sigma = np.sqrt(
+            alert_pinned_sigma * alert_pinned_sigma
+            + pinned_meal_sigma * pinned_meal_sigma
+        )
+        alert_current_sigma = np.sqrt(
+            alert_current_sigma * alert_current_sigma
+            + current_meal_sigma * current_meal_sigma
+        )
+
+        def alert_metrics(
+            prediction: np.ndarray,
+            target_values: np.ndarray,
+            sigma_values: np.ndarray,
+            delivery_ready: Sequence[bool],
+        ) -> dict[str, float | None]:
+            return _alert_episode_metrics(
+                prediction,
+                target_values,
+                sigma_values,
+                anchor_times_ms=alert_anchor_times,
+                decision_times_ms=alert_issue_times,
+                anchor_glucose_mg_dl=alert_anchor_glucose,
+                anchor_utc_offset_minutes=alert_anchor_offsets,
+                delivery_ready=delivery_ready,
+            )
+
+        candidate_alert_metrics = alert_metrics(
+            alert_candidate_prediction,
+            alert_target,
+            alert_candidate_sigma,
+            alert_delivery_ready,
+        )
+        reference_alert_metrics = alert_metrics(
+            alert_reference_prediction,
+            alert_target,
+            alert_reference_sigma,
+            alert_delivery_ready,
+        )
+        pinned_alert_metrics = alert_metrics(
+            alert_pinned_prediction,
+            alert_pinned_target,
+            alert_pinned_sigma,
+            pinned_delivery_ready,
+        )
+        current_alert_metrics = alert_metrics(
+            alert_current_prediction,
+            alert_current_target,
+            alert_current_sigma,
+            current_delivery_ready,
+        )
+        alert_gates = _alert_validation_gates(
+            candidate_alert_metrics,
+            reference_alert_metrics,
+            pinned_alert_metrics,
+            current_alert_metrics,
+        )
         accepted = bool(gates["accepted"]) and bool(
             current_gates is None or current_gates["accepted"]
         )
+        alert_approved = bool(accepted and alert_gates["accepted"])
         hypo_evidence_sufficient = bool(
             float(candidate_metrics.get("hypo_low_points") or 0.0) >= 40
             and float(candidate_metrics.get("hypo_low_episodes") or 0.0) >= 5
@@ -5997,6 +7207,10 @@ class ForecastService:
             "inconclusive": int(inconclusive),
             "current_comparator_gate_passed": int(
                 current_gates is None or bool(current_gates["accepted"])
+            ),
+            "alert_validation_passed": int(bool(alert_gates["accepted"])),
+            "alert_evidence_sufficient": int(
+                bool(alert_gates["evidence_sufficient"])
             ),
             "candidate_equal_day_mae": _finite(
                 gates.get("candidate_equal_day_mae"),
@@ -6137,6 +7351,20 @@ class ForecastService:
             "evaluated_at_ms": evaluated_at_ms,
             "cohort_start_ms": cohort_start_ms,
             "cohort_end_ms": cohort_end_ms,
+            "alert_approved": alert_approved,
+            "alert_validation": {
+                "protocol": ALERT_VALIDATION_PROTOCOL,
+                "thresholds": _alert_validation_thresholds(),
+                "local_days_sha256": future_manifest["local_days_sha256"],
+                "cohort_start_ms": cohort_start_ms,
+                "cohort_end_ms": cohort_end_ms,
+                "dense_days": future_days,
+                "candidate_metrics": candidate_alert_metrics,
+                "reference_metrics": reference_alert_metrics,
+                "pinned_metrics": pinned_alert_metrics,
+                "current_metrics": current_alert_metrics,
+                "gates": alert_gates,
+            },
             "last_reading_at_ms": cohort_end_ms,
             "pinned_comparator_version": frozen_comparator.version,
             "pinned_comparator_sha256": comparator_hash,
@@ -6256,7 +7484,15 @@ class ForecastService:
             "candidate" if accepted else ("inconclusive" if inconclusive else "rejected")
         )
         stored.decision_reason = (
-            "Passed prospective frozen-model gates; explicit activation is required"
+            (
+                "Passed prospective forecast and episode-level alert gates; "
+                "explicit activation is required"
+                if alert_approved
+                else (
+                    "Passed prospective forecast gates; predictive alerts remain "
+                    "shadow because episode-level alert evidence was insufficient or unsafe"
+                )
+            )
             if accepted
             else (
                 "Prospective cohort was inconclusive because it lacked preregistered "

@@ -483,6 +483,73 @@ class ForecastActivity(BaseModel):
     overlap_count: int = Field(default=0, ge=0)
 
 
+class ForecastAlertCrossing(BaseModel):
+    """A bounded target-crossing signal, never a treatment recommendation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    direction: Literal["low", "high"]
+    # These are qualitative evidence tiers. They are deliberately not exposed
+    # as probabilities because the forecast bands are marginal intervals, not
+    # calibrated path-crossing probabilities.
+    evidence: Literal["possible", "likely"]
+    crossing_at_ms: int = Field(gt=0)
+    lead_minutes: int = Field(ge=5, le=60, multiple_of=5)
+    predicted_median_mg_dl: float = Field(
+        ge=20, le=600, allow_inf_nan=False
+    )
+    interval_edge_mg_dl: float = Field(ge=20, le=600, allow_inf_nan=False)
+
+
+class ForecastAlertAssessment(BaseModel):
+    """Read-only forecast assessment used by the phone's notification UI."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    monitoring_status: Literal["unavailable", "shadow", "eligible"]
+    delivery_eligible: bool
+    target_low_mg_dl: Literal[75.6] = 75.6
+    target_high_mg_dl: Literal[162.0] = 162.0
+    target_low_mmol_l: Literal[4.2] = 4.2
+    target_high_mmol_l: Literal[9.0] = 9.0
+    suppressed_reasons: list[str]
+    # Evidence-specific candidates are additive so policy layers can apply
+    # different horizons without losing an earlier interval-only crossing or a
+    # later median crossing. ``low``/``high`` remain the conservative legacy
+    # summaries (likely when present, otherwise possible).
+    low_possible: ForecastAlertCrossing | None = None
+    low_likely: ForecastAlertCrossing | None = None
+    high_possible: ForecastAlertCrossing | None = None
+    high_likely: ForecastAlertCrossing | None = None
+    low: ForecastAlertCrossing | None = None
+    high: ForecastAlertCrossing | None = None
+
+    @model_validator(mode="after")
+    def validate_delivery_state(self) -> "ForecastAlertAssessment":
+        eligible = self.monitoring_status == "eligible"
+        if self.delivery_eligible != eligible:
+            raise ValueError(
+                "delivery_eligible must match monitoring_status=eligible"
+            )
+        crossings = (
+            self.low_possible,
+            self.low_likely,
+            self.high_possible,
+            self.high_likely,
+            self.low,
+            self.high,
+        )
+        if self.monitoring_status == "unavailable" and any(
+            crossing is not None for crossing in crossings
+        ):
+            raise ValueError("unavailable assessments cannot expose crossings")
+        if eligible and self.suppressed_reasons:
+            raise ValueError("eligible assessments cannot be suppressed")
+        if not eligible and not self.suppressed_reasons:
+            raise ValueError("non-eligible assessments require a suppression reason")
+        return self
+
+
 class ForecastCurrentResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -491,12 +558,19 @@ class ForecastCurrentResponse(BaseModel):
     ]
     generated_at_ms: int
     based_on_reading_at_ms: int | None
+    based_on_glucose_mg_dl: float | None = Field(
+        default=None, ge=20, le=600, allow_inf_nan=False
+    )
     horizon_minutes: Literal[120] = 120
     model_version: str
     confidence: float = Field(ge=0, le=1)
     points: list[ForecastPoint]
     activities: list[ForecastActivity]
     conditional_notice: str
+    # Nullable keeps deserialization compatible with immutable responses made
+    # before the predictive-alert contract existed. New backend responses fill
+    # it for every status, including explicit fail-closed states.
+    alert_assessment: ForecastAlertAssessment | None = None
 
 
 class ForecastTrainingStatus(BaseModel):

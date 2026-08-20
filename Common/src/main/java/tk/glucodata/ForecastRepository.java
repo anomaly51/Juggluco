@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -14,6 +15,8 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Synchronizes local CGM history with the configured backend and projects the
@@ -34,6 +37,7 @@ final class ForecastRepository {
     private static final int MAX_NATIVE_ACTIVITIES = 1_024;
     private static final int MAX_NATIVE_ACTIVITY_SAMPLES_PER_EVENT = 256;
     private static final int MAX_NATIVE_ACTIVITY_TOTAL_SAMPLES = 65_536;
+    private static final long LIVE_WAKE_LOCK_TIMEOUT_MS = 120_000L;
 
     interface Listener {
         void onForecastStateChanged(State state);
@@ -57,14 +61,104 @@ final class ForecastRepository {
         }
     }
 
+    /**
+     * Orders successful /current responses independently from transport
+     * failures. A later successful no-data/stale/rollback response is
+     * authoritative, while an older in-flight response can never resurrect a
+     * warning after a newer success or an unresolved local sensor sample.
+     */
+    static final class CurrentForecastGate {
+        enum Outcome { IGNORED, PUBLISH, INVALIDATE }
+
+        static final class Result {
+            final Outcome outcome;
+            final ForecastSnapshot forecast;
+
+            Result(Outcome outcome, ForecastSnapshot forecast) {
+                this.outcome = outcome;
+                this.forecast = forecast;
+            }
+        }
+
+        private long lastSuccessfulRequestId;
+        private long lastAcceptedForecastAnchorMs = Long.MIN_VALUE;
+        private long lastAcceptedForecastGeneratedAtMs = Long.MIN_VALUE;
+        private long unresolvedReadingAtMs;
+        private ForecastSnapshot lastAcceptedForecast;
+
+        Result accept(long requestId, ForecastSnapshot candidate, long nowMs) {
+            if (candidate == null || requestId <= lastSuccessfulRequestId) {
+                return new Result(Outcome.IGNORED, null);
+            }
+            lastSuccessfulRequestId = requestId;
+            boolean beforeUnresolvedReading = unresolvedReadingAtMs > 0L
+                    && candidate.basedOnReadingAtMs < unresolvedReadingAtMs;
+            boolean keyRollback = !isForecastKeyMonotonic(
+                    lastAcceptedForecastAnchorMs,
+                    lastAcceptedForecastGeneratedAtMs,
+                    candidate.basedOnReadingAtMs, candidate.generatedAtMs);
+            if (beforeUnresolvedReading || keyRollback
+                    || !candidate.isAlertFresh(nowMs)) {
+                // An authoritative invalidation also resets the key epoch so a
+                // backend restore with smaller timestamps can recover on its
+                // next fresh response.
+                lastAcceptedForecastAnchorMs = Long.MIN_VALUE;
+                lastAcceptedForecastGeneratedAtMs = Long.MIN_VALUE;
+                lastAcceptedForecast = null;
+                ForecastSnapshot replacement = beforeUnresolvedReading
+                        || keyRollback
+                        ? ForecastSnapshot.empty("stale") : candidate;
+                return new Result(Outcome.INVALIDATE, replacement);
+            }
+            if (unresolvedReadingAtMs > 0L
+                    && candidate.basedOnReadingAtMs >= unresolvedReadingAtMs) {
+                unresolvedReadingAtMs = 0L;
+            }
+            lastAcceptedForecastAnchorMs = candidate.basedOnReadingAtMs;
+            lastAcceptedForecastGeneratedAtMs = candidate.generatedAtMs;
+            lastAcceptedForecast = candidate;
+            return new Result(Outcome.PUBLISH, candidate);
+        }
+
+        void markUnresolved(long measuredAtMs) {
+            unresolvedReadingAtMs = Math.max(unresolvedReadingAtMs,
+                    Math.max(0L, measuredAtMs));
+            lastAcceptedForecast = null;
+        }
+
+        boolean transportErrorInvalidates(long nowMs) {
+            return lastAcceptedForecast == null
+                    || !lastAcceptedForecast.isAlertFresh(nowMs);
+        }
+
+        void reset() {
+            lastSuccessfulRequestId = 0L;
+            lastAcceptedForecastAnchorMs = Long.MIN_VALUE;
+            lastAcceptedForecastGeneratedAtMs = Long.MIN_VALUE;
+            unresolvedReadingAtMs = 0L;
+            lastAcceptedForecast = null;
+        }
+    }
+
     private static volatile ForecastRepository instance;
     private static final ExecutorService LIVE_ENTRY_EXECUTOR =
             Executors.newSingleThreadExecutor();
+    private static final AtomicLong LIVE_HIGH_WATER_MS = new AtomicLong();
+    private static final AtomicLong LIVE_PENDING_MS = new AtomicLong();
+    private static final AtomicBoolean LIVE_DRAIN_SCHEDULED =
+            new AtomicBoolean();
 
+    private final Context application;
     private final SharedPreferences preferences;
     private final IntakeRepository intakeRepository;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
+    private final Object predictiveAlertConfigurationLock = new Object();
+    private final AtomicLong operationSequence = new AtomicLong();
+    private final AtomicLong forecastPublicationSequence = new AtomicLong();
+    private final AtomicLong currentRequestSequence = new AtomicLong();
+    private final CurrentForecastGate currentForecastGate =
+            new CurrentForecastGate();
     private final CopyOnWriteArrayList<Listener> listeners =
             new CopyOnWriteArrayList<>();
     private final Runnable configurationListener =
@@ -78,7 +172,7 @@ final class ForecastRepository {
     private long lastPassRequestedMs;
 
     private ForecastRepository(Context context) {
-        Context application = context.getApplicationContext();
+        application = context.getApplicationContext();
         preferences = application.getSharedPreferences(PREFS,
                 Context.MODE_PRIVATE);
         intakeRepository = IntakeRepository.get(application);
@@ -99,12 +193,94 @@ final class ForecastRepository {
         return current;
     }
 
-    /** Sensor-thread entry point: even first-time repository setup is deferred. */
+    /**
+     * Sensor-thread entry point. Live work is latest-wins and runs on its own
+     * executor, so a long history backfill can never queue a fresh warning
+     * behind thousands of older samples.
+     */
     static void enqueueLiveReading(Context context, long measuredAtMs) {
-        if (context == null || Applic.isWearable) return;
+        if (context == null || Applic.isWearable || measuredAtMs <= 0L) return;
         Context application = context.getApplicationContext();
-        LIVE_ENTRY_EXECUTOR.execute(() -> ForecastRepository.get(application)
-                .recordLiveReading(measuredAtMs));
+        long previous;
+        do {
+            previous = LIVE_HIGH_WATER_MS.get();
+            if (measuredAtMs <= previous) return;
+        } while (!LIVE_HIGH_WATER_MS.compareAndSet(previous, measuredAtMs));
+        long pending;
+        do {
+            pending = LIVE_PENDING_MS.get();
+            if (measuredAtMs <= pending) break;
+        } while (!LIVE_PENDING_MS.compareAndSet(pending, measuredAtMs));
+        scheduleLiveDrain(application);
+    }
+
+    private static void scheduleLiveDrain(Context application) {
+        if (!LIVE_DRAIN_SCHEDULED.compareAndSet(false, true)) return;
+        // Acquire before returning to doglucose(), while its sensor wake lock
+        // is still held. Acquiring only inside the executor leaves a small but
+        // real suspend gap between the sensor callback and network work.
+        PowerManager.WakeLock wakeLock = acquireLiveWakeLock(application);
+        try {
+            LIVE_ENTRY_EXECUTOR.execute(
+                    () -> drainLiveReadings(application, wakeLock));
+        } catch (RuntimeException error) {
+            releaseLiveWakeLock(wakeLock);
+            LIVE_DRAIN_SCHEDULED.set(false);
+            throw error;
+        }
+    }
+
+    private static PowerManager.WakeLock acquireLiveWakeLock(
+            Context application) {
+        try {
+            PowerManager manager = (PowerManager) application.getSystemService(
+                    Context.POWER_SERVICE);
+            if (manager == null) return null;
+            PowerManager.WakeLock wakeLock = manager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "Juggluco::ForecastLive");
+            wakeLock.setReferenceCounted(false);
+            wakeLock.acquire(LIVE_WAKE_LOCK_TIMEOUT_MS);
+            return wakeLock;
+        } catch (RuntimeException error) {
+            if (Log.doLog) Log.e("ForecastRepository",
+                    "forecast wake lock unavailable: "
+                            + error.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private static void releaseLiveWakeLock(PowerManager.WakeLock wakeLock) {
+        if (wakeLock == null) return;
+        try {
+            if (wakeLock.isHeld()) wakeLock.release();
+        } catch (RuntimeException error) {
+            if (Log.doLog) Log.e("ForecastRepository",
+                    "forecast wake lock release skipped: "
+                            + error.getClass().getSimpleName());
+        }
+    }
+
+    private static void drainLiveReadings(Context application,
+            PowerManager.WakeLock wakeLock) {
+        try {
+            ForecastRepository repository = ForecastRepository.get(application);
+            // Exactly one latest value is handled under this bounded wake
+            // lock. A value arriving during network work is rescheduled below
+            // and receives a fresh timeout of its own.
+            long measuredAtMs = LIVE_PENDING_MS.getAndSet(0L);
+            if (measuredAtMs > 0L) {
+                repository.recordLiveReading(measuredAtMs);
+            }
+        } catch (Throwable error) {
+            if (Log.doLog) Log.e("ForecastRepository",
+                    "forecast live drain skipped: "
+                            + error.getClass().getSimpleName());
+        } finally {
+            releaseLiveWakeLock(wakeLock);
+            LIVE_DRAIN_SCHEDULED.set(false);
+            if (LIVE_PENDING_MS.get() > 0L) scheduleLiveDrain(application);
+        }
     }
 
     State snapshot() {
@@ -147,31 +323,38 @@ final class ForecastRepository {
     void recordLiveReading(long measuredAtMs) {
         if (Applic.isWearable || measuredAtMs <= 0L) return;
         final long generation = configurationGeneration;
-        executor.execute(() -> {
-            if (generation != configurationGeneration) return;
-            try {
-                // During a sensor handover the native timestamp winner can
-                // change from the older sensor to the newer one. Let history
-                // publish the stabilized winner instead of racing two live
-                // payloads under the same immutable cgm-{timestamp} identity.
-                if (activeSensorCount() > 1) return;
-                // doglucose() can expose a display-calibrated value. The
-                // backend identity must instead use the immutable raw sample
-                // that history backfill will send later. If native storage has
-                // not committed this timestamp yet, leave it for the next
-                // backfill rather than uploading a conflicting fallback.
-                ForecastReading reading = exactNativeReading(measuredAtMs);
-                if (reading == null
-                        || generation != configurationGeneration) return;
-                ForecastApiClient api = client();
-                publishLoading(generation);
-                api.uploadReadings(Collections.singletonList(reading));
-                if (generation != configurationGeneration) return;
-                fetchAndPublish(api, generation);
-            } catch (Exception error) {
-                publishError(generation, error);
+        final long successVersionAtStart = forecastPublicationSequence.get();
+        try {
+            // During a sensor handover the native timestamp winner can change
+            // from the older sensor to the newer one. Let history publish the
+            // stabilized winner instead of racing two live payloads under the
+            // same immutable cgm-{timestamp} identity.
+            if (activeSensorCount() > 1) {
+                invalidateForUnresolvedReading(generation, measuredAtMs);
+                return;
             }
-        });
+            // doglucose() can expose a display-calibrated value. The backend
+            // identity must instead use the immutable raw sample that history
+            // backfill will send later. If native storage has not committed
+            // this timestamp yet, leave it for the next backfill rather than
+            // uploading a conflicting fallback.
+            ForecastReading reading = exactNativeReading(measuredAtMs);
+            if (reading == null) {
+                invalidateForUnresolvedReading(generation, measuredAtMs);
+                return;
+            }
+            if (generation != configurationGeneration) return;
+            ForecastApiClient api = client();
+            api.uploadReadings(Collections.singletonList(reading));
+            if (generation != configurationGeneration) return;
+            // Do not abandon this valid response merely because another sample
+            // was enqueued. The lexicographic forecast gate below makes the
+            // eventual publications race-safe, while the next sample remains
+            // coalesced in LIVE_PENDING_MS.
+            fetchAndPublish(api, generation, 0L);
+        } catch (Exception error) {
+            publishLiveError(generation, successVersionAtStart, error);
+        }
     }
 
     private static ForecastReading exactNativeReading(long measuredAtMs) {
@@ -183,6 +366,31 @@ final class ForecastRepository {
             return null;
         }
         return exactReading(decodeNativeReadings(raw), measuredAtMs);
+    }
+
+    /**
+     * Sensor overlap or a not-yet-committed immutable row makes the current
+     * sample ambiguous. Clear delivery immediately and erect an anchor barrier
+     * so an older in-flight /current response cannot restore it.
+     */
+    private void invalidateForUnresolvedReading(long generation,
+            long measuredAtMs) {
+        final long publicationId;
+        synchronized (predictiveAlertConfigurationLock) {
+            if (generation != configurationGeneration) return;
+            currentForecastGate.markUnresolved(measuredAtMs);
+            publicationId = forecastPublicationSequence.incrementAndGet();
+            try {
+                PredictiveAlertCoordinator.get(application)
+                        .onForecastUnavailable();
+            } catch (Throwable ignored) {
+                // The native actual alarm path remains independent.
+            }
+        }
+        State previous = state;
+        publishForecast(generation, publicationId,
+                new State(ForecastSnapshot.empty("stale"), previous.model,
+                        false, "", System.currentTimeMillis()));
     }
 
     static ForecastReading exactReading(List<ForecastReading> readings,
@@ -203,22 +411,29 @@ final class ForecastRepository {
             lastPassRequestedMs = now;
         }
         final long generation = configurationGeneration;
+        final long operationId = operationSequence.incrementAndGet();
+        final long successVersionAtStart = forecastPublicationSequence.get();
         final ForecastApiClient api;
         try {
             api = client();
         } catch (IllegalArgumentException error) {
-            publishError(generation, error);
+            publishRefreshError(generation, operationId,
+                    successVersionAtStart, error);
             return;
         }
         executor.execute(() -> {
             if (generation != configurationGeneration) return;
-            publishLoading(generation);
+            publishLoading(generation, operationId);
             try {
+                // History upload always completes. Forecast responses from this
+                // executor and the live executor are ordered by their payload
+                // keys, never by which request happened to start last.
                 if (backfill) uploadNativeHistory(api, generation);
                 if (generation != configurationGeneration) return;
-                fetchAndPublish(api, generation);
+                fetchAndPublish(api, generation, operationId);
             } catch (Exception error) {
-                publishError(generation, error);
+                publishRefreshError(generation, operationId,
+                        successVersionAtStart, error);
             }
         });
     }
@@ -363,12 +578,86 @@ final class ForecastRepository {
         return readings;
     }
 
-    private void fetchAndPublish(ForecastApiClient api, long generation)
-            throws Exception {
+    private void fetchAndPublish(ForecastApiClient api, long generation,
+            long refreshOperationId) throws Exception {
+        long currentRequestId = currentRequestSequence.incrementAndGet();
         ForecastSnapshot forecast = api.currentForecast();
-        ForecastModelStatus model = api.forecastStatus();
-        publish(generation, new State(forecast, model, false, "",
-                System.currentTimeMillis()), true);
+        // Delivery does not depend on the slower diagnostics endpoint. Post a
+        // valid, checksum-gated assessment as soon as /current returns.
+        AcceptedForecast accepted = acceptForecast(generation,
+                currentRequestId, forecast);
+        if (accepted == null) {
+            publishRefreshComplete(generation, refreshOperationId);
+            return;
+        }
+        ForecastModelStatus model;
+        try {
+            model = api.forecastStatus();
+        } catch (Exception statusError) {
+            // Current forecast is the complete, checksum-gated delivery
+            // contract. A secondary diagnostics failure must not discard a
+            // valid time-critical assessment.
+            model = state.model;
+            if (Log.doLog) Log.e("ForecastRepository",
+                    "forecast status unavailable: "
+                            + statusError.getClass().getSimpleName());
+        }
+        publishForecast(generation, accepted.publicationId,
+                new State(accepted.forecast, model, false, "",
+                System.currentTimeMillis()));
+    }
+
+    private static final class AcceptedForecast {
+        final long publicationId;
+        final ForecastSnapshot forecast;
+
+        AcceptedForecast(long publicationId, ForecastSnapshot forecast) {
+            this.publicationId = publicationId;
+            this.forecast = forecast;
+        }
+    }
+
+    /**
+     * Accepts non-decreasing lexicographic (reading anchor, generation time)
+     * keys. Equal responses may refresh diagnostics; an older response can
+     * never displace a forecast already accepted from the other executor.
+     */
+    private AcceptedForecast acceptForecast(long generation,
+            long currentRequestId, ForecastSnapshot forecast) {
+        if (forecast == null) return null;
+        synchronized (predictiveAlertConfigurationLock) {
+            if (generation != configurationGeneration) return null;
+            CurrentForecastGate.Result result = currentForecastGate.accept(
+                    currentRequestId, forecast, System.currentTimeMillis());
+            if (result.outcome == CurrentForecastGate.Outcome.IGNORED) {
+                return null;
+            }
+            long publicationId = forecastPublicationSequence.incrementAndGet();
+            try {
+                if (result.outcome == CurrentForecastGate.Outcome.INVALIDATE) {
+                    PredictiveAlertCoordinator.get(application)
+                            .onForecastUnavailable();
+                } else {
+                    PredictiveAlertCoordinator.get(application).onForecast(
+                            result.forecast, System.currentTimeMillis());
+                }
+            } catch (Throwable error) {
+                // A notification problem must never interfere with graph refresh,
+                // CGM ingestion, or the independent native low/high alarms.
+                if (Log.doLog) Log.e("ForecastRepository",
+                        "predictive alert skipped: "
+                                + error.getClass().getSimpleName());
+            }
+            return new AcceptedForecast(publicationId, result.forecast);
+        }
+    }
+
+    static boolean isForecastKeyMonotonic(long previousAnchorMs,
+            long previousGeneratedAtMs, long candidateAnchorMs,
+            long candidateGeneratedAtMs) {
+        return candidateAnchorMs > previousAnchorMs
+                || (candidateAnchorMs == previousAnchorMs
+                && candidateGeneratedAtMs >= previousGeneratedAtMs);
     }
 
     private ForecastApiClient client() {
@@ -453,39 +742,119 @@ final class ForecastRepository {
         }
     }
 
-    private void publishLoading(long generation) {
-        State previous = state;
-        publish(generation, new State(previous.forecast, previous.model,
-                true, "", previous.updatedAtMs), false);
+    private boolean isCurrentOperation(long generation, long operationId) {
+        return generation == configurationGeneration
+                && operationId == operationSequence.get();
     }
 
-    private void publishError(long generation, Exception error) {
+    private void publishLoading(long generation, long operationId) {
+        main.post(() -> {
+            if (!isCurrentOperation(generation, operationId)) return;
+            State previous = state;
+            commitState(new State(previous.forecast, previous.model,
+                    true, "", previous.updatedAtMs), false);
+        });
+    }
+
+    private void publishRefreshComplete(long generation, long operationId) {
+        if (operationId <= 0L) return;
+        main.post(() -> {
+            if (!isCurrentOperation(generation, operationId)) return;
+            State previous = state;
+            commitState(new State(previous.forecast, previous.model,
+                    false, "", previous.updatedAtMs), false);
+        });
+    }
+
+    /** History/foreground failures are diagnostic and preserve live alerts. */
+    private void publishRefreshError(long generation, long operationId,
+            long successVersionAtStart, Exception error) {
+        final String message = errorMessage(error);
+        main.post(() -> {
+            if (!isCurrentOperation(generation, operationId)
+                    || forecastPublicationSequence.get()
+                    != successVersionAtStart) return;
+            State previous = state;
+            commitState(new State(previous.forecast, previous.model,
+                    false, message, previous.updatedAtMs), false);
+        });
+    }
+
+    /**
+     * A failed live upload/current pass may invalidate predictive delivery, but
+     * never after a newer forecast has succeeded or configuration has changed.
+     */
+    private void publishLiveError(long generation,
+            long successVersionAtStart, Exception error) {
+        final String message = errorMessage(error);
+        boolean invalidateDelivery = false;
+        synchronized (predictiveAlertConfigurationLock) {
+            if (generation != configurationGeneration
+                    || forecastPublicationSequence.get()
+                    != successVersionAtStart) return;
+            invalidateDelivery = currentForecastGate.transportErrorInvalidates(
+                    System.currentTimeMillis());
+            if (invalidateDelivery) {
+                try {
+                    PredictiveAlertCoordinator.get(application)
+                            .onForecastUnavailable();
+                } catch (Throwable ignored) {
+                    // Native low/high alarms and error publication stay independent.
+                }
+            }
+        }
+        main.post(() -> {
+            if (generation != configurationGeneration
+                    || forecastPublicationSequence.get()
+                    != successVersionAtStart) return;
+            State previous = state;
+            commitState(new State(previous.forecast, previous.model,
+                    false, message, previous.updatedAtMs), true);
+        });
+    }
+
+    private static String errorMessage(Exception error) {
         String message = error == null ? "" : error.getMessage();
         if (message == null || message.trim().isEmpty()) {
             message = error == null ? "Backend unavailable"
                     : error.getClass().getSimpleName();
         }
-        State previous = state;
-        publish(generation, new State(previous.forecast, previous.model,
-                false, message, previous.updatedAtMs), true);
+        return message;
     }
 
-    private void publish(long generation, State replacement,
-            boolean updateGraph) {
+    private void publishForecast(long generation, long publicationId,
+            State replacement) {
         main.post(() -> {
-            if (generation != configurationGeneration) return;
-            state = replacement;
-            if (updateGraph && !previewProjection) {
-                publishGraphOrClear(replacement);
-            }
-            for (Listener listener : listeners) {
-                listener.onForecastStateChanged(replacement);
-            }
+            if (generation != configurationGeneration
+                    || publicationId != forecastPublicationSequence.get()) return;
+            commitState(replacement, true);
         });
     }
 
+    private void commitState(State replacement, boolean updateGraph) {
+        state = replacement;
+        if (updateGraph && !previewProjection) {
+            publishGraphOrClear(replacement);
+        }
+        for (Listener listener : listeners) {
+            listener.onForecastStateChanged(replacement);
+        }
+    }
+
     private void onBackendConfigurationChanged() {
-        configurationGeneration++;
+        synchronized (predictiveAlertConfigurationLock) {
+            configurationGeneration++;
+            operationSequence.incrementAndGet();
+            forecastPublicationSequence.incrementAndGet();
+            currentForecastGate.reset();
+            try {
+                PredictiveAlertCoordinator.get(application)
+                        .onBackendConfigurationChanged();
+            } catch (Throwable ignored) {
+                // Configuration reset remains best-effort for the additive alert
+                // layer and cannot block the existing forecast repository.
+            }
+        }
         preferences.edit().remove(LEGACY_HISTORY_CURSOR_MS).apply();
         state = new State(ForecastSnapshot.empty("no_data"),
                 ForecastModelStatus.empty(), false, "", 0L);
@@ -544,8 +913,10 @@ final class ForecastRepository {
 
     private static void publishGraphOrClear(State value) {
         ForecastSnapshot forecast = value.forecast;
-        if (!value.error.isEmpty()
-                || !forecast.isGraphUsable(System.currentTimeMillis())) {
+        // A transport error is diagnostic, not an authoritative revocation of
+        // a still-fresh accepted forecast. no_data/stale/rollback paths replace
+        // the snapshot itself and therefore still clear here.
+        if (!forecast.isGraphUsable(System.currentTimeMillis())) {
             clearNativeForecast();
             return;
         }

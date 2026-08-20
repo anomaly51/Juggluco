@@ -1291,13 +1291,23 @@ extern "C" JNIEXPORT void JNICALL fromjava(setshow##kind)(JNIEnv *env, jclass th
  settings->data()->show##kind=val;\
  }
 
+#define defcalibrateddisplay(kind)\
+extern "C" JNIEXPORT jboolean JNICALL fromjava(getshow##kind)(JNIEnv *env, jclass thiz) {\
+ return appcurve.show##kind;\
+ }\
+extern "C" JNIEXPORT void JNICALL fromjava(setshow##kind)(JNIEnv *env, jclass thiz,jboolean val) {\
+ appcurve.show##kind=val;\
+ settings->data()->show##kind=val;\
+ if(val) clearLegacyPredictionAlarmSuppression();\
+ }
+
 defdisplay(scans)
 defdisplay(meals)
 defdisplay(histories)
 defdisplay(stream)
 defdisplay(numbers)
-defdisplay(calibratedstream)
-defdisplay(calibratedscans)
+defcalibrateddisplay(calibratedstream)
+defcalibrateddisplay(calibratedscans)
 defdisplay(calibratedhistories)
 #ifdef WEAROS
 void setInitText(const char *message) {

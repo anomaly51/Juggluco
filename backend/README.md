@@ -343,6 +343,40 @@ AI/absorption confidence add explicit event uncertainty: a wider or less certain
 estimate cannot produce a tighter band or higher overall confidence than the corresponding
 tight confirmed record.
 
+The same response includes the exact raw `based_on_glucose_mg_dl` and an additive
+`alert_assessment`. Its fixed green target is 4.2–9.0 mmol/L (75.6–162.0 mg/dL). A low or
+high crossing requires two adjacent five-minute forecast points inside the first 60 minutes.
+`possible` means only the corresponding interval edge crossed; `likely` means the median
+crossed. Evidence-specific `low_possible`, `low_likely`, `high_possible`, and `high_likely`
+preserve both an early interval signal and a later median signal for local sensitivity/horizon
+policy. Legacy `low`/`high` remain likely-first summaries. These labels are qualitative, never
+percentages. `no_data`, `stale`, delayed, and
+`low_confidence` inputs are `unavailable`. The baseline and forecast-approved artifacts without
+an explicit checksummed `approval.alert_approved=true` bit remain `shadow`; only a fresh
+`ready` champion carrying that separate bit is `delivery_eligible`. The assessment contains no
+carbohydrate or insulin recommendation and must not be used to calculate treatment.
+
+`alert_approved` is produced only by the operator-triggered, one-shot prospective evaluator; it
+is never learned or changed online. On the same earliest fourteen frozen dense local days, the
+backend replays every causal five-minute forecast and evaluates confirmed low/high episodes
+(two adjacent readings outside 75.6--162.0 mg/dL). The preregistered
+`frozen-14d-episode-alert-v3` gate requires at least five low and five high episodes across at
+least four days per direction, at least 80% low and 75% high selected-policy episode recall, no
+more than one missed low episode, no more than one selected-policy false alert per day, and at
+least 15 minutes median warning lead. Recall, missed lows, false-alert rate, and lead must also
+remain within fixed tolerances of the frozen reference, pinned comparator, and current
+comparator where that comparator has lead evidence. Replay issues at backend receipt plus a
+checksummed 60-second delivery margin, uses that effective time for cooldown and warning lead,
+and never credits a crossing already in the past. It preregisters Android's most sensitive
+Early policy at the maximum 60-minute horizon (the selectable minimum remains 15 minutes), emits
+at most one direction per issue, and applies the same earliest-crossing, likely-evidence, then-low
+tie-breaks before per-direction cooldown. Threshold runs without a 15-minute in-target
+rearm gap are one episode, and one alert can validate at most one distinct episode; unmatched
+repeats remain false alerts. The metrics, thresholds, cohort identity, and
+decision are stored inside the artifact checksum. Insufficient alert evidence leaves
+`alert_approved=false` but does not prevent an otherwise approved forecast model from being
+activated; notifications then remain shadow-only.
+
 Each activity keeps the original summary fields and also exposes `amount`, `unit` (`g` or
 `U`), `profile_source`, `profile_confidence`, and exactly 25 `points` from the reading anchor
 through +120 minutes in five-minute steps. Every point contains `at_ms`,

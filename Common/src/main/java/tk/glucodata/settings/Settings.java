@@ -131,6 +131,7 @@ import tk.glucodata.Natives;
 import tk.glucodata.OrientationPolicy;
 import tk.glucodata.Notify;
 import tk.glucodata.NumAlarm;
+import tk.glucodata.PredictiveAlertSettingsPage;
 import tk.glucodata.R;
 import tk.glucodata.Specific;
 import tk.glucodata.SuperGattCallback;
@@ -1078,6 +1079,13 @@ private static void clinicalAlarmSettings(MainActivity context,View parent) {
             ClinicalUi.dp(context,6));
     content.addView(intro);
 
+    LinearLayout predictiveCard=PredictiveAlertSettingsPage.entryCard(context);
+    predictiveCard.setOnClickListener(view->PredictiveAlertSettingsPage.show(context,
+            ()->PredictiveAlertSettingsPage.refreshEntryCard(predictiveCard,context)));
+    content.addView(ClinicalUi.sectionLabel(context,
+            context.getString(R.string.settings_predictive_alerts_section)));
+    content.addView(predictiveCard);
+
     content.addView(ClinicalUi.sectionLabel(context,
             context.getString(R.string.settings_profile_section)));
     content.addView(ClinicalUi.card(context,
@@ -1522,8 +1530,13 @@ private static void clinicalDisplaySettings(MainActivity context,Settings settin
         }
     graphLow.setText(float2string(Natives.graphlow()));
     graphHigh.setText(float2string(Natives.graphhigh()));
-    targetLow.setText(float2string(Natives.targetlow()));
-    targetHigh.setText(float2string(Natives.targethigh()));
+    final boolean targetMmol=Natives.getunit()==1;
+    final float productTargetLow=targetMmol?4.2f:75.6f;
+    final float productTargetHigh=targetMmol?9.0f:162.0f;
+    targetLow.setText(float2string(productTargetLow));
+    targetHigh.setText(float2string(productTargetHigh));
+    targetLow.setEnabled(false);
+    targetHigh.setEnabled(false);
 
     String oldThreshold=float2string(Natives.getthreshold());
     EditText threshold=getnumedit(context,oldThreshold);
@@ -1549,6 +1562,7 @@ private static void clinicalDisplaySettings(MainActivity context,Settings settin
             Natives.getshowcalibratedscans());
     graphCalibratedScans.setOnCheckedChangeListener((button,isChecked)-> {
         Natives.setshowcalibratedscans(isChecked);
+        PredictiveAlertSettingsPage.onLocalCalibrationStateChanged(context);
         context.requestRender();
         });
     CheckDirectionBox graphStream=getcheckbox(context,R.string.streamname,
@@ -1561,6 +1575,7 @@ private static void clinicalDisplaySettings(MainActivity context,Settings settin
             Natives.getshowcalibratedstream());
     graphCalibratedStream.setOnCheckedChangeListener((button,isChecked)-> {
         Natives.setshowcalibratedstream(isChecked);
+        PredictiveAlertSettingsPage.onLocalCalibrationStateChanged(context);
         context.requestRender();
         });
     CheckDirectionBox graphHistory=getcheckbox(context,R.string.historyname,
@@ -1696,8 +1711,9 @@ private static void clinicalDisplaySettings(MainActivity context,Settings settin
         Natives.setfixatex(!manualTime.isChecked());
         Natives.setGraphRange(str2float(graphLow.getText().toString()),
                 str2float(graphHigh.getText().toString()));
-        Natives.setTargetRange(str2float(targetLow.getText().toString()),
-                str2float(targetHigh.getText().toString()));
+        // The dashboard, predictive alerts and target-band colors deliberately
+        // share one product target. Clinical low/high alarms stay independent.
+        Natives.setTargetRange(productTargetLow,productTargetHigh);
         removeContentView(screen);
         tk.glucodata.help.hidekeyboard(context);
         };

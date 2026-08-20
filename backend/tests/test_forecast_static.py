@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import time
 
 import numpy as np
 import pytest
 
 from app.forecast import (
     ACTIVE_MODEL_METADATA_KEY,
+    ALERT_VALIDATION_PROTOCOL,
     BASELINE_VERSION,
     FORECAST_ENGINE_VERSION,
     STATIC_BANDS,
@@ -23,6 +26,9 @@ from app.forecast import (
     ForecastService,
     _Event,
     _artifact_content_hash,
+    _alert_episode_metrics,
+    _alert_validation_gates,
+    _alert_validation_thresholds,
     _baseline_parameters,
     _dataset_fingerprint,
     _default_parameters,
@@ -286,6 +292,72 @@ def _static_record(version: str, *, accepted: bool = True) -> ForecastModelRecor
     )
 
 
+def _passing_alert_metrics(
+    *,
+    low_recall: float = 0.90,
+    high_recall: float = 0.80,
+    missed_low: float = 1.0,
+    missed_high: float = 2.0,
+    false_alerts_per_day: float = 0.20,
+    lead_minutes: float = 30.0,
+) -> dict[str, float | None]:
+    return {
+        "finite": 1.0,
+        "evaluation_days": 14.0,
+        "evaluated_anchors": 3_500.0,
+        "low_episode_count": 10.0,
+        "high_episode_count": 10.0,
+        "low_episode_days": 5.0,
+        "high_episode_days": 5.0,
+        "low_selected_episode_recall": low_recall,
+        "high_selected_episode_recall": high_recall,
+        "low_selected_missed_episodes": missed_low,
+        "high_selected_missed_episodes": missed_high,
+        "selected_false_alerts_per_day": false_alerts_per_day,
+        "low_selected_median_lead_minutes": lead_minutes,
+        "high_selected_median_lead_minutes": lead_minutes,
+    }
+
+
+def _attach_passing_alert_validation(parameters: dict) -> dict:
+    approval = parameters["artifact"]["approval"]
+    selected_days = list(range(14))
+    approval["selected_local_days"] = selected_days
+    approval["local_days_sha256"] = hashlib.sha256(
+        ",".join(str(day) for day in selected_days).encode("ascii")
+    ).hexdigest()
+    candidate = _passing_alert_metrics()
+    approval["alert_validation_anchors"] = int(candidate["evaluated_anchors"])
+    comparator = _passing_alert_metrics(
+        low_recall=0.80,
+        high_recall=0.80,
+        missed_low=2.0,
+        missed_high=2.0,
+        false_alerts_per_day=0.30,
+        lead_minutes=27.0,
+    )
+    gates = _alert_validation_gates(
+        candidate, comparator, comparator, comparator
+    )
+    assert gates["accepted"] is True
+    approval["alert_validation"] = {
+        "protocol": ALERT_VALIDATION_PROTOCOL,
+        "thresholds": _alert_validation_thresholds(),
+        "local_days_sha256": approval.get("local_days_sha256"),
+        "cohort_start_ms": approval["cohort_start_ms"],
+        "cohort_end_ms": approval["cohort_end_ms"],
+        "dense_days": approval["dense_days"],
+        "candidate_metrics": candidate,
+        "reference_metrics": comparator,
+        "pinned_metrics": comparator,
+        "current_metrics": comparator,
+        "gates": gates,
+    }
+    approval["alert_approved"] = True
+    parameters["artifact"]["content_sha256"] = _artifact_content_hash(parameters)
+    return parameters
+
+
 def _add_pending_prospective_fixture(
     session, service: ForecastService, version: str
 ) -> tuple[str, int, int, int]:
@@ -444,8 +516,435 @@ def test_activation_requires_approved_checksummed_static_artifact(app, client):
 
         activated = service.activate_model(session, approved_version)
         assert activated.version == approved_version
+        # Forecast activation is independent from the stricter alert evidence.
+        assert service._alert_delivery_is_approved(session, activated) is False
         pin = session.get(BackendMetadataRecord, ACTIVE_MODEL_METADATA_KEY)
         assert pin is not None and pin.value_text == approved_version
+
+
+def test_alert_delivery_requires_explicit_checksummed_approval_flag(app, client):
+    del client
+    service = app.state.forecast_service
+    record = _static_record("static-alert-approval")
+    record.status = "champion"
+
+    with app.state.database.session_factory() as session:
+        service._ensure_baseline(session)
+        session.add(record)
+        session.commit()
+
+        # A forecast-approved artifact is shadow-only until alert safety has an
+        # independent, explicit approval bit.
+        assert service._alert_delivery_is_approved(session, record) is False
+
+        tampered = json.loads(record.parameters_json)
+        tampered["artifact"]["approval"]["alert_approved"] = True
+        record.parameters_json = json.dumps(tampered, separators=(",", ":"))
+        session.commit()
+        # Changing only the bit without updating the complete digest fails.
+        assert service._alert_delivery_is_approved(session, record) is False
+
+        tampered["artifact"]["content_sha256"] = _artifact_content_hash(tampered)
+        record.parameters_json = json.dumps(tampered, separators=(",", ":"))
+        session.commit()
+        # A recomputed digest is still insufficient without the separately
+        # preregistered episode-level validation envelope.
+        assert _static_artifact_is_valid(tampered) is False
+        assert service._alert_delivery_is_approved(session, record) is False
+
+        tampered = _attach_passing_alert_validation(tampered)
+        record.parameters_json = json.dumps(tampered, separators=(",", ":"))
+        session.commit()
+        assert _static_artifact_is_valid(tampered) is True
+        assert service._alert_delivery_is_approved(session, record) is True
+
+        forged_metrics = copy.deepcopy(tampered)
+        forged_metrics["artifact"]["approval"]["alert_validation"][
+            "candidate_metrics"
+        ]["low_selected_episode_recall"] = 0.10
+        forged_metrics["artifact"]["content_sha256"] = _artifact_content_hash(
+            forged_metrics
+        )
+        record.parameters_json = json.dumps(
+            forged_metrics, separators=(",", ":")
+        )
+        session.commit()
+        assert _static_artifact_is_valid(forged_metrics) is False
+        assert service._alert_delivery_is_approved(session, record) is False
+
+
+def test_episode_alert_metrics_use_actual_episodes_and_warning_lead():
+    base_ms = 1_800_000_000_000
+    prediction = np.full((2, 24), 110.0)
+    target = np.full((2, 24), 110.0)
+    prediction[0, 3:5] = 70.0
+    target[0, 5:7] = 70.0
+    prediction[1, 3:5] = 170.0
+    target[1, 5:7] = 170.0
+
+    metrics = _alert_episode_metrics(
+        prediction,
+        target,
+        np.full(24, 6.0),
+        anchor_times_ms=[base_ms, base_ms + 120 * 60_000],
+        decision_times_ms=[base_ms, base_ms + 120 * 60_000],
+        anchor_glucose_mg_dl=[110.0, 110.0],
+        anchor_utc_offset_minutes=[0, 0],
+        delivery_ready=[True, True],
+    )
+
+    assert metrics["finite"] == 1.0
+    assert metrics["low_episode_count"] == 1.0
+    assert metrics["high_episode_count"] == 1.0
+    assert metrics["low_selected_episode_recall"] == 1.0
+    assert metrics["high_selected_episode_recall"] == 1.0
+    assert metrics["low_selected_median_lead_minutes"] == 29.0
+    assert metrics["high_selected_median_lead_minutes"] == 29.0
+    assert metrics["selected_false_alerts_per_day"] == 0.0
+
+
+def test_episode_alert_replay_uses_issue_time_for_crossing_and_cooldown():
+    base_ms = 1_800_000_000_000
+
+    # The first forecast's earliest crossing is already in the past when its
+    # fresh (nine-minute-old) anchor reaches the backend. Android rejects this
+    # crossing, so prospective replay must not credit it with episode recall.
+    prediction = np.full((1, 24), 110.0)
+    prediction[0, :3] = 70.0
+    target = np.full((1, 24), 110.0)
+    target[0, 4:6] = 70.0
+    late = _alert_episode_metrics(
+        prediction,
+        target,
+        np.full(24, 6.0),
+        anchor_times_ms=[base_ms],
+        decision_times_ms=[base_ms + 9 * 60_000],
+        anchor_glucose_mg_dl=[110.0],
+        anchor_utc_offset_minutes=[0],
+        delivery_ready=[True],
+    )
+    assert late["low_selected_alert_count"] == 0.0
+    assert late["low_selected_episode_recall"] == 0.0
+    assert late["low_selected_missed_episodes"] == 1.0
+
+    # A crossing only thirty seconds after server receipt is not credited: the
+    # preregistered one-minute delivery margin puts it in the past by the time
+    # Android can evaluate the response.
+    margin = _alert_episode_metrics(
+        prediction,
+        target,
+        np.full(24, 6.0),
+        anchor_times_ms=[base_ms],
+        decision_times_ms=[base_ms + 4 * 60_000 + 30_000],
+        anchor_glucose_mg_dl=[110.0],
+        anchor_utc_offset_minutes=[0],
+        delivery_ready=[True],
+    )
+    assert margin["low_selected_alert_count"] == 0.0
+    assert margin["low_selected_episode_recall"] == 0.0
+
+    # These anchors are ten minutes apart, but their actual issue times are
+    # exactly one 15-minute cooldown apart. Both are deliverable, matching the
+    # phone's `< cooldown` suppression rule.
+    prediction = np.full((2, 24), 110.0)
+    prediction[:, 3:5] = 70.0
+    target = np.full((2, 24), 110.0)
+    cooldown = _alert_episode_metrics(
+        prediction,
+        target,
+        np.full(24, 6.0),
+        anchor_times_ms=[base_ms, base_ms + 10 * 60_000],
+        decision_times_ms=[base_ms, base_ms + 15 * 60_000],
+        anchor_glucose_mg_dl=[110.0, 110.0],
+        anchor_utc_offset_minutes=[0, 0],
+        delivery_ready=[True, True],
+    )
+    assert cooldown["low_selected_alert_count"] == 2.0
+
+
+def test_alert_replay_reuses_live_meal_uncertainty_and_quality_suppression():
+    anchor = 1_800_000_000_000
+
+    def history(quality: float) -> list[GlucoseReadingRecord]:
+        result: list[GlucoseReadingRecord] = []
+        for index in range(24):
+            measured_at_ms = anchor - (23 - index) * 5 * 60_000
+            result.append(
+                GlucoseReadingRecord(
+                    reading_id=f"runtime-{quality}-{index}",
+                    measured_at_ms=measured_at_ms,
+                    glucose_mg_dl=150.0,
+                    trend_mg_dl_min=0.0,
+                    sensor_id="test",
+                    sensor_generation="test",
+                    quality=quality,
+                    utc_offset_minutes=0,
+                    payload_hash=f"{index:064x}",
+                    received_at_ms=measured_at_ms,
+                )
+            )
+        return result
+
+    parameters = _default_parameters()
+    uncertain_meal = _Event(
+        event_id="uncertain-meal",
+        occurred_at_ms=anchor,
+        kind="meal",
+        label="Meal",
+        amount=100.0,
+        known_at_ms=anchor,
+        carbs_low_g=20.0,
+        carbs_high_g=180.0,
+        absorption_confidence=0.2,
+        ai_confidence=0.2,
+    )
+    status, _confidence, _coverage, meal_sigma, _event_confidence = (
+        ForecastService._runtime_forecast_adjustments(
+            history(1.0), [uncertain_meal], anchor, parameters
+        )
+    )
+    assert status == "ok"
+    assert float(meal_sigma[-1]) > 0.0
+
+    prediction = np.full((1, 24), 150.0)
+    target = np.full((1, 24), 110.0)
+
+    def metrics(sigma: np.ndarray, *, ready: bool) -> dict[str, float | None]:
+        return _alert_episode_metrics(
+            prediction,
+            target,
+            sigma,
+            anchor_times_ms=[anchor],
+            decision_times_ms=[anchor],
+            anchor_glucose_mg_dl=[150.0],
+            anchor_utc_offset_minutes=[0],
+            delivery_ready=[ready],
+        )
+
+    assert metrics(np.full(24, 6.0), ready=True)[
+        "high_selected_alert_count"
+    ] == 0.0
+    widened = np.sqrt(np.full(24, 6.0) ** 2 + meal_sigma**2)
+    assert metrics(widened, ready=True)["high_selected_alert_count"] == 1.0
+
+    low_quality_status, *_rest = ForecastService._runtime_forecast_adjustments(
+        history(0.0), [], anchor, parameters
+    )
+    assert low_quality_status == "low_confidence"
+    assert metrics(widened, ready=low_quality_status == "ok")[
+        "high_selected_alert_count"
+    ] == 0.0
+
+
+def test_alert_replay_arbitrates_one_android_direction_per_issue():
+    anchor = 1_800_000_000_000
+    target = np.full((1, 24), 110.0)
+
+    def metrics(prediction: np.ndarray, sigma: np.ndarray):
+        return _alert_episode_metrics(
+            prediction,
+            target,
+            sigma,
+            anchor_times_ms=[anchor],
+            decision_times_ms=[anchor],
+            anchor_glucose_mg_dl=[110.0],
+            anchor_utc_offset_minutes=[0],
+            delivery_ready=[True],
+        )
+
+    # An extremely wide interval crosses both targets at the same time. Android
+    # emits one alert and its final deterministic tie-break selects low.
+    both_possible = metrics(
+        np.full((1, 24), 110.0), np.full(24, 100.0)
+    )
+    assert both_possible["low_selected_alert_count"] == 1.0
+    assert both_possible["high_selected_alert_count"] == 0.0
+    assert both_possible["low_selected_possible_count"] == 1.0
+    assert both_possible["selected_false_alerts_per_day"] == 1.0
+
+    # At an equal crossing time, likely evidence outranks possible evidence
+    # before the final low-direction tie-break.
+    high_likely_prediction = np.full((1, 24), 110.0)
+    high_likely_prediction[0, :2] = 170.0
+    likely_tie = metrics(high_likely_prediction, np.full(24, 80.0))
+    assert likely_tie["low_selected_alert_count"] == 0.0
+    assert likely_tie["high_selected_alert_count"] == 1.0
+    assert likely_tie["high_selected_likely_count"] == 1.0
+
+
+def test_episode_rearm_and_matching_do_not_reuse_one_alert():
+    anchor = 1_800_000_000_000
+    prediction = np.full((1, 24), 110.0)
+    prediction[0, 3:5] = 70.0
+
+    def metrics(target: np.ndarray) -> dict[str, float | None]:
+        return _alert_episode_metrics(
+            prediction,
+            target,
+            np.full(24, 6.0),
+            anchor_times_ms=[anchor],
+            decision_times_ms=[anchor],
+            anchor_glucose_mg_dl=[110.0],
+            anchor_utc_offset_minutes=[0],
+            delivery_ready=[True],
+        )
+
+    # One in-target point is not enough to rearm a distinct low episode.
+    not_rearmed_target = np.full((1, 24), 110.0)
+    not_rearmed_target[0, 5:7] = 70.0
+    not_rearmed_target[0, 8:10] = 70.0
+    not_rearmed = metrics(not_rearmed_target)
+    assert not_rearmed["low_episode_count"] == 1.0
+    assert not_rearmed["low_selected_episode_recall"] == 1.0
+
+    # Three in-target five-minute readings establish the preregistered rearm
+    # gap. The single earlier alert may match only the first distinct episode.
+    rearmed_target = np.full((1, 24), 110.0)
+    rearmed_target[0, 5:7] = 70.0
+    rearmed_target[0, 10:12] = 70.0
+    rearmed = metrics(rearmed_target)
+    assert rearmed["low_episode_count"] == 2.0
+    assert rearmed["low_selected_alert_count"] == 1.0
+    assert rearmed["low_selected_episode_recall"] == 0.5
+    assert rearmed["low_selected_missed_episodes"] == 1.0
+    assert rearmed["selected_false_alerts_per_day"] == 0.0
+
+
+def test_episode_alert_gates_are_independent_and_fail_closed():
+    candidate = _passing_alert_metrics()
+    comparator = _passing_alert_metrics(
+        low_recall=0.80,
+        high_recall=0.80,
+        missed_low=2.0,
+        missed_high=2.0,
+        false_alerts_per_day=0.30,
+        lead_minutes=27.0,
+    )
+    passing = _alert_validation_gates(
+        candidate, comparator, comparator, comparator
+    )
+    assert passing["evidence_sufficient"] is True
+    assert passing["accepted"] is True
+
+    exact_boundary = {
+        **candidate,
+        "low_episode_count": 5.0,
+        "high_episode_count": 8.0,
+        "low_selected_episode_recall": 0.80,
+        "high_selected_episode_recall": 0.75,
+        "low_selected_missed_episodes": 1.0,
+        "high_selected_missed_episodes": 2.0,
+        "selected_false_alerts_per_day": 1.0,
+        "low_selected_median_lead_minutes": 15.0,
+        "high_selected_median_lead_minutes": 15.0,
+    }
+    assert _alert_validation_gates(
+        exact_boundary, exact_boundary, exact_boundary, exact_boundary
+    )["accepted"] is True
+
+    insufficient = _alert_validation_gates(
+        {
+            **candidate,
+            "low_episode_count": 4.0,
+            "low_episode_days": 3.0,
+            "low_selected_episode_recall": 1.0,
+            "low_selected_missed_episodes": 0.0,
+        },
+        comparator,
+        comparator,
+        comparator,
+    )
+    assert insufficient["evidence_sufficient"] is False
+    assert insufficient["accepted"] is False
+
+    noisy = _alert_validation_gates(
+        {**candidate, "selected_false_alerts_per_day": 1.01},
+        comparator,
+        comparator,
+        comparator,
+    )
+    assert noisy["false_alert_rate_absolute"] is False
+    assert noisy["accepted"] is False
+
+    low_recall_candidate = {
+        **candidate,
+        "low_episode_count": 5.0,
+        "low_selected_episode_recall": 0.60,
+        "low_selected_missed_episodes": 2.0,
+    }
+    low_recall_comparator = {
+        **comparator,
+        "low_episode_count": 5.0,
+        "low_selected_episode_recall": 0.80,
+        "low_selected_missed_episodes": 1.0,
+    }
+    low_recall = _alert_validation_gates(
+        low_recall_candidate,
+        low_recall_comparator,
+        low_recall_comparator,
+        low_recall_comparator,
+    )
+    assert low_recall["low_recall_absolute"] is False
+    assert low_recall["accepted"] is False
+
+    late = _alert_validation_gates(
+        {
+            **candidate,
+            "low_selected_median_lead_minutes": 14.9,
+        },
+        comparator,
+        comparator,
+        comparator,
+    )
+    assert late["median_lead_absolute"] is False
+    assert late["accepted"] is False
+
+
+def test_current_uses_runtime_valid_pinned_alert_approved_champion(
+    app, client, auth_headers
+):
+    service = app.state.forecast_service
+    version = "static-alert-current-e2e"
+    record = _static_record(version)
+    parameters = json.loads(record.parameters_json)
+    parameters = _attach_passing_alert_validation(parameters)
+    record.parameters_json = json.dumps(parameters, separators=(",", ":"))
+
+    with app.state.database.session_factory() as session:
+        service._ensure_baseline(session)
+        session.add(record)
+        session.commit()
+        activated = service.activate_model(session, version)
+        assert activated.status == "champion"
+        assert service._alert_delivery_is_approved(session, activated) is True
+
+    anchor = int(time.time() * 1_000) - 1_000
+    readings = [
+        {
+            "reading_id": f"alert-approved-e2e-{index}",
+            "measured_at_ms": anchor - (23 - index) * 5 * 60_000,
+            "glucose_mg_dl": 110.0 + index * 0.1,
+            "trend_mg_dl_min": 0.0,
+            "quality": 1.0,
+        }
+        for index in range(24)
+    ]
+    uploaded = client.post(
+        "/v1/glucose/readings",
+        headers=auth_headers,
+        json={"readings": readings},
+    )
+    assert uploaded.status_code == 200
+
+    response = client.get("/v1/forecast/current", headers=auth_headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["model_version"] == version
+    assert payload["based_on_glucose_mg_dl"] == readings[-1]["glucose_mg_dl"]
+    assert payload["alert_assessment"]["monitoring_status"] == "eligible"
+    assert payload["alert_assessment"]["delivery_eligible"] is True
+    assert payload["alert_assessment"]["suppressed_reasons"] == []
 
 
 def test_pending_and_development_artifacts_cannot_activate(app, client):
@@ -744,6 +1243,13 @@ def test_prospective_evaluation_finalizes_pending_candidate_once(app, client):
         assert stored_parameters["artifact"]["approval"]["state"] == (
             "rejected_prospective"
         )
+        assert stored_parameters["artifact"]["approval"]["alert_approved"] is False
+        alert_validation = stored_parameters["artifact"]["approval"][
+            "alert_validation"
+        ]
+        assert alert_validation["protocol"] == ALERT_VALIDATION_PROTOCOL
+        assert alert_validation["gates"]["evidence_sufficient"] is False
+        assert alert_validation["gates"]["accepted"] is False
         assert stored_parameters["artifact"]["evaluation"]["inconclusive"] == 0
         assert _static_predictor_hash(stored_parameters) == predictor_before
         with pytest.raises(ValueError, match="not a pending prospective candidate"):

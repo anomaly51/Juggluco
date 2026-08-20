@@ -894,6 +894,8 @@ public static native float alarmprehigh( );
 public static native int getProfile( );
 public static native void setProfile(int pro);
 public static native void setAdvancedAlarms(float verylow, float veryhigh, boolean verylowalarm, boolean veryhighalarm, boolean prelowalarm,boolean prehighalarm,float prelow,float prehigh);
+public static native void setSuppressLegacyPredictionAlarms(
+        boolean suppressLow, boolean suppressHigh, long expiresAtMs);
 public static native int setScheduleProfile(int index,int min,int profile);
 public static native short[] getScheduleProfile(int index);
 public static native int nrScheduledProfiles( );
@@ -921,6 +923,7 @@ public static native boolean removeCalibrator(long sensorptr,int which,int pos);
 
 public static native void setDoCalibrate(boolean val);
 public static native boolean getDoCalibrate( );
+public static native boolean getPredictiveCalibrationActive();
 
 public static native void setCalibratePast(boolean val);
 public static native boolean getCalibratePast( );

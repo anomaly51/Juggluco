@@ -629,6 +629,11 @@ boolean initproc() {
         if(!numio.setlibrary(this))
             return false;
         needsnatives();
+        if(!isWearable) {
+            // Apply the fixed target and legacy-prediction gate at cold start,
+            // even when the backend is unavailable and settings are never opened.
+            new PredictiveAlertPreferences(this).snapshot();
+            }
         if(doLog) {Log.i("Applic","initproc width="+initscreenwidth);};
         libre3init.init();
         SuperGattCallback.initAlarmTalk();
@@ -753,37 +758,48 @@ static boolean bluetoothEnabled() {
     return SensorBluetooth.bluetoothIsEnabled();
     }
 static final boolean usewakelock=true;
+private static final long GLUCOSE_WAKE_LOCK_TIMEOUT_MS=120_000L;
 @Keep
 static void doglucose(String SerialNumber, int mgdl, float gl, float rate, int alarm, long timmsec,boolean wasblueoff,long sensorstartmsec, long sensorptr,int sensorgen) {
    if(doLog) {Log.i(LOG_ID,"doglucose "+SerialNumber+" "+ mgdl+" "+ gl+" "+rate+" "+ alarm+" "+timmsec+" "+ wasblueoff+ " "+ sensorstartmsec +" sensorptr="+format("%x",sensorptr)+" "+ sensorgen);};
 
-    var wakelock=    usewakelock?(((PowerManager) app.getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Juggluco::Applic")):null;
-    if(wakelock!=null)
-        wakelock.acquire();
-    if(!wasblueoff) {
-        Applic.dontusebluetooth();
-        }
-    SuperGattCallback.dowithglucose( SerialNumber,  mgdl, gl,rate,  alarm,  timmsec,sensorstartmsec,Notify.glucosetimeout,sensorgen);
-    if(!isWearable) {
-            // Prediction sync is backend-only and must never delay or endanger
-            // the sensor callback. The repository immediately hands all work
-            // to its single background executor.
-            try {
-                ForecastRepository.enqueueLiveReading(app, timmsec);
+    PowerManager.WakeLock wakelock=null;
+    try {
+        if(usewakelock) {
+            PowerManager manager=(PowerManager) app.getSystemService(POWER_SERVICE);
+            if(manager!=null) {
+                wakelock=manager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Juggluco::Applic");
+                wakelock.setReferenceCounted(false);
+                wakelock.acquire(GLUCOSE_WAKE_LOCK_TIMEOUT_MS);
+                }
             }
-            catch(Throwable error) {
-                if(doLog) Log.e(LOG_ID,"forecast live sync skipped: "
-                        +error.getClass().getSimpleName());
+        if(!wasblueoff) {
+            Applic.dontusebluetooth();
             }
-            if(sensorptr!=0L) {
-                {if(doLog) {Log.i(LOG_ID,"sensorptr="+format("%x",sensorptr));};};
-                if(Build.VERSION.SDK_INT >= 28) {
-                    HealthConnection.Companion.writeAll(sensorptr,SerialNumber);
-                    }
-               }
+        SuperGattCallback.dowithglucose( SerialNumber,  mgdl, gl,rate,  alarm,  timmsec,sensorstartmsec,Notify.glucosetimeout,sensorgen);
+        if(!isWearable) {
+                // Prediction sync is backend-only and must never delay or endanger
+                // the sensor callback. The repository coalesces this into a
+                // latest-wins background pass with its own bounded wake lock.
+                try {
+                    ForecastRepository.enqueueLiveReading(app, timmsec);
+                }
+                catch(Throwable error) {
+                    if(doLog) Log.e(LOG_ID,"forecast live sync skipped: "
+                            +error.getClass().getSimpleName());
+                }
+                if(sensorptr!=0L) {
+                    {if(doLog) {Log.i(LOG_ID,"sensorptr="+format("%x",sensorptr));};};
+                    if(Build.VERSION.SDK_INT >= 28) {
+                        HealthConnection.Companion.writeAll(sensorptr,SerialNumber);
+                        }
+                   }
+            }
         }
-    if(wakelock!=null)
-        wakelock.release();
+    finally {
+        if(wakelock!=null && wakelock.isHeld())
+            wakelock.release();
+        }
     }
 @Keep
 static boolean updateDevices() { //Rename to reset

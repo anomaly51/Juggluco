@@ -43,9 +43,25 @@ extern void resetGraphPanYRangeLock();
 
 extern "C" JNIEXPORT void  JNICALL   fromjava(setDoCalibrate)(JNIEnv *env, jclass cl,jboolean val) {
     settings->data()->DoCalibrate=val;
+    if(val) {
+        // Calibration changes the displayed glucose scale while forecast
+        // assessments currently use the raw stream. Immediately restore both
+        // legacy directions; Java may only hand them back after calibration is
+        // disabled and a fresh eligible assessment is available.
+        clearLegacyPredictionAlarmSuppression();
+        }
     }
 extern "C" JNIEXPORT jboolean  JNICALL   fromjava(getDoCalibrate)(JNIEnv *env, jclass cl) {
     return settings->data()->DoCalibrate;
+    }
+extern "C" JNIEXPORT jboolean JNICALL fromjava(getPredictiveCalibrationActive)(
+        JNIEnv *env, jclass cl) {
+    // A calibrated layer is built independently of DoCalibrate. Keep the raw
+    // backend forecast out of alert delivery whenever either calibrated live
+    // presentation can be visible.
+    return settings->data()->DoCalibrate
+            || settings->data()->showcalibratedstream
+            || settings->data()->showcalibratedscans;
     }
 extern "C" JNIEXPORT void  JNICALL   fromjava(setCalibratePast)(JNIEnv *env, jclass cl,jboolean val) {
     settings->data()->CalibratePast=val;
@@ -202,6 +218,26 @@ extern "C" JNIEXPORT void  JNICALL   fromjava(setAdvancedAlarms)(JNIEnv *env, jc
     settings->data()->setAdvancedAlarms(roundf(settings->tomgperL(verylow1)), roundf(settings->tomgperL(veryhigh1)),  verylowalarm1,  veryhighalarm1,  prelowalarm1, prehighalarm1,roundf(settings->tomgperL(prelow)), roundf(settings->tomgperL(prehigh)));
    }
 
+extern "C" JNIEXPORT void JNICALL fromjava(setSuppressLegacyPredictionAlarms)(
+        JNIEnv *env, jclass cl, jboolean suppressLow,
+        jboolean suppressHigh, jlong expiresAtMs) {
+    const bool localCalibration=settings->data()->DoCalibrate
+            || settings->data()->showcalibratedstream
+            || settings->data()->showcalibratedscans;
+    const bool unexpired=expiresAtMs>
+            static_cast<jlong>(time(nullptr))*1000LL;
+    suppressLegacyPreLowAlarm.store(
+            suppressLow&&!localCalibration&&unexpired,
+            std::memory_order_relaxed);
+    suppressLegacyPreHighAlarm.store(
+            suppressHigh&&!localCalibration&&unexpired,
+            std::memory_order_relaxed);
+    suppressLegacyPredictionAlarmUntilMs.store(
+            (suppressLow||suppressHigh)&&!localCalibration&&unexpired
+                    ? static_cast<int64_t>(expiresAtMs) : 0,
+            std::memory_order_relaxed);
+    }
+
 
 extern "C" JNIEXPORT void  JNICALL   fromjava(setGraphRange)(JNIEnv *env, jclass cl,jfloat glow,jfloat ghigh) {
     settings->data()->glow=settings->tomgperL(glow);
@@ -209,8 +245,10 @@ extern "C" JNIEXPORT void  JNICALL   fromjava(setGraphRange)(JNIEnv *env, jclass
     resetGraphPanYRangeLock();
     }
 extern "C" JNIEXPORT void  JNICALL   fromjava(setTargetRange)(JNIEnv *env, jclass cl,jfloat tlow,jfloat thigh) {
-    settings->data()->tlow=settings->tomgperL(tlow);
-    settings->data()->thigh=settings->tomgperL(thigh);
+    // Target values are stored in tenths of mg/dL. Round instead of truncating
+    // floating-point representations such as 4.2 * 180 = 755.9999...
+    settings->data()->tlow=roundf(settings->tomgperL(tlow));
+    settings->data()->thigh=roundf(settings->tomgperL(thigh));
     resetGraphPanYRangeLock();
     }
 /*

@@ -31,6 +31,7 @@ import tk.glucodata.LabelAdapter;
 import tk.glucodata.Layout;
 import tk.glucodata.MainActivity;
 import tk.glucodata.Natives;
+import tk.glucodata.PredictiveAlertSettingsPage;
 import tk.glucodata.R;
 
 public class Calibration  {
@@ -72,6 +73,7 @@ static public void show(MainActivity act,View parent) {
           if(isChecked) {
             setshowcalibratedstream(true);
             }
+          PredictiveAlertSettingsPage.onLocalCalibrationStateChanged(act);
           act.requestRender();
           });
    var calibratepast=getcheckbox(act,act.getString(R.string.calibratepast),Natives.getCalibratePast());

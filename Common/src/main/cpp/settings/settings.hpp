@@ -21,6 +21,7 @@
 #pragma once
 inline constexpr const int defaulthttpport=17580;
 #include <stdint.h>
+#include <atomic>
 enum class Insulin: uint8_t {
     Not=0,
     Human,
@@ -44,6 +45,22 @@ static constexpr const double convfactor=180.182;
 #endif
 static constexpr const double convertmultmmol=1.0/convfactor;
 static constexpr const double convertmultmg=1.0/10.0;
+// Runtime-only handoff from the legacy trend extrapolator to an approved
+// experimental forecast notification. These flags never change the saved
+// alarm profile.
+inline std::atomic_bool suppressLegacyPreLowAlarm{false};
+inline std::atomic_bool suppressLegacyPreHighAlarm{false};
+// Wall-clock deadline shared with Notification.setTimeoutAfter(). Even if the
+// Java process does not observe the platform removing an expired notification
+// before the next CGM sample, native early warnings automatically resume.
+inline std::atomic<int64_t> suppressLegacyPredictionAlarmUntilMs{0};
+
+inline void clearLegacyPredictionAlarmSuppression() {
+    suppressLegacyPreLowAlarm.store(false, std::memory_order_relaxed);
+    suppressLegacyPreHighAlarm.store(false, std::memory_order_relaxed);
+    suppressLegacyPredictionAlarmUntilMs.store(0,
+            std::memory_order_relaxed);
+    }
 //static constexpr const float convfactor=180.0f;
 static constexpr const double convfactordL=convfactor*0.1;
 #include <array>
@@ -1059,7 +1076,9 @@ void setconvert(const char *country) {
         else
             unit=3;
         setalarms(39*18,13*180,true,true,true,true);
-        setranges(3*180,12*180,39*18,10*180);
+        // Product target band: 4.2–9.0 mmol/L (75.6–162 mg/dL).
+        // Clinical low/high alarm thresholds remain independent settings.
+        setranges(3*180,12*180,42*18,9*180);
         }
     else {
         LOGGER("setconvert was unit=%d\n",unit);
@@ -1124,12 +1143,30 @@ static float preval(int val,float rate)  {
         return val+rate*.4f*180.0f;
         }
 bool prehighAlarm(int val,float rate) const { 
-    if(data()->hasprehighalarm()&&preval(val,rate)>data()->aprehighget()) 
+    const int64_t nowMs=static_cast<int64_t>(time(nullptr))*1000LL;
+    const bool forecastOwnsDirection=
+            suppressLegacyPreHighAlarm.load(std::memory_order_relaxed)
+            && suppressLegacyPredictionAlarmUntilMs.load(
+                    std::memory_order_relaxed)>nowMs
+            && !data()->DoCalibrate
+            && !data()->showcalibratedstream
+            && !data()->showcalibratedscans;
+    if(!forecastOwnsDirection
+            &&data()->hasprehighalarm()&&preval(val,rate)>data()->aprehighget())
         return true;
     return false;
     }
 bool prelowAlarm(int val,float rate) const { 
-    if(data()->hasprelowalarm()&&preval(val,rate)< data()->aprelowget())
+    const int64_t nowMs=static_cast<int64_t>(time(nullptr))*1000LL;
+    const bool forecastOwnsDirection=
+            suppressLegacyPreLowAlarm.load(std::memory_order_relaxed)
+            && suppressLegacyPredictionAlarmUntilMs.load(
+                    std::memory_order_relaxed)>nowMs
+            && !data()->DoCalibrate
+            && !data()->showcalibratedstream
+            && !data()->showcalibratedscans;
+    if(!forecastOwnsDirection
+            &&data()->hasprelowalarm()&&preval(val,rate)< data()->aprelowget())
         return true;
     return false;
     }

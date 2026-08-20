@@ -12,6 +12,193 @@ import java.util.List;
 final class ForecastSnapshot {
     static final int MAX_HORIZON_MINUTES = 120;
     static final long MAX_GRAPH_AGE_MS = 15L * 60L * 1000L;
+    static final long MAX_ALERT_AGE_MS = 10L * 60L * 1000L;
+
+    /** Backend-authored, calibration-aware threshold crossing evidence. */
+    static final class ThresholdCrossing {
+        final String direction;
+        final String evidence;
+        final long crossingAtMs;
+        final int leadMinutes;
+        final float predictedMedianMgDl;
+        final float intervalEdgeMgDl;
+
+        ThresholdCrossing(String direction, String evidence,
+                long crossingAtMs, int leadMinutes,
+                float predictedMedianMgDl, float intervalEdgeMgDl) {
+            this.direction = clean(direction).toLowerCase(
+                    java.util.Locale.ROOT);
+            this.evidence = clean(evidence).toLowerCase(
+                    java.util.Locale.ROOT);
+            this.crossingAtMs = Math.max(0L, crossingAtMs);
+            this.leadMinutes = Math.max(0,
+                    Math.min(60, leadMinutes));
+            this.predictedMedianMgDl = finiteOrZero(predictedMedianMgDl);
+            this.intervalEdgeMgDl = finiteOrZero(intervalEdgeMgDl);
+        }
+
+        static ThresholdCrossing fromJson(JSONObject value) {
+            if (value == null) return null;
+            long atMs = value.optLong("crossing_at_ms", 0L);
+            int lead = value.optInt("lead_minutes", -1);
+            float median = finiteFloat(value, "predicted_median_mg_dl",
+                    Float.NaN);
+            float edge = finiteFloat(value, "interval_edge_mg_dl",
+                    Float.NaN);
+            String direction = value.optString("direction", "");
+            String evidence = value.optString("evidence", "");
+            if (atMs <= 0L || lead < 0 || !isFinite(median)
+                    || !isFinite(edge)
+                    || !("low".equalsIgnoreCase(direction)
+                    || "high".equalsIgnoreCase(direction))
+                    || !("possible".equalsIgnoreCase(evidence)
+                    || "likely".equalsIgnoreCase(evidence))) {
+                return null;
+            }
+            return new ThresholdCrossing(direction, evidence, atMs, lead,
+                    median, edge);
+        }
+    }
+
+    static final class AlertAssessment {
+        static final float DEFAULT_TARGET_LOW_MG_DL = 75.6f;
+        static final float DEFAULT_TARGET_HIGH_MG_DL = 162.0f;
+
+        final String monitoringStatus;
+        final boolean deliveryEligible;
+        final float targetLowMgDl;
+        final float targetHighMgDl;
+        final float targetLowMmolL;
+        final float targetHighMmolL;
+        final List<String> suppressedReasons;
+        /** Legacy single-crossing fields retained for older backends/tests. */
+        final ThresholdCrossing low;
+        final ThresholdCrossing high;
+        final ThresholdCrossing lowPossible;
+        final ThresholdCrossing lowLikely;
+        final ThresholdCrossing highPossible;
+        final ThresholdCrossing highLikely;
+
+        AlertAssessment(String monitoringStatus, boolean deliveryEligible,
+                float targetLowMgDl, float targetHighMgDl,
+                float targetLowMmolL, float targetHighMmolL,
+                List<String> suppressedReasons, ThresholdCrossing low,
+                ThresholdCrossing high) {
+            this(monitoringStatus, deliveryEligible, targetLowMgDl,
+                    targetHighMgDl, targetLowMmolL, targetHighMmolL,
+                    suppressedReasons, low, high,
+                    evidence(low, "possible"), evidence(low, "likely"),
+                    evidence(high, "possible"), evidence(high, "likely"));
+        }
+
+        AlertAssessment(String monitoringStatus, boolean deliveryEligible,
+                float targetLowMgDl, float targetHighMgDl,
+                float targetLowMmolL, float targetHighMmolL,
+                List<String> suppressedReasons, ThresholdCrossing low,
+                ThresholdCrossing high, ThresholdCrossing lowPossible,
+                ThresholdCrossing lowLikely, ThresholdCrossing highPossible,
+                ThresholdCrossing highLikely) {
+            this.monitoringStatus = clean(monitoringStatus).toLowerCase(
+                    java.util.Locale.ROOT);
+            this.deliveryEligible = deliveryEligible;
+            float normalizedLow = isFinite(targetLowMgDl)
+                    ? targetLowMgDl : DEFAULT_TARGET_LOW_MG_DL;
+            float normalizedHigh = isFinite(targetHighMgDl)
+                    ? targetHighMgDl : DEFAULT_TARGET_HIGH_MG_DL;
+            this.targetLowMgDl = Math.min(normalizedLow, normalizedHigh);
+            this.targetHighMgDl = Math.max(normalizedLow, normalizedHigh);
+            this.targetLowMmolL = isFinite(targetLowMmolL)
+                    ? targetLowMmolL : this.targetLowMgDl / 18f;
+            this.targetHighMmolL = isFinite(targetHighMmolL)
+                    ? targetHighMmolL : this.targetHighMgDl / 18f;
+            this.suppressedReasons = Collections.unmodifiableList(
+                    new ArrayList<>(suppressedReasons == null
+                            ? Collections.emptyList() : suppressedReasons));
+            this.low = low;
+            this.high = high;
+            this.lowPossible = lowPossible;
+            this.lowLikely = lowLikely;
+            this.highPossible = highPossible;
+            this.highLikely = highLikely;
+        }
+
+        static AlertAssessment unavailable() {
+            return new AlertAssessment("unavailable", false,
+                    DEFAULT_TARGET_LOW_MG_DL, DEFAULT_TARGET_HIGH_MG_DL,
+                    4.2f, 9.0f, Collections.emptyList(), null, null);
+        }
+
+        static AlertAssessment fromJson(JSONObject value) {
+            if (value == null) return unavailable();
+            ArrayList<String> reasons = new ArrayList<>();
+            JSONArray rawReasons = value.optJSONArray("suppressed_reasons");
+            if (rawReasons != null) {
+                for (int index = 0; index < rawReasons.length(); index++) {
+                    String reason = clean(rawReasons.optString(index, ""));
+                    if (!reason.isEmpty()) reasons.add(reason);
+                }
+            }
+            Float lowMgDl = optionalFloat(value, "target_low_mg_dl");
+            Float highMgDl = optionalFloat(value, "target_high_mg_dl");
+            Float lowMmol = optionalFloat(value, "target_low_mmol_l");
+            Float highMmol = optionalFloat(value, "target_high_mmol_l");
+            if (lowMgDl == null || highMgDl == null || lowMmol == null
+                    || highMmol == null
+                    || Math.abs(lowMgDl - DEFAULT_TARGET_LOW_MG_DL) > .05f
+                    || Math.abs(highMgDl - DEFAULT_TARGET_HIGH_MG_DL) > .05f
+                    || Math.abs(lowMmol - 4.2f) > .005f
+                    || Math.abs(highMmol - 9.0f) > .005f) {
+                return new AlertAssessment("unavailable", false,
+                        DEFAULT_TARGET_LOW_MG_DL, DEFAULT_TARGET_HIGH_MG_DL,
+                        4.2f, 9.0f,
+                        Collections.singletonList("target_contract_mismatch"),
+                        null, null);
+            }
+            ThresholdCrossing low = ThresholdCrossing.fromJson(
+                    value.optJSONObject("low"));
+            ThresholdCrossing high = ThresholdCrossing.fromJson(
+                    value.optJSONObject("high"));
+            ThresholdCrossing lowPossible = firstNonNull(
+                    ThresholdCrossing.fromJson(value.optJSONObject("low_possible")),
+                    evidence(low, "possible"));
+            ThresholdCrossing lowLikely = firstNonNull(
+                    ThresholdCrossing.fromJson(value.optJSONObject("low_likely")),
+                    evidence(low, "likely"));
+            ThresholdCrossing highPossible = firstNonNull(
+                    ThresholdCrossing.fromJson(value.optJSONObject("high_possible")),
+                    evidence(high, "possible"));
+            ThresholdCrossing highLikely = firstNonNull(
+                    ThresholdCrossing.fromJson(value.optJSONObject("high_likely")),
+                    evidence(high, "likely"));
+            String monitoring = clean(value.optString("monitoring_status",
+                    "unavailable")).toLowerCase(java.util.Locale.ROOT);
+            boolean deliveryEligible = value.optBoolean("delivery_eligible",
+                    false);
+            if (deliveryEligible != "eligible".equals(monitoring)
+                    || (deliveryEligible && !reasons.isEmpty())) {
+                return new AlertAssessment("unavailable", false,
+                        DEFAULT_TARGET_LOW_MG_DL, DEFAULT_TARGET_HIGH_MG_DL,
+                        4.2f, 9.0f,
+                        Collections.singletonList("delivery_contract_mismatch"),
+                        null, null);
+            }
+            return new AlertAssessment(
+                    monitoring, deliveryEligible,
+                    lowMgDl, highMgDl, lowMmol, highMmol, reasons, low, high,
+                    lowPossible, lowLikely, highPossible, highLikely);
+        }
+
+        private static ThresholdCrossing evidence(ThresholdCrossing crossing,
+                String evidence) {
+            return crossing != null && evidence.equals(crossing.evidence)
+                    ? crossing : null;
+        }
+
+        private static ThresholdCrossing firstNonNull(
+                ThresholdCrossing preferred, ThresholdCrossing fallback) {
+            return preferred == null ? fallback : preferred;
+        }
+    }
 
     static final class Point {
         final long atMs;
@@ -291,20 +478,36 @@ final class ForecastSnapshot {
     final String status;
     final long generatedAtMs;
     final long basedOnReadingAtMs;
+    final Float basedOnGlucoseMgDl;
     final int horizonMinutes;
     final String modelVersion;
     final float confidence;
     final List<Point> points;
     final List<Activity> activities;
     final String conditionalNotice;
+    final AlertAssessment alertAssessment;
 
     ForecastSnapshot(String status, long generatedAtMs,
             long basedOnReadingAtMs, int horizonMinutes, String modelVersion,
             float confidence, List<Point> points, List<Activity> activities,
             String conditionalNotice) {
+        this(status, generatedAtMs, basedOnReadingAtMs, null,
+                horizonMinutes, modelVersion, confidence, points, activities,
+                conditionalNotice, AlertAssessment.unavailable());
+    }
+
+    ForecastSnapshot(String status, long generatedAtMs,
+            long basedOnReadingAtMs, Float basedOnGlucoseMgDl,
+            int horizonMinutes, String modelVersion, float confidence,
+            List<Point> points, List<Activity> activities,
+            String conditionalNotice, AlertAssessment alertAssessment) {
         this.status = clean(status);
         this.generatedAtMs = generatedAtMs;
         this.basedOnReadingAtMs = basedOnReadingAtMs;
+        this.basedOnGlucoseMgDl = basedOnGlucoseMgDl != null
+                && isFinite(basedOnGlucoseMgDl)
+                && basedOnGlucoseMgDl >= 20f && basedOnGlucoseMgDl <= 600f
+                ? basedOnGlucoseMgDl : null;
         this.horizonMinutes = Math.max(0,
                 Math.min(MAX_HORIZON_MINUTES, horizonMinutes));
         this.modelVersion = clean(modelVersion);
@@ -314,6 +517,8 @@ final class ForecastSnapshot {
                 new ArrayList<>(activities == null
                         ? Collections.emptyList() : activities));
         this.conditionalNotice = clean(conditionalNotice);
+        this.alertAssessment = alertAssessment == null
+                ? AlertAssessment.unavailable() : alertAssessment;
     }
 
     static ForecastSnapshot empty(String status) {
@@ -351,13 +556,18 @@ final class ForecastSnapshot {
                 if (activity != null) activities.add(activity);
             }
         }
+        Float basedOnGlucose = optionalFloat(payload,
+                "based_on_glucose_mg_dl");
         return new ForecastSnapshot(payload.optString("status", "no_data"),
                 payload.optLong("generated_at_ms", 0L),
                 payload.optLong("based_on_reading_at_ms", 0L),
+                basedOnGlucose,
                 payload.optInt("horizon_minutes", inferHorizon(points)),
                 payload.optString("model_version", ""),
                 finiteFloat(payload, "confidence", 0f), points, activities,
-                payload.optString("conditional_notice", ""));
+                payload.optString("conditional_notice", ""),
+                AlertAssessment.fromJson(
+                        payload.optJSONObject("alert_assessment")));
     }
 
     boolean isGraphUsable(long nowMs) {
@@ -378,6 +588,12 @@ final class ForecastSnapshot {
                 && first.atMs >= basedOnReadingAtMs - 60_000L
                 && last.atMs > basedOnReadingAtMs
                 && last.atMs <= maximumEnd;
+    }
+
+    boolean isAlertFresh(long nowMs) {
+        if (!isGraphUsable(nowMs) || basedOnGlucoseMgDl == null) return false;
+        long age = nowMs - basedOnReadingAtMs;
+        return age >= -60_000L && age <= MAX_ALERT_AGE_MS;
     }
 
     private static List<Point> immutableSorted(List<Point> source) {
