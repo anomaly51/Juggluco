@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="forecast_dashboard_unavailable">AI forecast</string>
-    <string name="forecast_dashboard_loading">AI · checking</string>
-    <string name="forecast_dashboard_ready">AI · %1$d min</string>
-    <string name="forecast_dashboard_learning">AI · learning</string>
-    <string name="forecast_dashboard_preview">AI · preview</string>
+    <string name="forecast_dashboard_unavailable">Forecast</string>
+    <string name="forecast_dashboard_loading">Checking…</string>
+    <string name="forecast_dashboard_ready">%1$d min</string>
+    <string name="forecast_dashboard_learning">Preparing</string>
+    <string name="forecast_dashboard_preview">Preview</string>
     <string name="forecast_dashboard_description">Forecast status: %1$s. Open forecast details.</string>
 
-    <string name="forecast_page_title">AI forecast</string>
-    <string name="forecast_page_subtitle">Personal 120-minute glucose outlook</string>
+    <string name="forecast_page_title">Glucose forecast</string>
+    <string name="forecast_page_subtitle">Estimated trend for the next 120 minutes</string>
     <string name="forecast_refresh">Refresh forecast</string>
     <string name="forecast_refresh_loading">Refreshing forecast</string>
-    <string name="forecast_status_checking">Checking backend</string>
+    <string name="forecast_status_checking">Checking connection</string>
     <string name="forecast_status_ready">Forecast ready</string>
-    <string name="forecast_status_learning">Personal model learning</string>
+    <string name="forecast_status_learning">Preparing forecast</string>
     <string name="forecast_status_cold_start">More history needed</string>
     <string name="forecast_status_no_data">Waiting for CGM data</string>
     <string name="forecast_status_stale">Current reading is outdated</string>
@@ -26,7 +26,7 @@
     <string name="forecast_value_unavailable">—</string>
     <string name="forecast_not_generated">No forecast has been generated yet</string>
     <string name="forecast_generated_at">Generated %1$s · based on reading at %2$s</string>
-    <string name="forecast_backend_error">Couldn’t reach the configured backend. Check connection settings and try again.</string>
+    <string name="forecast_backend_error">Couldn’t update the forecast. Check connection settings and try again.</string>
     <string name="forecast_default_notice">Experimental estimate. Future meals, insulin, activity, illness, and sensor variation can change the trajectory.</string>
 
     <string name="forecast_factors_title">Active factors</string>
@@ -63,16 +63,16 @@
         <item quantity="one">Overlaps %1$d other record; curves remain separate.</item>
         <item quantity="other">Overlaps %1$d other records; curves remain separate.</item>
     </plurals>
-    <string name="forecast_profile_ai">AI food estimate</string>
+    <string name="forecast_profile_ai">food estimate</string>
     <string name="forecast_profile_nutrient">nutrient estimate</string>
-    <string name="forecast_profile_personalized">learned personal profile</string>
+    <string name="forecast_profile_personalized">personal profile</string>
     <string name="forecast_profile_population">population starting profile</string>
     <string name="forecast_profile_unknown">source unavailable</string>
-    <string name="forecast_factor_meal_explanation">Estimated %1$s absorption may raise glucose; the curve shows how that modeled contribution changes over time.</string>
-    <string name="forecast_factor_rapid_explanation">Estimated NovoRapid action may lower glucose. The displayed timing and strength are model estimates, not a measured physiological peak.</string>
+    <string name="forecast_factor_meal_explanation">Estimated %1$s absorption may raise glucose; the curve shows how that contribution may change over time.</string>
+    <string name="forecast_factor_rapid_explanation">Estimated NovoRapid action may lower glucose. The displayed timing and strength are estimates, not a measured physiological peak.</string>
     <string name="forecast_factor_long_explanation">Tresiba is shown as an estimated overlapping basal background. A single injection peak usually cannot be separated reliably from CGM alone.</string>
-    <string name="forecast_factor_contribution">Largest modeled contribution: %1$s mg/dL</string>
-    <string name="forecast_factor_contribution_mmol">Largest modeled contribution: %1$s mmol/L</string>
+    <string name="forecast_factor_contribution">Largest estimated contribution: %1$s mg/dL</string>
+    <string name="forecast_factor_contribution_mmol">Largest estimated contribution: %1$s mmol/L</string>
     <string name="forecast_factor_contribution_unknown">Contribution curve is still being estimated</string>
     <string name="forecast_factor_chart_description">%1$s activity and glucose contribution chart. %2$s</string>
 
@@ -91,21 +91,21 @@
     <string name="forecast_mae_value">%1$.1f mg/dL</string>
     <string name="forecast_mae_value_mmol">%1$.1f mmol/L</string>
 
-    <string name="forecast_model_title">Model state</string>
-    <string name="forecast_model_waiting">Training has not started</string>
-    <string name="forecast_training_summary">%1$s · %2$d of %3$d samples</string>
+    <string name="forecast_model_title">Forecast readiness</string>
+    <string name="forecast_model_waiting">Not enough history yet</string>
+    <string name="forecast_training_summary">%1$s · %2$d of %3$d examples</string>
     <string name="forecast_training_state_unknown">Waiting</string>
-    <string name="forecast_training_not_started">Not started</string>
+    <string name="forecast_training_not_started">Not ready</string>
     <string name="forecast_training_insufficient">Building history</string>
-    <string name="forecast_training_trained">Trained</string>
-    <string name="forecast_training_in_progress">Training</string>
-    <string name="forecast_training_frozen">Frozen model version</string>
-    <string name="forecast_training_manual_only">Manual retraining only</string>
-    <string name="forecast_training_manual_mode">Automatic retraining is off. A new model version is activated manually.</string>
-    <string name="forecast_training_samples">Training samples: %1$d</string>
-    <string name="forecast_training_data_changed">New data has arrived since this version was trained. Forecasts continue to use the pinned model until the next manual retraining.</string>
-    <string name="forecast_last_trained">Last trained %1$s</string>
-    <string name="forecast_not_trained">Not trained yet</string>
-    <string name="forecast_model_version">Model %1$s</string>
-    <string name="forecast_model_version_unknown">Model version unavailable</string>
+    <string name="forecast_training_trained">Ready</string>
+    <string name="forecast_training_in_progress">Updating</string>
+    <string name="forecast_training_frozen">Current version locked</string>
+    <string name="forecast_training_manual_only">Manual updates only</string>
+    <string name="forecast_training_manual_mode">Automatic updates are off. A new forecast version is activated manually.</string>
+    <string name="forecast_training_samples">Confirmed examples: %1$d</string>
+    <string name="forecast_training_data_changed">New data is available. Forecasts will keep using the current version until you update it manually.</string>
+    <string name="forecast_last_trained">Last updated %1$s</string>
+    <string name="forecast_not_trained">Not ready yet</string>
+    <string name="forecast_model_version">Forecast version %1$s</string>
+    <string name="forecast_model_version_unknown">Forecast version unavailable</string>
 </resources>

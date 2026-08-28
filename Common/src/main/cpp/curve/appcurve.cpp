@@ -5,6 +5,7 @@
 #include "sensoren.hpp"
 #define NANOVG_GLES2_IMPLEMENTATION
 #include "curve.hpp"
+#include "graphlayout.hpp"
 #include "nanovg_gl.h"
 #include "nanovg_gl_utils.h"
 #include "nums/numdata.hpp"
@@ -2500,7 +2501,9 @@ void JCurve::resizescreen(int widthin, int heightin,int initscreenwidth) {
     height=heightin;
     LOGGER("resize(%d,%d)\n",width,height);
 #ifndef WEAROS
-    const float graphinset=modernui?density*20.0f:0.0f;
+    const float graphinset=modernui?
+            graphlayout::horizontal_inset_px(static_cast<float>(width),density):
+            0.0f;
     dleft=graphinset;
     dright=graphinset;
 #else

@@ -17,6 +17,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import androidx.appcompat.widget.SwitchCompat;
+import androidx.core.view.ViewCompat;
 
 /**
  * Small code-native component kit for Juggluco's programmatically built phone
@@ -26,10 +27,50 @@ import androidx.appcompat.widget.SwitchCompat;
 public final class ClinicalUi {
     public enum ButtonRole { PRIMARY, SECONDARY, DANGER }
 
+    static final int READABLE_WIDTH_BREAKPOINT_DP = 600;
+    static final int READABLE_MIN_GUTTER_DP = 32;
+    static final int READABLE_MAX_CONTENT_DP = 840;
+
     private ClinicalUi() {}
 
     public static int dp(Context context, float value) {
         return Math.round(value * context.getResources().getDisplayMetrics().density);
+    }
+
+    /**
+     * Pure large-window policy. Compact windows keep their existing gutter;
+     * Fold/tablet windows gain breathing room and cap readable content near
+     * 840dp without assuming a particular display density.
+     */
+    public static int readableHorizontalGutterDp(int availableWidthDp,
+            int compactGutterDp) {
+        int compact = Math.max(0, compactGutterDp);
+        if (availableWidthDp < READABLE_WIDTH_BREAKPOINT_DP) return compact;
+        int widthCapGutter = Math.max(0,
+                (availableWidthDp - READABLE_MAX_CONTENT_DP + 1) / 2);
+        return Math.max(Math.max(compact, READABLE_MIN_GUTTER_DP),
+                widthCapGutter);
+    }
+
+    /** Converts the pure policy to pixels using the current window width. */
+    public static int readableHorizontalGutter(Context context,
+            int availableWidthPx, int compactGutterDp) {
+        float density = context.getResources().getDisplayMetrics().density;
+        int availableWidthDp = availableWidthPx > 0 && density > 0f
+                ? (int) Math.floor(availableWidthPx / density)
+                : context.getResources().getConfiguration().screenWidthDp;
+        return dp(context, readableHorizontalGutterDp(availableWidthDp,
+                compactGutterDp));
+    }
+
+    /** Re-dispatches Insets when a Fold, split window or rotation changes width. */
+    public static void reapplyInsetsOnWidthChanges(View root) {
+        root.addOnLayoutChangeListener((view, left, top, right, bottom,
+                oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (right - left != oldRight - oldLeft) {
+                ViewCompat.requestApplyInsets(view);
+            }
+        });
     }
 
     public static int window(Context context) {

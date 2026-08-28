@@ -388,7 +388,10 @@ private static void showoldglucose() {
     }
 
     void normalglucose(notGlucose strgl,float gl,float rate,boolean waiting) {
-        if(!isWearable) CriticalGlucoseAlarm.resolveActual(Applic.app);
+        if(!isWearable) {
+            CriticalGlucoseAlarm.resolveActual(Applic.app);
+            CriticalGlucoseAlarm.resolveSignalLoss(Applic.app);
+        }
         stopGlucoseAlarm();
         MainActivity.showmessage=null;
         var act=MainActivity.thisone;
@@ -494,6 +497,7 @@ private    void vibratealarm(int kind) {
 private static int  lastalarm=-1;
 
 static    void stoplossalarm(){
+    if(!isWearable) CriticalGlucoseAlarm.resolveSignalLoss(Applic.app);
     if(lastalarm==4) {
         lastalarm=-1;
         stopalarm();
@@ -1191,6 +1195,14 @@ setDeleteIntent(DeleteReceiver.getDeleteIntent()) .setContentTitle(message);
     final String message= "***  "+Applic.getContext().getString(R.string.nonewvalue)+tformat+" ***";
 
 //    oldfloatmessage(tformat, true) ;
+    if(!isWearable && CriticalGlucoseAlarm.showLossSignal(
+            Applic.app,time,message)) {
+        // A prior legacy loss sound can exist only after an earlier critical
+        // delivery failure. Stop that owner once the unified controller has
+        // successfully acquired the full-screen episode.
+        if(lastalarm==4) stopalarm();
+        return;
+        }
     lossofsignalalarm(4,R.drawable.loss ,message, GLUCOSENOTIFICATION ,true);
     }
     

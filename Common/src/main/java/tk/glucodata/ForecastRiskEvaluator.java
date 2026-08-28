@@ -20,18 +20,29 @@ final class ForecastRiskEvaluator {
         final boolean highEnabled;
         final int lowHorizonMinutes;
         final int highHorizonMinutes;
+        final int lowSensitivity;
+        final int highSensitivity;
+        /** Compatibility alias for callers that still provide one value. */
         final int sensitivity;
 
         Policy(boolean enabled, boolean lowEnabled, boolean highEnabled,
                 int lowHorizonMinutes, int highHorizonMinutes,
                 int sensitivity) {
+            this(enabled, lowEnabled, highEnabled, lowHorizonMinutes,
+                    highHorizonMinutes, sensitivity, sensitivity);
+        }
+
+        Policy(boolean enabled, boolean lowEnabled, boolean highEnabled,
+                int lowHorizonMinutes, int highHorizonMinutes,
+                int lowSensitivity, int highSensitivity) {
             this.enabled = enabled;
             this.lowEnabled = lowEnabled;
             this.highEnabled = highEnabled;
             this.lowHorizonMinutes = clampHorizon(lowHorizonMinutes);
             this.highHorizonMinutes = clampHorizon(highHorizonMinutes);
-            this.sensitivity = Math.max(SENSITIVITY_EARLY,
-                    Math.min(SENSITIVITY_FEWER, sensitivity));
+            this.lowSensitivity = clampSensitivity(lowSensitivity);
+            this.highSensitivity = clampSensitivity(highSensitivity);
+            this.sensitivity = this.lowSensitivity;
         }
     }
 
@@ -107,12 +118,12 @@ final class ForecastRiskEvaluator {
         ForecastSnapshot.ThresholdCrossing low = policy.lowEnabled
                 ? accepted(assessment.lowPossible, assessment.lowLikely,
                         assessment.low, Direction.LOW,
-                        policy.lowHorizonMinutes, policy.sensitivity,
+                        policy.lowHorizonMinutes, policy.lowSensitivity,
                         forecast.basedOnReadingAtMs, nowMs) : null;
         ForecastSnapshot.ThresholdCrossing high = policy.highEnabled
                 ? accepted(assessment.highPossible, assessment.highLikely,
                         assessment.high, Direction.HIGH,
-                        policy.highHorizonMinutes, policy.sensitivity,
+                        policy.highHorizonMinutes, policy.highSensitivity,
                         forecast.basedOnReadingAtMs, nowMs) : null;
         if (low == null && high == null) {
             return Decision.none("no_crossing_in_selected_horizon");
@@ -193,6 +204,11 @@ final class ForecastRiskEvaluator {
 
     private static int clampHorizon(int value) {
         return Math.max(15, Math.min(60, value));
+    }
+
+    private static int clampSensitivity(int value) {
+        return Math.max(SENSITIVITY_EARLY,
+                Math.min(SENSITIVITY_FEWER, value));
     }
 
     private static int remainingLeadMinutes(

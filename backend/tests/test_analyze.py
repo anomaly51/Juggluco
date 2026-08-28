@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from conftest import TEST_TOKEN, make_settings
+from conftest import TEST_TOKEN, make_settings, valid_wav_bytes
 
 
 def test_legacy_analyze_returns_a_draft_but_cannot_bypass_meal_chat_confirmation(
@@ -67,11 +67,11 @@ def test_audio_is_validated_and_forwarded_for_transcription(
     response = client.post(
         "/v1/analyze",
         headers=auth_headers,
-        files={"audio": ("meal.m4a", b"synthetic-audio", "audio/mp4")},
+        files={"audio": ("meal.wav", valid_wav_bytes(), "audio/wav")},
     )
     assert response.status_code == 200
     assert response.json()["transcription"] == "I ate a rice bowl"
-    assert fake_analyzer.calls[0][2].format == "m4a"
+    assert fake_analyzer.calls[0][2].format == "wav"
 
 
 def test_analyze_requires_input_and_limits_photos(client, auth_headers, jpeg_bytes):

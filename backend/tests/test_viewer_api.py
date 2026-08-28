@@ -320,6 +320,28 @@ def test_glucose_cursor_is_signed_filter_bound_and_keeps_same_timestamp_rows(
         ).status_code
         == 422
     )
+
+    # A SHA-256 signature has two unused bits in its final unpadded base64url
+    # character. Alternate values for those bits decode to the same bytes and
+    # must not be accepted as distinct cursor encodings.
+    b64url_alphabet = (
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    )
+    encoded_payload, encoded_signature = valid_cursor.split(".", 1)
+    final_index = b64url_alphabet.index(encoded_signature[-1])
+    assert final_index % 4 == 0
+    signature_alias = (
+        encoded_signature[:-1] + b64url_alphabet[final_index + 1]
+    )
+    noncanonical_cursor = f"{encoded_payload}.{signature_alias}"
+    assert (
+        viewer_client.get(
+            "/v1/viewer/glucose",
+            headers=viewer_headers,
+            params={"cursor": noncanonical_cursor},
+        ).status_code
+        == 422
+    )
     assert (
         viewer_client.get(
             "/v1/viewer/intakes",

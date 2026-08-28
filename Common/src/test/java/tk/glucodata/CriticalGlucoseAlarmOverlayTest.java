@@ -115,7 +115,7 @@ public class CriticalGlucoseAlarmOverlayTest {
         assertTrue(source.contains("CriticalGlucoseAlarm.session(app, token)"));
         assertTrue(source.contains("MAIN.post(() -> applySession"));
         assertTrue(source.contains("CriticalGlucoseAlarm.acknowledge(app, token)"));
-        assertTrue(source.contains("CriticalGlucoseAlarm.snooze(app, token"));
+        assertFalse(source.contains("CriticalGlucoseAlarm.snooze(app, token"));
         assertTrue(source.contains("FLAG_SECURE"));
         assertFalse(source.contains("Ringtone"));
         assertFalse(source.contains("NotificationManager"));

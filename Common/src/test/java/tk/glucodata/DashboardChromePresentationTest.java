@@ -63,13 +63,47 @@ public class DashboardChromePresentationTest {
         assertTrue(DashboardChrome.shouldUseNavigationRail(700, 900));
         assertFalse(DashboardChrome.shouldUseNavigationRail(599, 900));
         assertFalse(DashboardChrome.shouldUseNavigationRail(840, 340));
+        assertEquals(96, DashboardChrome.NAVIGATION_RAIL_ITEM_HEIGHT_DP);
     }
 
     @Test
     public void twoPaneLayoutKeepsNarrowPortraitGraphsReadable() {
         assertTrue(DashboardChrome.shouldUseTwoPaneLayout(891, 411));
         assertFalse(DashboardChrome.shouldUseTwoPaneLayout(700, 900));
-        assertTrue(DashboardChrome.shouldUseTwoPaneLayout(840, 900));
+        assertFalse(DashboardChrome.shouldUseTwoPaneLayout(840, 900));
+        assertFalse(DashboardChrome.shouldUseTwoPaneLayout(1200, 1600));
+        assertTrue(DashboardChrome.shouldUseTwoPaneLayout(1600, 1200));
+    }
+
+    @Test
+    public void foldAndTabletGuttersCapContentWithoutCrampingPhones() {
+        assertEquals(12, DashboardChrome.chartContentGutterDp(
+                411, false));
+        assertEquals(12, DashboardChrome.chartContentGutterDp(
+                700, true));
+        assertEquals(20, DashboardChrome.chartContentGutterDp(
+                1200, true));
+        assertEquals(144, DashboardChrome.chartContentGutterDp(
+                1600, true));
+
+        assertEquals(232, DashboardChrome.summaryPaneWidthDp(
+                700, 12, true));
+        assertEquals(256, DashboardChrome.summaryPaneWidthDp(
+                1010, 12, true));
+        assertEquals(320, DashboardChrome.summaryPaneWidthDp(
+                1800, 214, true));
+    }
+
+    @Test
+    public void graphAccessibilitySummaryUsesSingleSentenceBoundaries() {
+        StringBuilder description = new StringBuilder();
+        DashboardChrome.appendAccessibilitySentence(description,
+                "Current glucose 6.6 mmol/L.");
+        DashboardChrome.appendAccessibilitySentence(description,
+                "Target 4.2–9.0 mmol/L");
+        DashboardChrome.appendAccessibilitySentence(description, "");
+        assertEquals("Current glucose 6.6 mmol/L. Target 4.2–9.0 mmol/L.",
+                description.toString());
     }
 
     @Test

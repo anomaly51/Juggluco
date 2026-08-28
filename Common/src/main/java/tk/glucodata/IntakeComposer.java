@@ -66,6 +66,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.text.DateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -78,11 +79,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Entry point for the new backend-owned intake experience.
+ * Voice-first, backend-owned intake conversation.
  *
- * <p>Insulin and meals deliberately use different screens and different
- * writes. Insulin is a fast structured form. A meal is a conversation whose
- * proposal is persisted only after an explicit confirmation.</p>
+ * <p>The dashboard plus button opens this single surface for food, insulin,
+ * text, voice and photos. Clear reported facts are applied by the backend in
+ * one transactional turn and remain reversible from the same conversation.</p>
  */
 final class IntakeComposer {
     private enum Mode { CHOOSER, INSULIN, MEAL, MANUAL_MEAL }
@@ -95,16 +96,32 @@ final class IntakeComposer {
     private static final int PREVIEW_EDGE = 320;
     private static final int VOICE_MAX_DURATION_MS = 60_000;
     private static final long STALE_MEDIA_AGE_MS = 6L * 60L * 60L * 1000L;
+    private static final int INLINE_ERROR_NONE = 0;
+    private static final int INLINE_ERROR_CONNECTION = 1;
+    private static final int INLINE_ERROR_RETRY_TURN = 2;
+    private static final int INLINE_ERROR_RESOLVE_TURN = 3;
+    private static final int INLINE_ERROR_UNDO = 4;
+    private static final int INLINE_ERROR_VOICE = 5;
+    private static final int CONTROL_NONE = 0;
+    private static final int CONTROL_REVISION = 1;
+    private static final int CONTROL_DELETE = 2;
 
     private static final class ChatLine {
         final boolean user;
         final String text;
         final int photoCount;
+        final boolean persistent;
 
         ChatLine(boolean user, String text, int photoCount) {
+            this(user, text, photoCount, true);
+        }
+
+        ChatLine(boolean user, String text, int photoCount,
+                boolean persistent) {
             this.user = user;
             this.text = IntakeEvent.clean(text);
             this.photoCount = photoCount;
+            this.persistent = persistent;
         }
     }
 
@@ -118,7 +135,11 @@ final class IntakeComposer {
             new ArrayList<>());
     private final ArrayList<File> pendingPhotos = new ArrayList<>();
     private final ArrayList<ChatLine> chatLines = new ArrayList<>();
+    private final IntakeChatCardHistory actionCardHistory =
+            new IntakeChatCardHistory();
     private final IntakeDraft insulinDraft = new IntakeDraft();
+    private String intakeClientSessionId = UUID.randomUUID().toString();
+    private final Runnable backendConfigurationListener;
 
     private View root;
     private TextView backendStatus;
@@ -126,6 +147,32 @@ final class IntakeComposer {
     private boolean closed;
     private boolean busy;
     private boolean destroying;
+    private boolean intakeSessionStarting;
+    private int intakeSessionGeneration;
+    private boolean sessionFailureShown;
+    private String intakeSessionId = "";
+    private String lastActionId = "";
+    private Runnable afterIntakeSessionReady;
+    private IntakeChatTurn lastIntakeTurn;
+    /** Last reversible backend action, independent from later clarification. */
+    private IntakeChatTurn lastActionTurn;
+    /** Keeps the last action card as a durable tombstone after Undo. */
+    private boolean lastActionDeleted;
+    private IntakeRepository.Cancellable intakeTurnCall;
+    private File intakeTurnAudio;
+    private final ArrayList<File> activeIntakePhotos = new ArrayList<>();
+    private String retryClientTurnId = "";
+    /** Fingerprint of the backend that owns the pending idempotency key. */
+    private String retryBackendFingerprint = "";
+    private String retryTurnText = "";
+    private long retryTurnOccurredAtMs;
+    private File retryTurnAudio;
+    private final ArrayList<File> retryTurnPhotos = new ArrayList<>();
+    private boolean retryTurnDefinitiveFailure;
+    private boolean retryTurnCommitMayHaveOccurred;
+    private int retryTurnControlKind = CONTROL_NONE;
+    private File deferredIntakeAudio;
+    private int renderedChatLineCount;
 
     // Insulin screen state.
     private EditText insulinDose;
@@ -145,6 +192,7 @@ final class IntakeComposer {
     // Meal conversation state.
     private final String mealClientEventId = UUID.randomUUID().toString();
     private long mealOccurredAtMs = System.currentTimeMillis();
+    private boolean mealTimeExplicitForNextTurn;
     private long pendingMealOccurredAtMs = mealOccurredAtMs;
     private String mealSessionId = "";
     private boolean mealTimeUpdating;
@@ -156,6 +204,7 @@ final class IntakeComposer {
     private MealChatSession.Proposal mealProposal;
     private ScrollView mealScroll;
     private LinearLayout mealMessages;
+    private LinearLayout mealActionHistory;
     private HorizontalScrollView attachmentScroll;
     private LinearLayout attachmentList;
     private TextView mealTime;
@@ -164,6 +213,10 @@ final class IntakeComposer {
     private View mealVoice;
     private ImageView mealVoiceIcon;
     private ProgressBar mealVoiceProgress;
+    private TextView intakeVoiceHint;
+    private TextView intakeInlineError;
+    private int intakeInlineErrorMessage;
+    private int intakeInlineErrorAction = INLINE_ERROR_NONE;
     private View mealSend;
     private ImageView mealSendIcon;
     private ProgressBar mealSendProgress;
@@ -175,7 +228,11 @@ final class IntakeComposer {
     private TextView proposalConfidence;
     private TextView proposalWarnings;
     private TextView proposalTime;
+    private TextView proposalHint;
     private Button mealConfirm;
+    private Button intakeReconcile;
+    private boolean correctionMode;
+    private String correctionSummary = "";
     private int pendingPhotoImports;
 
     // Camera and voice state.
@@ -184,6 +241,10 @@ final class IntakeComposer {
     private File recordingFile;
     private boolean recording;
     private boolean recorderReachedLimit;
+    /** Consumed only after the first unified-chat root is actually attached. */
+    private boolean initialVoiceAutoStartPending = true;
+    private boolean recordPermissionRequestInFlight;
+    private int voiceStatusMessage;
     private boolean transcribing;
     private int transcriptionGeneration;
     private String deferredTranscript = "";
@@ -193,10 +254,13 @@ final class IntakeComposer {
     IntakeComposer(MainActivity activity) {
         this.activity = activity;
         repository = IntakeRepository.get(activity);
+        backendConfigurationListener = this::onBackendConfigurationChanged;
+        repository.addConfigurationListener(backendConfigurationListener);
         previousSoftInputMode = activity.getWindow().getAttributes()
                 .softInputMode;
         chatLines.add(new ChatLine(false,
-                activity.getString(R.string.meal_chat_intro), 0));
+                activity.getString(R.string.meal_chat_intro), 0, false));
+        restorePendingTurnState();
         cleanStaleMedia();
     }
 
@@ -208,7 +272,7 @@ final class IntakeComposer {
         activity.getWindow().setSoftInputMode(
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
                         | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-        showChooserInternal();
+        showMeal();
         MainActivity.setonback(this::handleSystemBack);
     }
 
@@ -353,7 +417,7 @@ final class IntakeComposer {
         insulinProduct.setEnabled(!value);
         insulinTime.setEnabled(!value);
         root.findViewById(R.id.intake_back_button).setEnabled(!value);
-        if (backendStatus != null) backendStatus.setEnabled(!value);
+        updateBackendSettingsAvailability();
     }
 
     private void showManualMeal() {
@@ -462,9 +526,11 @@ final class IntakeComposer {
         mode = Mode.MEAL;
         replaceRoot(R.layout.modern_meal_chat);
         root.findViewById(R.id.intake_back_button)
-                .setOnClickListener(view -> childBack());
+                .setOnClickListener(view -> requestClose(true));
         mealScroll = root.findViewById(R.id.meal_chat_scroll);
         mealMessages = root.findViewById(R.id.meal_chat_messages);
+        mealActionHistory = root.findViewById(
+                R.id.meal_chat_action_history);
         attachmentScroll = root.findViewById(
                 R.id.meal_chat_attachment_scroll);
         attachmentList = root.findViewById(R.id.meal_chat_attachments);
@@ -475,6 +541,13 @@ final class IntakeComposer {
         mealVoiceIcon = root.findViewById(R.id.meal_chat_voice_icon);
         mealVoiceProgress = root.findViewById(
                 R.id.meal_chat_voice_progress);
+        intakeVoiceHint = root.findViewById(R.id.intake_chat_voice_hint);
+        intakeVoiceHint.setAccessibilityLiveRegion(
+                View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        intakeInlineError = root.findViewById(
+                R.id.intake_chat_inline_error);
+        intakeInlineError.setAccessibilityLiveRegion(
+                View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE);
         mealSend = root.findViewById(R.id.meal_chat_send);
         mealSendIcon = root.findViewById(R.id.meal_chat_send_icon);
         mealSendProgress = root.findViewById(
@@ -490,13 +563,19 @@ final class IntakeComposer {
         proposalWarnings = root.findViewById(
                 R.id.meal_chat_proposal_warnings);
         proposalTime = root.findViewById(R.id.meal_chat_proposal_time);
+        proposalHint = root.findViewById(R.id.meal_chat_proposal_hint);
         mealConfirm = root.findViewById(R.id.meal_chat_confirm);
+        intakeReconcile = root.findViewById(R.id.intake_chat_reconcile);
         mealTime.setOnClickListener(view -> mealTimeAction());
-        proposalTime.setOnClickListener(view -> mealTimeAction());
+        // The result-card timestamp describes the saved action. The time chip
+        // above the conversation controls the next turn.
+        proposalTime.setOnClickListener(null);
+        ViewCompat.setAccessibilityHeading(proposalTitle, true);
         mealAttach.setOnClickListener(view -> choosePhotoAction());
         mealVoice.setOnClickListener(view -> voiceAction());
         mealSend.setOnClickListener(view -> sendMealMessage());
         mealConfirm.setOnClickListener(view -> confirmMeal());
+        intakeReconcile.setOnClickListener(view -> reconcilePendingTurn());
         mealInput.setOnEditorActionListener((view, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_SEND) {
                 sendMealMessage();
@@ -509,8 +588,21 @@ final class IntakeComposer {
         updateMealTime();
         updateAttachments();
         updateProposal();
+        updateCorrectionUi();
+        updateInlineError();
         applyDeferredTranscript();
         scrollChatToBottom();
+        if (!retryClientTurnId.isEmpty()) {
+            mealInput.setText(retryTurnControlKind != CONTROL_NONE
+                    ? "" : retryTurnText);
+            // Never submit a restored medical fact merely because a screen
+            // reopened. Send performs an exact same-ID retry; Resolve lets the
+            // user deliberately discard it after checking the timeline.
+            setMealBusy(false);
+        } else {
+            ensureIntakeSession(null);
+        }
+        scheduleInitialVoiceRecording();
     }
 
     private void sendMealMessage() {
@@ -527,85 +619,362 @@ final class IntakeComposer {
             toast(R.string.meal_chat_voice_transcribing);
             return;
         }
-        String text = IntakeEvent.clean(mealInput.getText().toString());
-        if (text.isEmpty() && pendingPhotos.isEmpty()) {
+        String currentText = IntakeEvent.clean(
+                mealInput.getText().toString());
+        if (!retryClientTurnId.isEmpty()
+                && (currentText.equals(retryTurnText)
+                        || retryTurnControlKind != CONTROL_NONE
+                        && currentText.isEmpty())
+                && pendingPhotos.equals(retryTurnPhotos)) {
+            retryPendingIntakeTurn();
+            return;
+        }
+        if (!retryClientTurnId.isEmpty()) clearPendingTurnRetry(true);
+        if (currentText.isEmpty() && pendingPhotos.isEmpty()) {
             toast(R.string.meal_chat_empty_message);
             return;
         }
-        ArrayList<File> photos = new ArrayList<>(pendingPhotos);
-        mealConfirming = false;
-        mealSending = true;
-        clearProposalForRevision();
-        setMealBusy(true);
-        if (mealSessionId.isEmpty()) {
-            repository.startMealChat(mealClientEventId, mealOccurredAtMs,
-                    new IntakeRepository.Callback<MealChatSession>() {
-                @Override public void onSuccess(MealChatSession session) {
-                    if (closed) return;
-                    if (session.id.isEmpty()) {
-                        mealSending = false;
-                        setMealBusy(false);
-                        toast(R.string.meal_chat_invalid_session);
-                        return;
-                    }
-                    mealSessionId = session.id;
-                    if (session.occurredAtMs > 0L) {
-                        mealOccurredAtMs = session.occurredAtMs;
-                        pendingMealOccurredAtMs = mealOccurredAtMs;
-                    }
-                    updateMealTime();
-                    sendMealTurn(text, photos);
-                }
+        sendIntakeTurn(null);
+    }
 
-                @Override public void onError(String message) {
-                    if (closed) return;
-                    mealSending = false;
-                    setMealBusy(false);
-                    toast(activity.getString(
-                            R.string.meal_chat_start_error, message));
+    private void ensureIntakeSession(Runnable ready) {
+        if (closed) return;
+        if (!intakeSessionId.isEmpty()) {
+            if (ready != null) ready.run();
+            return;
+        }
+        if (ready != null) afterIntakeSessionReady = ready;
+        if (intakeSessionStarting) return;
+        intakeSessionStarting = true;
+        final int generation = intakeSessionGeneration;
+        repository.startIntakeChat(intakeClientSessionId,
+                new IntakeRepository.Callback<IntakeChatSession>() {
+            @Override public void onSuccess(IntakeChatSession session) {
+                if (closed || generation != intakeSessionGeneration) return;
+                intakeSessionStarting = false;
+                if (session == null || session.id.isEmpty()) {
+                    failIntakeSession(activity.getString(
+                            R.string.intake_chat_session_error));
+                    return;
                 }
-            });
-        } else {
-            sendMealTurn(text, photos);
+                intakeSessionId = session.id;
+                sessionFailureShown = false;
+                clearInlineErrorIf(INLINE_ERROR_CONNECTION);
+                persistChatState();
+                Runnable pending = afterIntakeSessionReady;
+                afterIntakeSessionReady = null;
+                if (pending != null) pending.run();
+            }
+
+            @Override public void onError(String message) {
+                if (closed || generation != intakeSessionGeneration) return;
+                intakeSessionStarting = false;
+                failIntakeSession(activity.getString(
+                        R.string.meal_chat_start_error, message));
+            }
+        });
+    }
+
+    private void failIntakeSession(String message) {
+        boolean wasWaiting = afterIntakeSessionReady != null;
+        afterIntakeSessionReady = null;
+        if (wasWaiting) {
+            releaseIntakeTurnFile(intakeTurnAudio, false);
+            transcribing = false;
+            mealSending = false;
+            setMealBusy(false);
+        }
+        if (!sessionFailureShown) {
+            sessionFailureShown = true;
+            showInlineError(R.string.intake_chat_connection_inline_error,
+                    INLINE_ERROR_CONNECTION);
         }
     }
 
-    private void sendMealTurn(String text, ArrayList<File> photos) {
-        repository.sendMealChat(mealSessionId, text, photos,
-                new IntakeRepository.Callback<MealChatSession.Turn>() {
-            @Override public void onSuccess(MealChatSession.Turn turn) {
-                if (closed) return;
-                chatLines.add(new ChatLine(true, text, photos.size()));
-                chatLines.add(new ChatLine(false,
-                        turn.assistantMessage.text, 0));
-                mealProposal = turn.proposal;
-                mealReadyToConfirm = turn.readyToConfirm;
-                clearSentMedia(photos);
-                if (mealInput != null) mealInput.setText("");
+    private void sendIntakeTurn(File audio) {
+        sendIntakeTurn(audio, null, CONTROL_NONE);
+    }
+
+    private void sendIntakeTurn(File audio, String controlText,
+            int controlKind) {
+        boolean controlTurn = controlKind != CONTROL_NONE;
+        if (closed || mode != Mode.MEAL || busy) {
+            deleteTemporary(audio);
+            return;
+        }
+        if (pendingPhotoImports > 0) {
+            if (audio != null) {
+                deleteTemporary(deferredIntakeAudio);
+                deferredIntakeAudio = audio;
+                transcribing = true;
+                updateAttachments();
+            }
+            toast(R.string.meal_chat_media_processing);
+            return;
+        }
+        String text = controlTurn ? IntakeEvent.clean(controlText)
+                : IntakeEvent.clean(mealInput == null ? ""
+                        : mealInput.getText().toString());
+        ArrayList<File> photos = controlTurn
+                ? new ArrayList<>() : new ArrayList<>(pendingPhotos);
+        if (text.isEmpty() && photos.isEmpty() && audio == null) {
+            toast(R.string.meal_chat_empty_message);
+            return;
+        }
+        final String clientTurnId = UUID.randomUUID().toString();
+        if (!retryClientTurnId.isEmpty()) clearPendingTurnRetry(true);
+        if (!controlTurn && !mealTimeExplicitForNextTurn) {
+            mealOccurredAtMs = System.currentTimeMillis();
+            pendingMealOccurredAtMs = mealOccurredAtMs;
+            updateMealTime();
+        }
+        if (!controlTurn) mealTimeExplicitForNextTurn = false;
+        final long occurredAtMs = controlTurn
+                ? System.currentTimeMillis() : mealOccurredAtMs;
+        if (!rememberPendingTurn(clientTurnId, occurredAtMs, text, audio,
+                photos, controlKind)) {
+            clearPendingTurnRetry(false);
+            deleteTemporary(audio);
+            toast(R.string.intake_chat_pending_save_error);
+            return;
+        }
+        intakeTurnAudio = audio;
+        mealConfirming = controlKind == CONTROL_DELETE;
+        mealSending = true;
+        transcribing = audio != null;
+        clearInlineError();
+        setMealBusy(true);
+        updateAttachments();
+        ensureIntakeSession(() -> startIntakeTurnRequest(clientTurnId,
+                occurredAtMs, text, audio, photos, controlKind));
+    }
+
+    private void retryPendingIntakeTurn() {
+        if (retryClientTurnId.isEmpty() || busy || closed) return;
+        if (!pendingTurnMatchesBackend()) {
+            showInlineError(R.string.intake_backend_change_pending,
+                    INLINE_ERROR_RESOLVE_TURN);
+            if (mealSend != null) mealSend.setEnabled(false);
+            updateReconcileAction();
+            return;
+        }
+        clearInlineError();
+        intakeTurnAudio = retryTurnAudio;
+        mealConfirming = retryTurnControlKind == CONTROL_DELETE;
+        mealSending = true;
+        transcribing = retryTurnAudio != null;
+        setMealBusy(true);
+        updateAttachments();
+        ArrayList<File> photos = new ArrayList<>(retryTurnPhotos);
+        ensureIntakeSession(() -> startIntakeTurnRequest(retryClientTurnId,
+                retryTurnOccurredAtMs, retryTurnText, retryTurnAudio,
+                photos, retryTurnControlKind));
+    }
+
+    private boolean rememberPendingTurn(String clientTurnId, long occurredAtMs,
+            String text, File audio, List<File> photos,
+            int controlKind) {
+        retryClientTurnId = clientTurnId;
+        retryBackendFingerprint = backendFingerprint();
+        retryTurnOccurredAtMs = occurredAtMs;
+        retryTurnText = text;
+        retryTurnAudio = audio;
+        retryTurnPhotos.clear();
+        retryTurnPhotos.addAll(photos);
+        retryTurnDefinitiveFailure = false;
+        retryTurnCommitMayHaveOccurred = false;
+        retryTurnControlKind = controlKind;
+        updateBackendSettingsAvailability();
+        return persistChatState();
+    }
+
+    private void clearPendingTurnRetry(boolean deleteAudio) {
+        File audio = retryTurnAudio;
+        retryClientTurnId = "";
+        retryBackendFingerprint = "";
+        retryTurnOccurredAtMs = 0L;
+        retryTurnText = "";
+        retryTurnAudio = null;
+        retryTurnPhotos.clear();
+        retryTurnDefinitiveFailure = false;
+        retryTurnCommitMayHaveOccurred = false;
+        retryTurnControlKind = CONTROL_NONE;
+        if (deleteAudio) deleteTemporary(audio);
+        updateBackendSettingsAvailability();
+        updateReconcileAction();
+    }
+
+    private void startIntakeTurnRequest(String clientTurnId,
+            long occurredAtMs, String text, File audio,
+            ArrayList<File> photos, int controlKind) {
+        boolean controlTurn = controlKind != CONTROL_NONE;
+        if (closed) {
+            releaseIntakeTurnFile(audio, false);
+            return;
+        }
+        activeIntakePhotos.clear();
+        activeIntakePhotos.addAll(photos);
+        intakeTurnCall = repository.sendIntakeChat(intakeSessionId,
+                clientTurnId, occurredAtMs, text, audio, photos,
+                new IntakeRepository.Callback<IntakeChatTurn>() {
+            @Override public void onSuccess(IntakeChatTurn turn) {
+                releaseIntakeTurnFile(audio, true);
+                clearPendingTurnRetry(false);
+                invalidateStaleControlTarget(turn, controlKind);
+                if (closed) {
+                    rememberActionReceipt(turn, false);
+                    for (File photo : photos) deleteTemporary(photo);
+                    return;
+                }
+                intakeTurnCall = null;
+                activeIntakePhotos.clear();
+                transcribing = false;
                 mealSending = false;
+                clearInlineError();
+                String userText = IntakeEvent.clean(turn.transcript);
+                if (userText.isEmpty()) userText = text;
+                if (userText.isEmpty() && audio != null) {
+                    userText = activity.getString(R.string.meal_chat_user_voice);
+                }
+                if (!controlTurn) {
+                    chatLines.add(new ChatLine(true, userText, photos.size()));
+                }
+                if (!turn.assistantMessage.isEmpty()) {
+                    chatLines.add(new ChatLine(false,
+                            turn.assistantMessage, 0));
+                }
+                if (!controlTurn) {
+                    clearSentMedia(photos);
+                    if (mealInput != null) mealInput.setText("");
+                }
+                if (controlKind == CONTROL_DELETE) mealConfirming = false;
+                acceptIntakeTurn(turn);
                 setMealBusy(false);
-                if (mode == Mode.MEAL) {
-                    renderChat();
-                    updateAttachments();
-                    updateProposal();
-                    scrollChatToBottom();
+                // Applied/undone receipts leave correction mode immediately.
+                // Refresh the input hint as well as the card so it cannot keep
+                // naming the pre-correction value after a successful replace.
+                updateCorrectionUi();
+                renderChat();
+                updateAttachments();
+                updateProposal();
+                scrollChatToBottom();
+                if (controlKind == CONTROL_REVISION
+                        && IntakeChatTurn.OUTCOME_CLARIFICATION.equalsIgnoreCase(
+                                turn.outcome)) {
+                    prepareCorrectionInput();
                 }
             }
 
             @Override public void onError(String message) {
-                if (closed) return;
-                mealSending = false;
-                setMealBusy(false);
-                String error = activity.getString(R.string.meal_chat_error,
-                        message);
-                toast(error);
-                if (mode == Mode.MEAL) {
-                    chatLines.add(new ChatLine(false, error, 0));
-                    renderChat();
-                    scrollChatToBottom();
-                }
+                handleIntakeTurnFailure(audio, message, false, false);
+            }
+
+            @Override public void onDefinitiveError(String message,
+                    boolean commitMayHaveOccurred) {
+                handleIntakeTurnFailure(audio, message, true,
+                        commitMayHaveOccurred);
             }
         });
+    }
+
+    private void handleIntakeTurnFailure(File audio, String message,
+            boolean definitive, boolean commitMayHaveOccurred) {
+        releaseIntakeTurnFile(audio, false);
+        if (definitive) {
+            retryTurnDefinitiveFailure = true;
+            retryTurnCommitMayHaveOccurred = commitMayHaveOccurred;
+            persistChatState();
+        }
+        if (closed) {
+            // Keep the durable payload for exact same-ID reconciliation when
+            // the user reopens the conversation.
+            return;
+        }
+        intakeTurnCall = null;
+        activeIntakePhotos.clear();
+        transcribing = false;
+        mealSending = false;
+        mealConfirming = false;
+        setMealBusy(false);
+        if (definitive) {
+            showInlineError(R.string.intake_chat_rejected_inline_error,
+                    INLINE_ERROR_RESOLVE_TURN);
+        } else {
+            showInlineError(R.string.intake_chat_retry_inline_error,
+                    INLINE_ERROR_RETRY_TURN);
+        }
+        persistChatState();
+        renderChat();
+        updateAttachments();
+        updateReconcileAction();
+        scrollChatToBottom();
+    }
+
+    private void releaseIntakeTurnFile(File audio, boolean delete) {
+        if (intakeTurnAudio == audio) intakeTurnAudio = null;
+        if (delete) deleteTemporary(audio);
+    }
+
+    private void acceptIntakeTurn(IntakeChatTurn turn) {
+        rememberActionReceipt(turn, true);
+    }
+
+    /**
+     * A deterministic control returning no_change means the backend no longer
+     * has the action represented by our cached card. Keep the receipt visible
+     * for this screen, but never let the user repeatedly mutate a stale target
+     * or enter a correction flow that could create a new record by mistake.
+     */
+    private boolean invalidateStaleControlTarget(IntakeChatTurn turn,
+            int controlKind) {
+        if (controlKind == CONTROL_NONE || turn == null
+                || !IntakeChatTurn.OUTCOME_NO_CHANGE.equalsIgnoreCase(
+                        turn.outcome)) {
+            return false;
+        }
+        lastActionId = "";
+        lastActionDeleted = false;
+        correctionMode = false;
+        correctionSummary = "";
+        return true;
+    }
+
+    private void rememberActionReceipt(IntakeChatTurn turn,
+            boolean renderGraph) {
+        if (turn == null) return;
+        lastIntakeTurn = turn;
+        actionCardHistory.accept(turn);
+        if (IntakeChatTurn.OUTCOME_APPLIED.equalsIgnoreCase(turn.outcome)
+                && !turn.actionId.isEmpty()) {
+            lastActionId = turn.actionId;
+            lastActionTurn = turn;
+            lastActionDeleted = false;
+            correctionMode = false;
+            correctionSummary = "";
+        }
+        if (IntakeChatTurn.OUTCOME_UNDONE.equalsIgnoreCase(turn.outcome)
+                || IntakeChatTurn.OUTCOME_ALREADY_UNDONE.equalsIgnoreCase(
+                        turn.outcome)) {
+            lastActionId = "";
+            if (turn.events.isEmpty()) {
+                // A create was removed. Keep its previous applied receipt so
+                // the card can remain as an informative tombstone.
+                lastActionDeleted = true;
+                if (lastActionTurn == null) lastActionTurn = turn;
+            } else {
+                // Undoing a replacement restored the previous record. Show
+                // the restored facts as Changed, never as a deletion.
+                lastActionTurn = turn;
+                lastActionDeleted = false;
+            }
+            correctionMode = false;
+            correctionSummary = "";
+        }
+        persistChatState();
+        if (renderGraph && (!turn.events.isEmpty()
+                || !turn.deletedEventIds.isEmpty())) {
+            activity.requestRender();
+        }
     }
 
     /**
@@ -626,44 +995,96 @@ final class IntakeComposer {
         }
     }
 
-    private void confirmMeal() {
-        if (mealTimeUpdating) {
-            confirmAfterTimeUpdate = true;
-            return;
-        }
-        if (mealTimeSyncUnknown) {
-            toast(R.string.meal_chat_time_sync_required);
-            return;
-        }
-        if (busy || mealSessionId.isEmpty() || !mealReadyToConfirm
-                || mealProposal == null) return;
-        mealSending = false;
-        mealConfirming = true;
-        setMealBusy(true);
-        repository.confirmMealChat(mealSessionId,
-                new IntakeRepository.Callback<IntakeEvent>() {
-            @Override public void onSuccess(IntakeEvent value) {
-                if (closed) return;
-                toast(R.string.meal_chat_confirmed);
-                activity.requestRender();
-                mealConfirming = false;
-                setMealBusy(false);
-                close(true);
-            }
+    private void prepareCorrectionInput() {
+        if (lastActionDeleted || lastActionTurn == null) return;
+        correctionMode = true;
+        correctionSummary = primaryActionSummary(lastActionTurn);
+        updateCorrectionUi();
+        scrollChatToBottom();
+        if (mealVoice != null) mealVoice.requestFocus();
+    }
 
-            @Override public void onError(String message) {
-                if (closed) return;
-                mealConfirming = false;
-                setMealBusy(false);
-                toast(activity.getString(R.string.meal_chat_error, message));
-            }
-        });
+    private void updateCorrectionUi() {
+        if (mealInput != null) {
+            mealInput.setHint(correctionMode
+                    ? activity.getString(R.string.intake_chat_correction_input_hint,
+                            correctionSummary)
+                    : activity.getString(R.string.meal_chat_message_hint));
+        }
+        updateVoiceButton();
+    }
+
+    /** Delete is an explicit chat control, distinct from inverse Undo. */
+    private void confirmMeal() {
+        if (busy || lastActionDeleted || lastActionId.isEmpty()) return;
+        correctionMode = false;
+        correctionSummary = "";
+        updateCorrectionUi();
+        clearInlineError();
+        sendIntakeTurn(null, activity.getString(
+                R.string.intake_chat_delete_control), CONTROL_DELETE);
+    }
+
+    private void reconcilePendingTurn() {
+        if (closed || busy || retryClientTurnId.isEmpty()) return;
+        int message = !retryTurnDefinitiveFailure
+                || retryTurnCommitMayHaveOccurred
+                ? R.string.intake_chat_reconcile_uncertain
+                : R.string.intake_chat_reconcile_safe;
+        new AlertDialog.Builder(activity)
+                .setTitle(R.string.intake_chat_reconcile_title)
+                .setMessage(message)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.intake_chat_reconcile_confirm,
+                        (dialog, which) -> discardPendingTurnAndStartFresh())
+                .show();
+    }
+
+    private void discardPendingTurnAndStartFresh() {
+        if (closed || busy || retryClientTurnId.isEmpty()) return;
+        ArrayList<File> failedPhotos = new ArrayList<>(retryTurnPhotos);
+        clearPendingTurnRetry(true);
+        for (File photo : failedPhotos) {
+            pendingPhotos.remove(photo);
+            deleteTemporary(photo);
+        }
+        intakeSessionGeneration++;
+        intakeClientSessionId = UUID.randomUUID().toString();
+        intakeSessionId = "";
+        intakeSessionStarting = false;
+        afterIntakeSessionReady = null;
+        sessionFailureShown = false;
+        lastActionId = "";
+        lastIntakeTurn = null;
+        lastActionTurn = null;
+        lastActionDeleted = false;
+        actionCardHistory.clear();
+        correctionMode = false;
+        correctionSummary = "";
+        if (mealInput != null) mealInput.setText("");
+        clearInlineError();
+        chatLines.add(new ChatLine(false, activity.getString(
+                R.string.intake_chat_reconcile_complete), 0));
+        persistChatState();
+        setMealBusy(false);
+        renderChat();
+        updateAttachments();
+        updateProposal();
+        scrollChatToBottom();
+        ensureIntakeSession(null);
     }
 
     private void renderChat() {
         if (mealMessages == null) return;
-        mealMessages.removeAllViews();
-        for (ChatLine line : chatLines) addChatBubble(line);
+        if (renderedChatLineCount > chatLines.size()
+                || mealMessages.getChildCount() != renderedChatLineCount) {
+            mealMessages.removeAllViews();
+            renderedChatLineCount = 0;
+        }
+        while (renderedChatLineCount < chatLines.size()) {
+            addChatBubble(chatLines.get(renderedChatLineCount));
+            renderedChatLineCount++;
+        }
     }
 
     private void addChatBubble(ChatLine line) {
@@ -689,8 +1110,10 @@ final class IntakeComposer {
         bubble.setTextSize(14.0f);
         bubble.setLineSpacing(0.0f, 1.08f);
         bubble.setPadding(dp(14), dp(11), dp(14), dp(11));
-        bubble.setMaxWidth((int) (activity.getResources()
-                .getDisplayMetrics().widthPixels * 0.84f));
+        int windowWidth = root != null && root.getWidth() > 0
+                ? root.getWidth() : activity.getResources()
+                .getDisplayMetrics().widthPixels;
+        bubble.setMaxWidth(Math.min((int) (windowWidth * 0.84f), dp(704)));
         bubble.setBackgroundResource(line.user
                 ? R.drawable.intake_chat_user
                 : R.drawable.intake_chat_assistant);
@@ -701,87 +1124,363 @@ final class IntakeComposer {
 
     private void updateProposal() {
         if (proposalCard == null) return;
-        if (mealProposal == null) {
+        IntakeChatTurn turn = lastActionTurn;
+        IntakeChatCardHistory.Card current =
+                actionCardHistory.primaryForTurn(turn);
+        renderActionCardHistory(current);
+        if (turn == null || current == null) {
             proposalCard.setVisibility(GONE);
             return;
         }
+
+        IntakeEvent event = current.event();
+        boolean inactive = !current.isActive();
         proposalCard.setVisibility(VISIBLE);
-        proposalTitle.setText(mealReadyToConfirm
-                ? R.string.meal_chat_proposal_ready_title
-                : R.string.meal_chat_proposal_title);
-        String name = mealProposal.mealName.isEmpty()
-                ? mealProposal.mealDescription : mealProposal.mealName;
-        proposalMeal.setText(mealProposal.totalPortionGrams > 0.0f
-                ? activity.getString(R.string.meal_chat_proposal_meal, name,
-                        formatNumber(mealProposal.totalPortionGrams))
-                : activity.getString(
-                        R.string.meal_chat_proposal_meal_no_portion, name));
-        proposalCarbs.setText(activity.getString(
-                R.string.meal_chat_proposal_carbs,
-                formatNumber(mealProposal.estimatedCarbsGrams),
-                formatNumber(mealProposal.carbsLowGrams),
-                formatNumber(mealProposal.carbsHighGrams)));
-        proposalAbsorption.setText(CarbAbsorptionUi.details(activity,
-                mealProposal.absorptionSpeed,
-                mealProposal.absorptionPeakMinutes,
-                mealProposal.absorptionDurationMinutes,
-                mealProposal.absorptionConfidence));
-        proposalConfidence.setText(activity.getString(
-                R.string.meal_chat_proposal_confidence,
-                Math.round(mealProposal.confidence * 100.0f)));
-        proposalTime.setText(activity.getString(mealTimeSyncUnknown
-                        ? R.string.meal_chat_proposal_time_retry
-                        : mealTimeUpdating
-                        ? R.string.meal_chat_proposal_time_updating
-                        : R.string.meal_chat_proposal_time_action,
-                formatProposalTime(mealOccurredAtMs)));
-        proposalTime.setEnabled(!busy);
-        proposalTime.setAlpha(busy ? 0.68f : 1.0f);
-        if (mealProposal.warnings.isEmpty()) {
-            proposalWarnings.setVisibility(GONE);
+        proposalCard.setEnabled(!inactive);
+        proposalCard.setClickable(false);
+        proposalCard.setFocusable(false);
+        proposalCard.setBackgroundResource(inactive
+                ? R.drawable.intake_chat_proposal_inactive
+                : R.drawable.intake_chat_proposal);
+
+        boolean corrected = current.isActive()
+                && (!turn.deletedEventIds.isEmpty()
+                || IntakeChatTurn.OUTCOME_UNDONE.equalsIgnoreCase(turn.outcome)
+                || IntakeChatTurn.OUTCOME_ALREADY_UNDONE.equalsIgnoreCase(
+                        turn.outcome));
+        proposalTitle.setText(cardStatusText(current, corrected));
+        proposalTitle.setTextColor(ContextCompat.getColor(activity,
+                inactive ? R.color.modern_secondary_text_secondary
+                        : R.color.modern_secondary_accent));
+        proposalMeal.setText(eventSummary(event));
+        proposalMeal.setTextColor(ContextCompat.getColor(activity,
+                inactive ? R.color.modern_secondary_text_secondary
+                        : R.color.modern_secondary_text_primary));
+        proposalCarbs.setText("");
+        int summaryFlags = proposalMeal.getPaintFlags();
+        proposalMeal.setPaintFlags(inactive
+                ? summaryFlags | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
+                : summaryFlags & ~android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
+
+        boolean estimatedMeal = event.hasMeal()
+                && (event.carbsSource.toLowerCase(Locale.ROOT).contains("ai")
+                || !event.analysisId.isEmpty());
+        if (!inactive && event.hasAbsorptionSpeed()) {
+            proposalAbsorption.setText(CarbAbsorptionUi.details(activity,
+                    event.absorptionSpeed,
+                    event.absorptionPeakMinutes,
+                    event.absorptionDurationMinutes,
+                    event.absorptionConfidence));
+            proposalAbsorption.setVisibility(VISIBLE);
         } else {
+            proposalAbsorption.setVisibility(GONE);
+        }
+        if (!inactive && estimatedMeal) {
+            proposalConfidence.setText(event.aiConfidence > 0.0f
+                    ? activity.getString(R.string.intake_chat_ai_estimate_confidence,
+                            Math.round(event.aiConfidence * 100.0f))
+                    : activity.getString(R.string.intake_chat_ai_estimate));
+            proposalConfidence.setVisibility(VISIBLE);
+            proposalWarnings.setText(R.string.intake_chat_ai_warning);
             proposalWarnings.setVisibility(VISIBLE);
-            proposalWarnings.setText(join(mealProposal.warnings, "\n• ",
-                    "• "));
-        }
-        mealConfirm.setVisibility(mealReadyToConfirm ? VISIBLE : GONE);
-        mealConfirm.setEnabled(mealReadyToConfirm && !busy
-                && !mealTimeSyncUnknown);
-        if (mealTimeSyncUnknown) {
-            mealConfirm.setText(R.string.meal_chat_confirm_time_sync_required);
         } else {
-            mealConfirm.setText(activity.getString(
-                    R.string.meal_chat_confirm_at_button,
-                    DateFormat.getTimeInstance(DateFormat.SHORT)
-                            .format(new Date(mealOccurredAtMs))));
+            proposalConfidence.setVisibility(GONE);
+            proposalWarnings.setVisibility(GONE);
         }
+        proposalTime.setText(activity.getString(
+                R.string.intake_chat_action_time,
+                formatProposalTime(event.occurredAtMs)));
+        proposalTime.setTextColor(ContextCompat.getColor(activity,
+                inactive ? R.color.modern_secondary_text_secondary
+                        : R.color.modern_secondary_text_primary));
+        proposalTime.setVisibility(VISIBLE);
+
+        boolean currentAction = current.isActive() && !lastActionDeleted
+                && !lastActionId.isEmpty()
+                && lastActionId.equals(current.actionId);
+        boolean cardDeleteAvailable = currentAction
+                && IntakeChatCardHistory.supportsSingleCardDelete(turn);
+        boolean compoundAction = turn != null && turn.events.size() > 1;
+        boolean controlsEnabled = cardDeleteAvailable && !busy
+                && retryClientTurnId.isEmpty();
+        proposalHint.setText(current.status()
+                == IntakeChatCardHistory.Status.DELETED
+                ? R.string.intake_chat_deleted_hint
+                : current.status() == IntakeChatCardHistory.Status.REPLACED
+                        ? R.string.intake_chat_card_replaced_hint
+                        : currentAction
+                                ? cardDeleteAvailable
+                                        ? R.string.intake_chat_correction_hint
+                                        : compoundAction
+                                                ? R.string.intake_chat_compound_action_hint
+                                                : R.string.intake_chat_active_replacement_hint
+                                : lastActionId.isEmpty()
+                                        ? R.string.intake_chat_card_active_hint
+                                        : R.string.intake_chat_unavailable_hint);
+        proposalHint.setTextColor(ContextCompat.getColor(activity,
+                R.color.modern_secondary_text_secondary));
+        // Historical and tombstoned cards are information, not controls.
+        mealConfirm.setVisibility(cardDeleteAvailable ? VISIBLE : GONE);
+        mealConfirm.setEnabled(controlsEnabled);
+        mealConfirm.setAlpha(controlsEnabled ? 1.0f : 0.52f);
+        mealConfirm.setText(mealConfirming
+                ? R.string.intake_chat_action_deleting
+                : R.string.intake_chat_action_delete);
+        mealConfirm.setContentDescription(activity.getString(
+                R.string.intake_chat_action_delete_description,
+                primaryActionSummary(turn)));
+    }
+
+    private void renderActionCardHistory(
+            IntakeChatCardHistory.Card current) {
+        if (mealActionHistory == null) return;
+        mealActionHistory.removeAllViews();
+        for (IntakeChatCardHistory.Card card : actionCardHistory.cards()) {
+            if (card != current) addHistoricalActionCard(card);
+        }
+    }
+
+    private void addHistoricalActionCard(IntakeChatCardHistory.Card card) {
+        LinearLayout container = new LinearLayout(activity);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(dp(16), dp(14), dp(16), dp(14));
+        container.setBackgroundResource(card.isActive()
+                ? R.drawable.intake_chat_proposal
+                : R.drawable.intake_chat_proposal_inactive);
+        container.setClickable(false);
+        container.setFocusable(false);
+        container.setEnabled(card.isActive());
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                MATCH_PARENT, WRAP_CONTENT);
+        params.topMargin = dp(5);
+        params.bottomMargin = dp(5);
+        container.setLayoutParams(params);
+
+        TextView status = actionCardText(13.0f, true);
+        status.setText(cardStatusText(card, false));
+        status.setTextColor(ContextCompat.getColor(activity,
+                card.isActive() ? R.color.modern_secondary_accent
+                        : R.color.modern_secondary_text_secondary));
+        container.addView(status);
+
+        TextView summary = actionCardText(18.0f, true);
+        summary.setText(eventSummary(card.event()));
+        summary.setTextColor(ContextCompat.getColor(activity,
+                card.isActive() ? R.color.modern_secondary_text_primary
+                        : R.color.modern_secondary_text_secondary));
+        if (!card.isActive()) {
+            summary.setPaintFlags(summary.getPaintFlags()
+                    | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
+        }
+        LinearLayout.LayoutParams summaryParams = new LinearLayout.LayoutParams(
+                MATCH_PARENT, WRAP_CONTENT);
+        summaryParams.topMargin = dp(8);
+        container.addView(summary, summaryParams);
+
+        TextView time = actionCardText(12.0f, false);
+        time.setText(activity.getString(R.string.intake_chat_action_time,
+                formatProposalTime(card.event().occurredAtMs)));
+        time.setTextColor(ContextCompat.getColor(activity,
+                R.color.modern_secondary_text_secondary));
+        LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(
+                MATCH_PARENT, WRAP_CONTENT);
+        timeParams.topMargin = dp(8);
+        container.addView(time, timeParams);
+
+        TextView hint = actionCardText(12.0f, false);
+        hint.setText(cardHistoryHint(card));
+        hint.setTextColor(ContextCompat.getColor(activity,
+                R.color.modern_secondary_text_secondary));
+        LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(
+                MATCH_PARENT, WRAP_CONTENT);
+        hintParams.topMargin = dp(6);
+        container.addView(hint, hintParams);
+
+        container.setContentDescription(activity.getString(
+                R.string.intake_chat_card_description,
+                status.getText(), summary.getText(), time.getText(),
+                hint.getText()));
+        container.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+        ViewCompat.setAccessibilityHeading(container, true);
+        status.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        summary.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        time.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        hint.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        mealActionHistory.addView(container);
+    }
+
+    private TextView actionCardText(float sizeSp, boolean bold) {
+        TextView view = new TextView(activity);
+        view.setTextSize(sizeSp);
+        view.setLineSpacing(0.0f, 1.08f);
+        view.setTextIsSelectable(false);
+        if (bold) view.setTypeface(view.getTypeface(),
+                android.graphics.Typeface.BOLD);
+        return view;
+    }
+
+    private int cardStatusText(IntakeChatCardHistory.Card card,
+            boolean corrected) {
+        if (card.status() == IntakeChatCardHistory.Status.DELETED) {
+            return R.string.intake_chat_action_undone;
+        }
+        if (card.status() == IntakeChatCardHistory.Status.REPLACED) {
+            return R.string.intake_chat_card_replaced;
+        }
+        return corrected ? R.string.intake_chat_action_corrected
+                : R.string.intake_chat_card_active;
+    }
+
+    private int cardHistoryHint(IntakeChatCardHistory.Card card) {
+        if (card.status() == IntakeChatCardHistory.Status.DELETED) {
+            return R.string.intake_chat_deleted_hint;
+        }
+        if (card.status() == IntakeChatCardHistory.Status.REPLACED) {
+            return R.string.intake_chat_card_replaced_hint;
+        }
+        return R.string.intake_chat_card_active_hint;
+    }
+
+    private String eventSummary(IntakeEvent event) {
+        if (event == null) return activity.getString(
+                R.string.intake_chat_no_action);
+        if (event.hasInsulin()) {
+            return activity.getString(R.string.intake_chat_action_insulin,
+                    event.insulinDisplayName(),
+                    formatNumber(event.insulinUnits));
+        }
+        if (event.hasMeal()) {
+            String meal = event.mealText.isEmpty()
+                    ? activity.getString(R.string.intake_details_meal_title)
+                    : event.mealText;
+            return event.hasCarbs()
+                    ? activity.getString(R.string.intake_chat_action_meal,
+                            meal, formatNumber(event.carbsGrams))
+                    : meal;
+        }
+        return activity.getString(R.string.intake_chat_no_action);
+    }
+
+    private ArrayList<String> actionSummaries(IntakeChatTurn turn) {
+        ArrayList<String> summaries = new ArrayList<>();
+        if (turn == null) return summaries;
+        for (IntakeEvent event : turn.events) {
+            if (event.hasInsulin()) {
+                summaries.add(activity.getString(
+                        R.string.intake_chat_action_insulin,
+                        event.insulinDisplayName(),
+                        formatNumber(event.insulinUnits)));
+            } else if (event.hasMeal()) {
+                String meal = event.mealText.isEmpty()
+                        ? activity.getString(R.string.intake_details_meal_title)
+                        : event.mealText;
+                summaries.add(event.hasCarbs()
+                        ? activity.getString(R.string.intake_chat_action_meal,
+                                meal, formatNumber(event.carbsGrams))
+                        : meal);
+            }
+        }
+        return summaries;
+    }
+
+    private String primaryActionSummary(IntakeChatTurn turn) {
+        ArrayList<String> summaries = actionSummaries(turn);
+        return summaries.isEmpty()
+                ? activity.getString(R.string.intake_chat_no_action)
+                : summaries.get(0);
     }
 
     private void setMealBusy(boolean value) {
         busy = value;
         if (mealSend == null) return;
-        mealSend.setEnabled(!value);
-        mealInput.setEnabled(!value);
-        mealAttach.setEnabled(!value);
-        mealTime.setEnabled(!value);
+        boolean pendingUnknown = !retryClientTurnId.isEmpty();
+        mealSend.setEnabled(!value && pendingTurnMatchesBackend());
+        mealInput.setEnabled(!value && !pendingUnknown);
+        mealAttach.setEnabled(!value && !pendingUnknown);
+        mealTime.setEnabled(!value && !pendingUnknown);
         if (proposalTime != null) {
             proposalTime.setEnabled(!value);
             proposalTime.setAlpha(value ? 0.68f : 1.0f);
         }
         root.findViewById(R.id.intake_back_button).setEnabled(!value);
-        if (backendStatus != null) backendStatus.setEnabled(!value);
+        updateBackendSettingsAvailability();
         updateMealTime();
         updateSendButton();
         updateVoiceButton();
-        if (mealConfirm != null) {
-            mealConfirm.setEnabled(!value && mealReadyToConfirm
-                    && !mealTimeSyncUnknown);
-            if (value && mealConfirming) {
-                mealConfirm.setText(R.string.meal_chat_confirming);
-            } else if (mealProposal != null) {
-                updateProposal();
-            }
+        if (mealConfirm != null) updateProposal();
+        updateReconcileAction();
+        updateInlineError();
+    }
+
+    private void showInlineError(int message, int action) {
+        intakeInlineErrorMessage = message;
+        intakeInlineErrorAction = action;
+        updateInlineError();
+    }
+
+    private void clearInlineError() {
+        intakeInlineErrorMessage = 0;
+        intakeInlineErrorAction = INLINE_ERROR_NONE;
+        updateInlineError();
+    }
+
+    private void clearInlineErrorIf(int action) {
+        if (intakeInlineErrorAction == action) clearInlineError();
+    }
+
+    private void updateInlineError() {
+        if (intakeInlineError == null) return;
+        boolean visible = intakeInlineErrorMessage != 0;
+        intakeInlineError.setVisibility(visible ? VISIBLE : GONE);
+        if (!visible) {
+            intakeInlineError.setOnClickListener(null);
+            return;
         }
+        intakeInlineError.setText(intakeInlineErrorMessage);
+        intakeInlineError.setEnabled(!busy);
+        intakeInlineError.setAlpha(busy ? 0.68f : 1.0f);
+        intakeInlineError.setOnClickListener(view -> performInlineErrorAction());
+    }
+
+    private void performInlineErrorAction() {
+        if (closed || busy) return;
+        switch (intakeInlineErrorAction) {
+            case INLINE_ERROR_CONNECTION:
+                sessionFailureShown = false;
+                clearInlineError();
+                checkBackend();
+                ensureIntakeSession(null);
+                break;
+            case INLINE_ERROR_RETRY_TURN:
+                clearInlineError();
+                retryPendingIntakeTurn();
+                break;
+            case INLINE_ERROR_RESOLVE_TURN:
+                reconcilePendingTurn();
+                break;
+            case INLINE_ERROR_UNDO:
+                clearInlineError();
+                confirmMeal();
+                break;
+            case INLINE_ERROR_VOICE:
+                clearInlineError();
+                voiceAction();
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void updateReconcileAction() {
+        if (intakeReconcile == null) return;
+        boolean visible = !retryClientTurnId.isEmpty();
+        intakeReconcile.setVisibility(visible ? VISIBLE : GONE);
+        intakeReconcile.setEnabled(visible && !busy);
     }
 
     private void choosePhotoAction() {
@@ -910,6 +1609,12 @@ final class IntakeComposer {
                     deleteTemporary(normalized);
                 }
                 if (mode == Mode.MEAL) updateAttachments();
+                if (pendingPhotoImports == 0 && deferredIntakeAudio != null) {
+                    File queuedAudio = deferredIntakeAudio;
+                    deferredIntakeAudio = null;
+                    transcribing = false;
+                    sendIntakeTurn(queuedAudio);
+                }
             });
         });
     }
@@ -1021,7 +1726,7 @@ final class IntakeComposer {
             updateAttachments();
         });
         FrameLayout.LayoutParams removeParams = new FrameLayout.LayoutParams(
-                dp(28), dp(28), Gravity.TOP | Gravity.END);
+                dp(48), dp(48), Gravity.TOP | Gravity.END);
         removeParams.topMargin = dp(2);
         removeParams.rightMargin = dp(2);
         card.addView(remove, removeParams);
@@ -1062,8 +1767,37 @@ final class IntakeComposer {
         return BitmapFactory.decodeFile(file.getAbsolutePath(), options);
     }
 
+    private void scheduleInitialVoiceRecording() {
+        if (!initialVoiceAutoStartPending || root == null) return;
+        if (!retryClientTurnId.isEmpty()) {
+            // A restored turn may already have reached the backend. Never
+            // start a new capture after reopening until the user explicitly
+            // retries or resolves that exact pending medical fact.
+            initialVoiceAutoStartPending = false;
+            return;
+        }
+        final View surface = root;
+        surface.post(() -> {
+            if (!initialVoiceAutoStartPending || closed || surface != root
+                    || !surface.isAttachedToWindow()) return;
+            // showMeal() also runs after a Fold/configuration change. Consume
+            // this one-shot only on the currently attached surface so an old
+            // posted callback cannot start a second recorder.
+            initialVoiceAutoStartPending = false;
+            if (canStartVoiceRecording()) requestOrStartRecording();
+        });
+    }
+
     private void voiceAction() {
         if (busy || mode != Mode.MEAL) return;
+        if (!retryClientTurnId.isEmpty()) {
+            toast(R.string.intake_chat_retry_hint);
+            return;
+        }
+        if (pendingPhotoImports > 0) {
+            toast(R.string.meal_chat_media_processing);
+            return;
+        }
         if (transcribing) {
             toast(R.string.meal_chat_voice_transcribing);
             return;
@@ -1072,16 +1806,33 @@ final class IntakeComposer {
             stopRecording(true);
             return;
         }
+        voiceStatusMessage = 0;
         requestOrStartRecording();
     }
 
+    private boolean canStartVoiceRecording() {
+        return !closed && mode == Mode.MEAL && !busy && !recording
+                && recorder == null && !transcribing
+                && pendingPhotoImports == 0 && retryClientTurnId.isEmpty()
+                && !recordPermissionRequestInFlight;
+    }
+
     private void requestOrStartRecording() {
+        if (!canStartVoiceRecording()) return;
+        voiceStatusMessage = 0;
         if (ContextCompat.checkSelfPermission(activity,
                 Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
-            activity.requestPermissions(
-                    new String[]{Manifest.permission.RECORD_AUDIO},
-                    REQUEST_RECORD_AUDIO);
+            recordPermissionRequestInFlight = true;
+            updateVoiceButton();
+            try {
+                activity.requestPermissions(
+                        new String[]{Manifest.permission.RECORD_AUDIO},
+                        REQUEST_RECORD_AUDIO);
+            } catch (RuntimeException error) {
+                recordPermissionRequestInFlight = false;
+                showVoiceError(R.string.intake_voice_permission);
+            }
         } else {
             startRecording();
         }
@@ -1090,15 +1841,21 @@ final class IntakeComposer {
     boolean handlePermissionResult(int requestCode, String[] permissions,
             int[] grantResults) {
         if (requestCode != REQUEST_RECORD_AUDIO) return false;
+        recordPermissionRequestInFlight = false;
         boolean granted = grantResults.length > 0
                 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
-        if (granted && !closed && mode == Mode.MEAL) startRecording();
-        else if (!granted) toast(R.string.intake_voice_permission);
+        if (granted && canStartVoiceRecording()) startRecording();
+        else if (!granted && !closed) {
+            showVoiceError(R.string.intake_voice_permission);
+        } else {
+            updateVoiceButton();
+        }
         return true;
     }
 
     private void startRecording() {
-        stopRecording(false);
+        if (!canStartVoiceRecording()) return;
+        voiceStatusMessage = 0;
         try {
             recordingFile = File.createTempFile("meal-voice-", ".m4a",
                     mediaDirectory());
@@ -1107,8 +1864,11 @@ final class IntakeComposer {
             recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
             recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-            recorder.setAudioSamplingRate(44_100);
-            recorder.setAudioEncodingBitRate(64_000);
+            // Speech-optimized mono audio halves upload/base64 work compared
+            // with the old 44.1 kHz capture without discarding voice detail.
+            recorder.setAudioChannels(1);
+            recorder.setAudioSamplingRate(16_000);
+            recorder.setAudioEncodingBitRate(32_000);
             recorder.setOutputFile(recordingFile.getAbsolutePath());
             recorder.setMaxDuration(VOICE_MAX_DURATION_MS);
             recorder.setOnInfoListener((active, what, extra) -> {
@@ -1125,8 +1885,14 @@ final class IntakeComposer {
             updateVoiceButton();
         } catch (Exception error) {
             stopRecording(false);
-            toast(R.string.intake_voice_failed);
+            showVoiceError(R.string.intake_voice_failed);
         }
+    }
+
+    private void showVoiceError(int message) {
+        voiceStatusMessage = message;
+        updateVoiceButton();
+        toast(message);
     }
 
     private void stopRecording(boolean keep) {
@@ -1153,7 +1919,7 @@ final class IntakeComposer {
         recordingFile = null;
         recorderReachedLimit = false;
         if (keep && completed != null && completed.length() > 0L) {
-            transcribeRecording(completed);
+            sendIntakeTurn(completed);
         } else {
             deleteTemporary(completed);
         }
@@ -1193,9 +1959,8 @@ final class IntakeComposer {
                 if (generation != transcriptionGeneration || closed) return;
                 transcribing = false;
                 if (mode == Mode.MEAL) updateAttachments();
-                toast(activity.getString(
-                        R.string.meal_chat_voice_transcription_error,
-                        message));
+                showInlineError(R.string.intake_chat_voice_inline_error,
+                        INLINE_ERROR_VOICE);
             }
         });
     }
@@ -1263,24 +2028,52 @@ final class IntakeComposer {
         // recording has stopped.
         boolean showProgress = transcribing;
         mealVoice.setSelected(recording);
-        mealVoice.setActivated(transcribing);
-        mealVoice.setEnabled(!busy && !transcribing);
+        mealVoice.setActivated(transcribing || recordPermissionRequestInFlight);
+        mealVoice.setEnabled(!busy && !transcribing
+                && !recordPermissionRequestInFlight
+                && pendingPhotoImports == 0 && retryClientTurnId.isEmpty());
         mealVoice.setContentDescription(activity.getString(recording
                 ? R.string.meal_chat_voice_stop
                 : transcribing ? R.string.meal_chat_voice_transcribing
+                : recordPermissionRequestInFlight
+                ? R.string.intake_chat_microphone_permission
                 : R.string.meal_chat_voice));
         mealVoiceProgress.setVisibility(showProgress ? VISIBLE : GONE);
         mealVoiceIcon.setVisibility(transcribing ? View.INVISIBLE : VISIBLE);
         mealVoiceIcon.setImageResource(recording
                 ? R.drawable.intake_stop : R.drawable.intake_mic);
         int tint = ContextCompat.getColor(activity,
-                recording ? R.color.modern_secondary_danger
-                        : transcribing ? R.color.modern_secondary_accent
-                        : R.color.modern_secondary_text_secondary);
+                recording ? R.color.modern_secondary_text_primary
+                        : transcribing ? R.color.modern_secondary_warning
+                        : R.color.modern_secondary_on_accent);
         mealVoiceIcon.setColorFilter(tint);
         Drawable spinner = mealVoiceProgress.getIndeterminateDrawable();
         if (spinner != null) {
             DrawableCompat.setTint(spinner.mutate(), tint);
+        }
+        if (intakeVoiceHint != null) {
+            intakeVoiceHint.setText(recording
+                    ? R.string.intake_chat_recording
+                    : transcribing ? R.string.intake_chat_processing
+                    : recordPermissionRequestInFlight
+                    ? R.string.intake_chat_microphone_permission
+                    : busy && mealSending
+                    && retryTurnControlKind == CONTROL_REVISION
+                    ? R.string.intake_chat_correction_preparing
+                    : !retryClientTurnId.isEmpty()
+                    ? R.string.intake_chat_retry_hint
+                    : voiceStatusMessage != 0
+                    ? voiceStatusMessage
+                    : correctionMode
+                    ? R.string.intake_chat_correction_voice_hint
+                    : R.string.intake_chat_voice_hint);
+            intakeVoiceHint.setTextColor(ContextCompat.getColor(activity,
+                    recording ? R.color.modern_secondary_danger
+                            : transcribing || recordPermissionRequestInFlight
+                            ? R.color.modern_secondary_warning
+                            : voiceStatusMessage != 0
+                            ? R.color.modern_secondary_danger
+                            : R.color.modern_secondary_text_secondary));
         }
     }
 
@@ -1410,21 +2203,12 @@ final class IntakeComposer {
     }
 
     private void applySelectedMealTime(long value) {
-        if (value == mealOccurredAtMs && !mealTimeSyncUnknown) {
-            updateMealTime();
-            updateProposal();
-            return;
-        }
-        if (mealSessionId.isEmpty()) {
-            mealOccurredAtMs = value;
-            pendingMealOccurredAtMs = value;
-            mealTimeSyncUnknown = false;
-            updateMealTime();
-            updateProposal();
-            return;
-        }
-
-        beginMealTimeResolution(value);
+        mealOccurredAtMs = value;
+        pendingMealOccurredAtMs = value;
+        mealTimeExplicitForNextTurn = true;
+        mealTimeSyncUnknown = false;
+        updateMealTime();
+        updateProposal();
     }
 
     private void mealTimeAction() {
@@ -1541,8 +2325,9 @@ final class IntakeComposer {
                         ? R.string.intake_time_selected_updating
                         : R.string.intake_time_selected,
                 formatOccurredAt(mealOccurredAtMs)));
-        mealTime.setEnabled(!busy);
-        mealTime.setAlpha(busy ? 0.68f : 1.0f);
+        boolean enabled = !busy && retryClientTurnId.isEmpty();
+        mealTime.setEnabled(enabled);
+        mealTime.setAlpha(enabled ? 1.0f : 0.68f);
     }
 
     private String formatProposalTime(long occurredAtMs) {
@@ -1564,9 +2349,77 @@ final class IntakeComposer {
 
     private void bindBackendStatus() {
         backendStatus = root.findViewById(R.id.intake_backend_status);
-        backendStatus.setOnClickListener(view ->
-                IntakeBackendSettings.show(activity, this::checkBackend));
+        backendStatus.setOnClickListener(view -> {
+            if (!retryClientTurnId.isEmpty()) {
+                toast(R.string.intake_backend_change_pending);
+                return;
+            }
+            IntakeBackendSettings.show(activity, this::checkBackend);
+        });
+        updateBackendSettingsAvailability();
         checkBackend();
+    }
+
+    private void updateBackendSettingsAvailability() {
+        if (backendStatus == null) return;
+        boolean enabled = !busy && retryClientTurnId.isEmpty();
+        backendStatus.setEnabled(enabled);
+        backendStatus.setAlpha(enabled ? 1.0f : 0.68f);
+    }
+
+    private boolean pendingTurnMatchesBackend() {
+        return retryClientTurnId.isEmpty()
+                || !retryBackendFingerprint.isEmpty()
+                && retryBackendFingerprint.equals(backendFingerprint());
+    }
+
+    private void onBackendConfigurationChanged() {
+        if (closed) return;
+        // IntakeRepository.configure() vetoes this transition globally, even
+        // when settings were opened outside this composer. Keep this defensive
+        // guard so a future configuration source can never erase the exact
+        // pending identity or its media through the listener path.
+        if (!retryClientTurnId.isEmpty()) {
+            showInlineError(R.string.intake_backend_change_pending,
+                    INLINE_ERROR_RESOLVE_TURN);
+            if (mealSend != null) mealSend.setEnabled(false);
+            updateBackendSettingsAvailability();
+            updateReconcileAction();
+            return;
+        }
+        intakeSessionGeneration++;
+        intakeClientSessionId = UUID.randomUUID().toString();
+        intakeSessionId = "";
+        intakeSessionStarting = false;
+        afterIntakeSessionReady = null;
+        sessionFailureShown = false;
+        lastActionId = "";
+        lastIntakeTurn = null;
+        lastActionTurn = null;
+        lastActionDeleted = false;
+        actionCardHistory.clear();
+        correctionMode = false;
+        correctionSummary = "";
+        ArrayList<File> previousRetryPhotos = new ArrayList<>(
+                retryTurnPhotos);
+        clearPendingTurnRetry(true);
+        for (File photo : previousRetryPhotos) {
+            pendingPhotos.remove(photo);
+            deleteTemporary(photo);
+        }
+        deleteTemporary(deferredIntakeAudio);
+        deferredIntakeAudio = null;
+        clearInlineError();
+        chatLines.clear();
+        chatLines.add(new ChatLine(false,
+                activity.getString(R.string.meal_chat_intro), 0, false));
+        IntakeChatStateStore.clear(activity);
+        renderedChatLineCount = 0;
+        renderChat();
+        updateProposal();
+        updateAttachments();
+        checkBackend();
+        ensureIntakeSession(null);
     }
 
     private void checkBackend() {
@@ -1610,6 +2463,7 @@ final class IntakeComposer {
             }
         }
         root = LayoutInflater.from(activity).inflate(layoutId, null, false);
+        renderedChatLineCount = 0;
         View page = root.findViewById(R.id.intake_page);
         ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
             Insets bars = insets.getInsets(
@@ -1618,7 +2472,10 @@ final class IntakeComposer {
             Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
             boolean keyboardVisible = insets.isVisible(
                     WindowInsetsCompat.Type.ime());
-            page.setPadding(bars.left, bars.top, bars.right,
+            int readableGutter = ClinicalUi.readableHorizontalGutter(activity,
+                    Math.max(0, view.getWidth() - bars.left - bars.right), 0);
+            page.setPadding(bars.left + readableGutter, bars.top,
+                    bars.right + readableGutter,
                     Math.max(bars.bottom, ime.bottom));
             View safety = view.findViewById(R.id.meal_chat_safety);
             if (safety != null) {
@@ -1626,6 +2483,7 @@ final class IntakeComposer {
             }
             return insets;
         });
+        ClinicalUi.reapplyInsetsOnWidthChanges(root);
         activity.addMyContentView(root,
                 new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT), false);
         ViewCompat.requestApplyInsets(root);
@@ -1635,28 +2493,31 @@ final class IntakeComposer {
     private void handleSystemBack() {
         if (closed) return;
         if (busy) {
+            if (mode == Mode.MEAL) {
+                requestClose(false);
+                return;
+            }
             MainActivity.setonback(this::handleSystemBack);
-            toast(R.string.intake_wait_for_save);
-            return;
-        }
-        if (mode == Mode.CHOOSER) {
-            close(false);
-        } else {
-            if (recording) stopRecording(false);
-            hideKeyboard();
-            showChooserInternal();
-            MainActivity.setonback(this::handleSystemBack);
-        }
-    }
-
-    private void childBack() {
-        if (busy) {
             toast(R.string.intake_wait_for_save);
             return;
         }
         if (recording) stopRecording(false);
         hideKeyboard();
-        showChooserInternal();
+        requestClose(false);
+    }
+
+    private void childBack() {
+        if (busy) {
+            if (mode == Mode.MEAL) {
+                requestClose(true);
+                return;
+            }
+            toast(R.string.intake_wait_for_save);
+            return;
+        }
+        if (recording) stopRecording(false);
+        hideKeyboard();
+        requestClose(true);
     }
 
     void onActivityPause() {
@@ -1664,12 +2525,52 @@ final class IntakeComposer {
     }
 
     void onConfigurationChanged() {
-        if (!closed && root != null) ViewCompat.requestApplyInsets(root);
+        if (closed || root == null) return;
+        if (mode == Mode.MEAL && !busy) {
+            String draft = mealInput == null ? ""
+                    : mealInput.getText().toString();
+            showMeal();
+            if (mealInput != null) {
+                mealInput.setText(draft);
+                mealInput.setSelection(mealInput.length());
+            }
+        } else {
+            ViewCompat.requestApplyInsets(root);
+        }
     }
 
     void destroy() {
         destroying = true;
         close(false);
+    }
+
+    private void requestClose(boolean popBack) {
+        if (busy && intakeTurnCall != null) {
+            // Detach the surface but let the authoritative request finish. If
+            // it returns a receipt, the repository still merges it into the
+            // graph; cancelling the socket here could hide a server commit.
+            intakeTurnCall = null;
+            busy = false;
+            mealSending = false;
+            transcribing = false;
+        } else if (busy && afterIntakeSessionReady != null) {
+            afterIntakeSessionReady = null;
+            File unsentAudio = intakeTurnAudio;
+            intakeTurnAudio = null;
+            clearPendingTurnRetry(false);
+            deleteTemporary(unsentAudio);
+            busy = false;
+            mealSending = false;
+            transcribing = false;
+        } else if (busy && mode == Mode.MEAL) {
+            // Undo and other repository-owned operations are safe to finish in
+            // the background; their repository merge precedes the UI callback.
+            busy = false;
+            mealSending = false;
+            mealConfirming = false;
+            transcribing = false;
+        }
+        close(popBack);
     }
 
     private void close(boolean popBack) {
@@ -1678,13 +2579,32 @@ final class IntakeComposer {
             toast(R.string.intake_wait_for_save);
             return;
         }
+        persistChatState();
         closed = true;
+        repository.removeConfigurationListener(backendConfigurationListener);
         transcriptionGeneration++;
         transcribing = false;
         if (transcriptionCall != null) {
             transcriptionCall.cancel();
             transcriptionCall = null;
         }
+        if (intakeTurnCall != null) {
+            // Keep the backend-authoritative turn alive across Activity/UI
+            // teardown so a successful receipt can still update the graph.
+            intakeTurnCall = null;
+        }
+        File activeIntakeAudio = intakeTurnAudio;
+        intakeTurnAudio = null;
+        // The cancelled transport may still be unwinding its FileInputStream.
+        // Leave this fresh file for the stale-media reaper instead of unlinking
+        // it under the worker.
+        if (activeIntakeAudio != null) {
+            temporaryFiles.remove(activeIntakeAudio);
+        }
+        for (File activePhoto : activeIntakePhotos) {
+            temporaryFiles.remove(activePhoto);
+        }
+        activeIntakePhotos.clear();
         File activeTranscription = transcriptionFile;
         transcriptionFile = null;
         // The repository worker owns an in-flight recording until its finally
@@ -1693,6 +2613,8 @@ final class IntakeComposer {
             temporaryFiles.remove(activeTranscription);
         }
         if (recording || recorder != null) stopRecording(false);
+        deleteTemporary(deferredIntakeAudio);
+        deferredIntakeAudio = null;
         hideKeyboard();
         if (popBack) MainActivity.poponback();
         if (root != null) {
@@ -1703,6 +2625,10 @@ final class IntakeComposer {
             }
         }
         mediaExecutor.shutdownNow();
+        if (retryTurnAudio != null) temporaryFiles.remove(retryTurnAudio);
+        for (File retryPhoto : retryTurnPhotos) {
+            temporaryFiles.remove(retryPhoto);
+        }
         ArrayList<File> files;
         synchronized (temporaryFiles) {
             files = new ArrayList<>(temporaryFiles);
@@ -1729,6 +2655,81 @@ final class IntakeComposer {
         }
     }
 
+    /**
+     * A newly opened composer is always a new conversation. The only state
+     * allowed to cross that boundary is an exact, unresolved transport turn:
+     * dropping its id or payload could duplicate a medical record. Ordinary
+     * chat rows, action cards and completed backend sessions are deliberately
+     * not restored.
+     */
+    private void restorePendingTurnState() {
+        IntakeChatStateStore.State state = IntakeChatStateStore.load(
+                activity, backendFingerprint());
+        if (state == null) return;
+        IntakeChatStateStore.Pending pending = state.pending;
+        if (pending == null) {
+            IntakeChatStateStore.clear(activity);
+            return;
+        }
+        intakeClientSessionId = state.clientSessionId;
+        intakeSessionId = state.sessionId;
+        if (pending.controlKind != CONTROL_NONE) {
+            // A pending delete/correction needs its frozen target only so the
+            // exact same control turn can be reconciled safely.
+            lastActionId = state.lastActionId;
+            lastActionTurn = state.lastActionTurn;
+            lastActionDeleted = state.lastActionDeleted;
+            actionCardHistory.accept(lastActionTurn);
+        }
+        retryClientTurnId = pending.clientTurnId;
+        retryBackendFingerprint = backendFingerprint();
+        retryTurnOccurredAtMs = pending.occurredAtMs;
+        retryTurnText = pending.text;
+        retryTurnAudio = pending.audio;
+        retryTurnPhotos.addAll(pending.photos);
+        retryTurnDefinitiveFailure = pending.definitiveFailure;
+        retryTurnCommitMayHaveOccurred = pending.commitMayHaveOccurred;
+        retryTurnControlKind = pending.controlKind;
+        if (pending.controlKind == CONTROL_REVISION) {
+            correctionMode = true;
+            correctionSummary = primaryActionSummary(lastActionTurn);
+        }
+        pendingPhotos.addAll(pending.photos);
+        if (pending.controlKind == CONTROL_NONE) {
+            mealOccurredAtMs = pending.occurredAtMs;
+            pendingMealOccurredAtMs = pending.occurredAtMs;
+        }
+        if (pending.audio != null) temporaryFiles.add(pending.audio);
+        temporaryFiles.addAll(pending.photos);
+    }
+
+    private boolean persistChatState() {
+        if (retryClientTurnId.isEmpty()) {
+            // Completed conversations are intentionally ephemeral. Saved
+            // events live in the repository and are not touched here.
+            IntakeChatStateStore.clear(activity);
+            return true;
+        }
+        IntakeChatStateStore.Pending pending = new IntakeChatStateStore.Pending(
+                retryClientTurnId, retryTurnOccurredAtMs, retryTurnText,
+                retryTurnAudio, retryTurnPhotos, retryTurnDefinitiveFailure,
+                retryTurnCommitMayHaveOccurred, retryTurnControlKind);
+        String fingerprint = retryBackendFingerprint.isEmpty()
+                ? backendFingerprint() : retryBackendFingerprint;
+        return IntakeChatStateStore.save(activity, fingerprint,
+                new IntakeChatStateStore.State(intakeClientSessionId,
+                        intakeSessionId, lastActionId,
+                        lastActionTurn, lastActionDeleted,
+                        Collections.emptyList(), pending));
+    }
+
+    private String backendFingerprint() {
+        String identity = repository.backendUrl() + '\u0000'
+                + repository.backendToken();
+        return UUID.nameUUIDFromBytes(identity.getBytes(
+                StandardCharsets.UTF_8)).toString();
+    }
+
     private File mediaDirectory() throws IOException {
         File directory = new File(activity.getCacheDir(), "intake-media");
         if ((!directory.isDirectory() && !directory.mkdirs())
@@ -1748,7 +2749,8 @@ final class IntakeComposer {
                 // A transcription cancelled by a previous composer can still
                 // be unwinding on its dedicated worker. Only reap genuinely
                 // old leftovers; that worker owns all fresh audio cleanup.
-                if (file.isFile() && file.lastModified() > 0L
+                if (file.isFile() && !temporaryFiles.contains(file)
+                        && file.lastModified() > 0L
                         && file.lastModified() <= cutoff) {
                     file.delete();
                 }

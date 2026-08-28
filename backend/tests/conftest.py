@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from io import BytesIO
+import wave
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +20,17 @@ from app.schemas import (
 
 
 TEST_TOKEN = "test-token-that-is-intentionally-longer-than-thirty-two-characters"
+
+
+def valid_wav_bytes(duration_seconds: float = 0.25, sample_rate: int = 8_000) -> bytes:
+    frame_count = int(duration_seconds * sample_rate)
+    output = BytesIO()
+    with wave.open(output, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(1)
+        audio.setframerate(sample_rate)
+        audio.writeframes(b"\x80" * frame_count)
+    return output.getvalue()
 
 
 class FakeAnalyzer:
@@ -47,7 +59,7 @@ class FakeAnalyzer:
             "I ate a rice bowl" if audio else "",
         )
 
-    async def transcribe(self, audio):
+    async def transcribe(self, audio, language_hint=None):
         self.calls.append(("", [], audio))
         return "I ate a rice bowl"
 
@@ -98,10 +110,16 @@ class FakeChatAnalyzer:
 class FakeTranscriber:
     def __init__(self):
         self.calls: list[PreparedAudio] = []
+        self.language_hints: list[str | None] = []
         self.closed = False
 
-    async def transcribe(self, audio: PreparedAudio) -> str:
+    async def transcribe(
+        self,
+        audio: PreparedAudio,
+        language_hint: str | None = None,
+    ) -> str:
         self.calls.append(audio)
+        self.language_hints.append(language_hint)
         return "I drank one glass of milk"
 
     async def aclose(self):

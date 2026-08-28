@@ -72,7 +72,7 @@ final class PredictiveAlertCoordinator {
         ForecastRiskEvaluator.Policy policy = new ForecastRiskEvaluator.Policy(
                 true, replacement.low, replacement.high,
                 settings.lowHorizonMinutes, settings.highHorizonMinutes,
-                settings.sensitivity);
+                settings.lowSensitivity, settings.highSensitivity);
         ForecastRiskEvaluator.Decision decision = ForecastRiskEvaluator.evaluate(
                 forecast, policy, nowMs);
         if (!decision.shouldNotify()) {
@@ -100,7 +100,8 @@ final class PredictiveAlertCoordinator {
                 && direction.equals(preferences.activeEpisodeDirection())) {
             return;
         }
-        long cooldownMs = settings.cooldownMinutes * 60_000L;
+        long cooldownMs = cooldownMinutesForDirection(settings, direction)
+                * 60_000L;
         long lastAlertAt = preferences.lastAlertAt(direction);
         if (!bypassEpisodeGates && lastAlertAt > 0L
                 && nowMs - lastAlertAt < cooldownMs) return;
@@ -306,6 +307,21 @@ final class PredictiveAlertCoordinator {
                 activeEvidence)
                 && PredictiveAlertPreferences.EVIDENCE_POSSIBLE.equals(
                 nextEvidence);
+    }
+
+    static int cooldownMinutesForDirection(
+            PredictiveAlertPreferences.Snapshot settings, String direction) {
+        if (settings == null) {
+            throw new IllegalArgumentException("Settings are required");
+        }
+        if (PredictiveAlertPreferences.DIRECTION_LOW.equals(direction)) {
+            return settings.lowCooldownMinutes;
+        }
+        if (PredictiveAlertPreferences.DIRECTION_HIGH.equals(direction)) {
+            return settings.highCooldownMinutes;
+        }
+        throw new IllegalArgumentException("Unknown alert direction: "
+                + direction);
     }
 
     private boolean notificationActive(String direction, long nowMs) {

@@ -946,14 +946,15 @@ extern constcharptr_t *sensorname;
 constexpr const jlong isHighest=4LL<<48;
 constexpr const jlong isHigh=6LL<<48;
 constexpr const jlong isLow=7LL<<48;
-constexpr const jlong isAgain=3LL<<48;
 constexpr const jlong isLowest=5LL<<48;
 
+#ifdef WEAROS
+constexpr const jlong isAgain=3LL<<48;
 constexpr const jlong isVeryHigh=16LL<<48;
 constexpr const jlong isVeryLow=17LL<<48;
-
 constexpr const jlong isPreHigh=18LL<<48;
 constexpr const jlong isPreLow=19LL<<48;
+#endif
 
 #include "gluconfig.hpp"
 extern void setbuffer(char *);
@@ -982,11 +983,23 @@ static void savestate(libre2stream *sdata) {
 
 static jlong getalarmonly(const uint32_t mgL,float drate,const SensorGlucoseData *hist) {
     const int glucoselowestmgL=hist->getminmgdL()*10;
+#ifdef WEAROS
     auto res=mgL<glucoselowestmgL?isLowest:(mgL>(hist->getmaxmgdL()*10)?isHighest:
  (settings->veryhighAlarm(mgL)?isVeryHigh:(settings->highAlarm(mgL)?isHigh:(settings->verylowAlarm(mgL)?isVeryLow:(settings->lowAlarm(mgL)?isLow:(
 settings->prelowAlarm(mgL,drate)?isPreLow:
 (settings->prehighAlarm(mgL,drate)?isPreHigh:
 (settings->availableAlarm()&&hist->waiting?isAgain:0))))))));
+#else
+    // The phone settings model has exactly five alert sources. Current low
+    // and high own native threshold alarms; forecast low/high are owned by
+    // the ML coordinator; signal loss is scheduled in Java. Upgraded profile
+    // flags for very/pre/value alarms must never remain hidden alert sources.
+    (void)drate;
+    auto res=mgL<glucoselowestmgL?isLowest:
+            (mgL>(hist->getmaxmgdL()*10)?isHighest:
+            (settings->highAlarm(mgL)?isHigh:
+            (settings->lowAlarm(mgL)?isLow:0)));
+#endif
     LOGGER("mgL=%u, high=%d, low=%d res=%" PRId64 "\n",mgL,settings->highAlarm(mgL),settings->lowAlarm(mgL),res);
     return res;
     }

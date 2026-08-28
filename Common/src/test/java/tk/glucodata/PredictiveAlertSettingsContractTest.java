@@ -78,11 +78,12 @@ public class PredictiveAlertSettingsContractTest {
     }
 
     @Test
-    public void phoneAlarmSettingsRoutesToDedicatedPredictivePage() throws Exception {
+    public void phoneAlarmSettingsRoutesThroughUnifiedGlucoseAlerts() throws Exception {
         String settings = source(Paths.get("src", "main", "java", "tk",
                 "glucodata", "settings", "Settings.java"));
-        assertTrue(settings.contains("PredictiveAlertSettingsPage.entryCard(context)"));
-        assertTrue(settings.contains("PredictiveAlertSettingsPage.show(context,"));
+        assertTrue(settings.contains("GlucoseAlertSettingsPage.show(context,"));
+        assertTrue(settings.contains("clinicalNormalizeUnifiedAlarms()"));
+        assertFalse(settings.contains("PredictiveAlertSettingsPage.entryCard(context)"));
         assertFalse(settings.contains("blocksLegacyEarlyWarnings"));
 
         String page = source(Paths.get("src", "main", "java", "tk",

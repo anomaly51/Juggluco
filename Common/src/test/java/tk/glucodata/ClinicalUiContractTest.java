@@ -79,6 +79,21 @@ public class ClinicalUiContractTest {
     }
 
     @Test
+    public void readableWidthPolicyKeepsPhonesAndCapsLargeWindows() {
+        assertEquals(0, ClinicalUi.readableHorizontalGutterDp(599, 0));
+        assertEquals(20, ClinicalUi.readableHorizontalGutterDp(360, 20));
+        assertEquals(20, ClinicalUi.readableHorizontalGutterDp(599, 20));
+        assertEquals(32, ClinicalUi.readableHorizontalGutterDp(600, 20));
+        assertEquals(32, ClinicalUi.readableHorizontalGutterDp(904, 20));
+        assertEquals(80, ClinicalUi.readableHorizontalGutterDp(1000, 20));
+        assertEquals(380, ClinicalUi.readableHorizontalGutterDp(1600, 20));
+        assertTrue(1000 - 2 * ClinicalUi.readableHorizontalGutterDp(1000, 20)
+                <= ClinicalUi.READABLE_MAX_CONTENT_DP);
+        assertTrue(1600 - 2 * ClinicalUi.readableHorizontalGutterDp(1600, 20)
+                <= ClinicalUi.READABLE_MAX_CONTENT_DP);
+    }
+
+    @Test
     public void disabledButtonShapeNeverTreatsDialogWindowDrawableAsAColor() throws Exception {
         for (String name : new String[]{
                 "modern_component_button.xml",

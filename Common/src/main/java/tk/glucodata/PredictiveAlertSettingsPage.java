@@ -4,6 +4,7 @@ import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.os.Build;
@@ -22,6 +23,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.widget.SwitchCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -46,6 +48,8 @@ public final class PredictiveAlertSettingsPage {
     private ChoiceGroup highHorizon;
     private ChoiceGroup sensitivity;
     private ChoiceGroup cooldown;
+    private SoundChoice[] soundChoices;
+    private AlertDialog soundDialog;
     private TextView criticalSummary;
     private DiagnosticAction criticalActualChannels;
     private DiagnosticAction criticalPredictiveChannels;
@@ -204,6 +208,15 @@ public final class PredictiveAlertSettingsPage {
         addWithTopGap(cooldown.container, 12);
 
         content.addView(ClinicalUi.sectionLabel(activity,
+                activity.getString(R.string.critical_alarm_sound_section)));
+        TextView soundIntro = ClinicalUi.body(activity,
+                activity.getString(R.string.critical_alarm_sound_intro));
+        soundIntro.setPaddingRelative(ClinicalUi.dp(activity, 4), 0,
+                ClinicalUi.dp(activity, 4), ClinicalUi.dp(activity, 8));
+        content.addView(soundIntro);
+        content.addView(soundSelectionCard());
+
+        content.addView(ClinicalUi.sectionLabel(activity,
                 activity.getString(R.string.critical_alarm_delivery_section)));
         TextView criticalIntro = ClinicalUi.body(activity,
                 activity.getString(R.string.critical_alarm_delivery_intro));
@@ -275,12 +288,15 @@ public final class PredictiveAlertSettingsPage {
             Insets safe = insets.getInsets(WindowInsetsCompat.Type.systemBars()
                     | WindowInsetsCompat.Type.displayCutout()
                     | WindowInsetsCompat.Type.ime());
-            content.setPadding(safe.left + ClinicalUi.dp(activity, 20),
+            int readableGutter = ClinicalUi.readableHorizontalGutter(activity,
+                    Math.max(0, view.getWidth() - safe.left - safe.right), 20);
+            content.setPadding(safe.left + readableGutter,
                     safe.top + ClinicalUi.dp(activity, 8),
-                    safe.right + ClinicalUi.dp(activity, 20),
+                    safe.right + readableGutter,
                     safe.bottom + ClinicalUi.dp(activity, 30));
             return insets;
         });
+        ClinicalUi.reapplyInsetsOnWidthChanges(root);
 
         bindControls();
         updateEnabledState(snapshot.enabled);
@@ -456,6 +472,127 @@ public final class PredictiveAlertSettingsPage {
                 WRAP_CONTENT, WRAP_CONTENT));
         card.addView(scroll, new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
         return new ChoiceGroup(card, group);
+    }
+
+    private View soundSelectionCard() {
+        soundChoices = new SoundChoice[]{
+                soundChoice(CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW,
+                        R.string.critical_alarm_sound_actual_low),
+                soundChoice(CriticalAlarmSoundCatalog.AlertType.ACTUAL_HIGH,
+                        R.string.critical_alarm_sound_actual_high),
+                soundChoice(CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW,
+                        R.string.critical_alarm_sound_predictive_low),
+                soundChoice(CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_HIGH,
+                        R.string.critical_alarm_sound_predictive_high)
+        };
+        return ClinicalUi.card(activity, soundChoices[0].row,
+                soundChoices[1].row, soundChoices[2].row,
+                soundChoices[3].row);
+    }
+
+    private SoundChoice soundChoice(CriticalAlarmSoundCatalog.AlertType type,
+            int titleRes) {
+        LinearLayout row = ClinicalUi.actionRow(activity,
+                activity.getString(titleRes),
+                CriticalAlarmSoundCatalog.selectedLabel(activity, type));
+        LinearLayout copy = (LinearLayout) row.getChildAt(0);
+        TextView selected = (TextView) copy.getChildAt(1);
+        SoundChoice choice = new SoundChoice(row, selected, type, titleRes);
+        refreshSoundChoice(choice);
+        row.setOnClickListener(view -> showSoundPicker(choice));
+        return choice;
+    }
+
+    private void refreshSoundChoice(SoundChoice choice) {
+        CharSequence selected = CriticalAlarmSoundCatalog.selectedLabel(
+                activity, choice.type);
+        choice.selected.setText(selected);
+        choice.row.setContentDescription(activity.getString(choice.titleRes)
+                + ", " + selected);
+    }
+
+    private void showSoundPicker(SoundChoice choice) {
+        if (soundDialog != null) soundDialog.dismiss();
+        CriticalAlarmSoundCatalog.stopPreview();
+
+        String[] selectedToneId = {CriticalAlarmSoundCatalog.selectedToneId(
+                activity, choice.type)};
+        RadioGroup options = new RadioGroup(activity);
+        options.setOrientation(RadioGroup.VERTICAL);
+        options.setPaddingRelative(ClinicalUi.dp(activity, 12),
+                ClinicalUi.dp(activity, 4), ClinicalUi.dp(activity, 12),
+                ClinicalUi.dp(activity, 4));
+        for (CriticalAlarmSoundCatalog.Tone tone
+                : CriticalAlarmSoundCatalog.tones()) {
+            RadioButton option = new RadioButton(activity);
+            option.setId(View.generateViewId());
+            option.setTag(tone.id);
+            option.setText(tone.labelRes);
+            option.setTextColor(ClinicalUi.primaryText(activity));
+            option.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+            option.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            option.setMinimumHeight(ClinicalUi.dp(activity,
+                    MIN_TOUCH_TARGET_DP));
+            option.setPaddingRelative(ClinicalUi.dp(activity, 4), 0,
+                    ClinicalUi.dp(activity, 8), 0);
+            option.setButtonTintList(choiceColors());
+            options.addView(option, new RadioGroup.LayoutParams(
+                    MATCH_PARENT, WRAP_CONTENT));
+            if (tone.id.equals(selectedToneId[0])) options.check(option.getId());
+        }
+        options.setOnCheckedChangeListener((group, checkedId) -> {
+            View selected = group.findViewById(checkedId);
+            if (selected != null && selected.getTag() instanceof String) {
+                selectedToneId[0] = (String) selected.getTag();
+            }
+        });
+
+        ScrollView scroll = new ScrollView(activity);
+        scroll.setFillViewport(false);
+        scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        scroll.addView(options, new ScrollView.LayoutParams(
+                MATCH_PARENT, WRAP_CONTENT));
+
+        AlertDialog dialog = new AlertDialog.Builder(activity)
+                .setTitle(activity.getString(
+                        R.string.critical_alarm_sound_picker_title,
+                        activity.getString(choice.titleRes)))
+                .setView(scroll)
+                .setNegativeButton(R.string.cancel, null)
+                .setNeutralButton(R.string.critical_alarm_sound_preview, null)
+                .setPositiveButton(R.string.critical_alarm_sound_save, null)
+                .create();
+        soundDialog = dialog;
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(DialogInterface.BUTTON_NEUTRAL)
+                    .setOnClickListener(view -> {
+                        if (!CriticalGlucoseAlarm.previewSound(activity,
+                                selectedToneId[0])) {
+                            Toast.makeText(activity,
+                                    R.string.critical_alarm_sound_preview_failed,
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                    });
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE)
+                    .setOnClickListener(view -> {
+                        if (CriticalAlarmSoundCatalog.select(activity,
+                                choice.type, selectedToneId[0])) {
+                            // Android notification-channel sounds are
+                            // immutable. Materialize the newly selected,
+                            // per-tone channel now so readiness diagnostics
+                            // stay accurate before the first real alert.
+                            CriticalGlucoseAlarm.ensureChannels(activity);
+                            refreshSoundChoice(choice);
+                            updateDiagnostics();
+                        }
+                        dialog.dismiss();
+                    });
+        });
+        dialog.setOnDismissListener(ignored -> {
+            CriticalAlarmSoundCatalog.stopPreview();
+            if (soundDialog == dialog) soundDialog = null;
+        });
+        dialog.show();
     }
 
     private View criticalDeliveryCard() {
@@ -821,6 +958,11 @@ public final class PredictiveAlertSettingsPage {
             ForecastRepository.get(activity).removeListener(forecastListener);
             forecastListener = null;
         }
+        if (soundDialog != null) {
+            soundDialog.dismiss();
+            soundDialog = null;
+        }
+        CriticalAlarmSoundCatalog.stopPreview();
         ViewParent parent = root.getParent();
         if (parent instanceof ViewGroup) ((ViewGroup) parent).removeView(root);
         activity.lightBars(false);
@@ -891,6 +1033,21 @@ public final class PredictiveAlertSettingsPage {
         ChoiceGroup(LinearLayout container, RadioGroup group) {
             this.container = container;
             this.group = group;
+        }
+    }
+
+    private static final class SoundChoice {
+        final LinearLayout row;
+        final TextView selected;
+        final CriticalAlarmSoundCatalog.AlertType type;
+        final int titleRes;
+
+        SoundChoice(LinearLayout row, TextView selected,
+                CriticalAlarmSoundCatalog.AlertType type, int titleRes) {
+            this.row = row;
+            this.selected = selected;
+            this.type = type;
+            this.titleRes = titleRes;
         }
     }
 }

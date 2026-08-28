@@ -11,10 +11,24 @@ enum class RangeState : std::uint8_t {
     high
 };
 
+// Range states remain identifiable when colour perception is limited: low
+// samples point down, in-range samples are round and high samples point up.
+enum class MarkerShape : std::uint8_t {
+    down_triangle,
+    circle,
+    up_triangle
+};
+
 constexpr RangeState range_state(const float value,const float targetlow,
                                  const float targethigh) {
     return value<targetlow?RangeState::low:
            (value>targethigh?RangeState::high:RangeState::in_range);
+}
+
+constexpr MarkerShape marker_shape(const RangeState state) {
+    return state==RangeState::low?MarkerShape::down_triangle:
+           (state==RangeState::high?MarkerShape::up_triangle:
+                                    MarkerShape::circle);
 }
 
 constexpr float visible_hours(const std::uint32_t durationseconds) {
@@ -61,6 +75,9 @@ constexpr bool should_draw_sample(const float x,const float lastdrawx,
 static_assert(range_state(69.0f,70.0f,180.0f)==RangeState::low);
 static_assert(range_state(70.0f,70.0f,180.0f)==RangeState::in_range);
 static_assert(range_state(181.0f,70.0f,180.0f)==RangeState::high);
+static_assert(marker_shape(RangeState::low)==MarkerShape::down_triangle);
+static_assert(marker_shape(RangeState::in_range)==MarkerShape::circle);
+static_assert(marker_shape(RangeState::high)==MarkerShape::up_triangle);
 static_assert(sample_radius(1.0f,3U*3600U,false)>
               sample_radius(1.0f,24U*3600U,false));
 static_assert(minimum_spacing(1.0f,3U*3600U)<

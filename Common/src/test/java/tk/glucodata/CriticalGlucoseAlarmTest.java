@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.robolectric.Shadows.shadowOf;
 
@@ -18,6 +19,7 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.media.AudioAttributes;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Looper;
 import android.service.notification.StatusBarNotification;
@@ -44,6 +46,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @RunWith(RobolectricTestRunner.class)
@@ -69,6 +72,10 @@ public class CriticalGlucoseAlarmTest {
         shadow.setNotificationPolicyAccessGranted(true);
 
         clearRuntimeSession();
+        application.getSharedPreferences(CriticalAlarmSoundCatalog.PREFS_NAME,
+                Context.MODE_PRIVATE).edit().clear().commit();
+        application.getSharedPreferences(CriticalAlertPreferences.PREFS_NAME,
+                Context.MODE_PRIVATE).edit().clear().commit();
         notifications.cancelAll();
         deleteCriticalChannels();
         CriticalGlucoseAlarm.ensureChannels(application);
@@ -81,6 +88,8 @@ public class CriticalGlucoseAlarmTest {
         application.getSharedPreferences(
                 PredictiveAlertPreferences.PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().clear().commit();
+        application.getSharedPreferences(CriticalAlertPreferences.PREFS_NAME,
+                Context.MODE_PRIVATE).edit().clear().commit();
     }
 
     @Test
@@ -98,6 +107,539 @@ public class CriticalGlucoseAlarmTest {
                     channel.getAudioAttributes().getUsage());
             assertTrue("DND bypass missing for " + id, channel.canBypassDnd());
         }
+        for (String id : selectedCriticalChannelIds()) {
+            NotificationChannel channel = notifications.getNotificationChannel(id);
+            assertNotNull(id, channel);
+            assertEquals(NotificationManager.IMPORTANCE_HIGH,
+                    channel.getImportance());
+            assertEquals(Notification.VISIBILITY_PRIVATE,
+                    channel.getLockscreenVisibility());
+            assertNotNull(channel.getSound());
+            assertEquals(AudioAttributes.USAGE_ALARM,
+                    channel.getAudioAttributes().getUsage());
+            assertTrue("DND bypass missing for " + id, channel.canBypassDnd());
+        }
+    }
+
+    @Test
+    public void selectedSoundUsesMatchingImmutableAlarmChannel() {
+        assertTrue(CriticalAlarmSoundCatalog.select(application,
+                CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW, "siren"));
+        assertTrue(CriticalGlucoseAlarm.showActual(application, 0, 65f,
+                "Low", true));
+
+        CriticalGlucoseAlarm.Session session =
+                CriticalGlucoseAlarm.currentSession(application);
+        assertNotNull(session);
+        assertEquals(R.raw.siren, session.soundRes);
+        assertEquals("siren", session.soundToneId);
+        String channelId = selectedChannel(
+                CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW);
+        assertTrue(channelId.endsWith("_v4_bypass_siren"));
+        NotificationChannel channel =
+                notifications.getNotificationChannel(channelId);
+        assertNotNull(channel);
+        assertTrue(channel.getSound().toString().endsWith("/raw/siren"));
+        assertEquals(AudioAttributes.USAGE_ALARM,
+                channel.getAudioAttributes().getUsage());
+        assertNotNull(activeNotification(channelId));
+    }
+
+    @Test
+    public void persistedSessionRestoresSoundFromStableToneId()
+            throws Exception {
+        CriticalAlarmSoundCatalog.AlertType type =
+                CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW;
+        assertTrue(CriticalAlarmSoundCatalog.select(application, type,
+                "calm_chord"));
+        assertTrue(CriticalGlucoseAlarm.showTest(application, type));
+        String currentToken = token();
+        CriticalGlucoseAlarm.Session started =
+                CriticalGlucoseAlarm.currentSession(application);
+        assertNotNull(started);
+        assertEquals("calm_chord", started.soundToneId);
+        assertEquals(R.raw.alert_calm_chord, started.soundRes);
+
+        // Simulate an APK resource-table change: the legacy integer now
+        // points at another valid sound. The stable catalog id must win.
+        application.getSharedPreferences(CRITICAL_PREFS, Context.MODE_PRIVATE)
+                .edit().putInt("sound_res", R.raw.alert_air_horn).commit();
+        setStaticField("active", null);
+        setStaticField("initialized", false);
+        CriticalGlucoseAlarm.ensureChannels(application);
+
+        CriticalGlucoseAlarm.Session restored =
+                CriticalGlucoseAlarm.session(application, currentToken);
+        assertNotNull(restored);
+        assertEquals("calm_chord", restored.soundToneId);
+        assertEquals(R.raw.alert_calm_chord, restored.soundRes);
+        assertTrue(selectedChannel(type).endsWith("_calm_chord"));
+    }
+
+    @Test
+    public void legacySessionMigratesToCurrentStableSelection()
+            throws Exception {
+        CriticalAlarmSoundCatalog.AlertType type =
+                CriticalAlarmSoundCatalog.AlertType.ACTUAL_HIGH;
+        assertTrue(CriticalAlarmSoundCatalog.select(application, type,
+                "crystal_bells"));
+        assertTrue(CriticalGlucoseAlarm.showTest(application, type));
+        String currentToken = token();
+        application.getSharedPreferences(CRITICAL_PREFS, Context.MODE_PRIVATE)
+                .edit().remove("sound_tone_id")
+                .putInt("sound_res", R.raw.siren).commit();
+
+        setStaticField("active", null);
+        setStaticField("initialized", false);
+        CriticalGlucoseAlarm.ensureChannels(application);
+
+        CriticalGlucoseAlarm.Session restored =
+                CriticalGlucoseAlarm.session(application, currentToken);
+        assertNotNull(restored);
+        assertEquals("crystal_bells", restored.soundToneId);
+        assertEquals(R.raw.alert_crystal_bells, restored.soundRes);
+        assertEquals("crystal_bells", application.getSharedPreferences(
+                CRITICAL_PREFS, Context.MODE_PRIVATE)
+                .getString("sound_tone_id", ""));
+    }
+
+    @Test
+    public void criticalPostAndAcknowledgeStopAnySettingsPreview()
+            throws Exception {
+        Field previewTimeout = CriticalAlarmSoundCatalog.class
+                .getDeclaredField("previewTimeout");
+        previewTimeout.setAccessible(true);
+        Runnable marker = () -> {};
+        previewTimeout.set(null, marker);
+
+        assertTrue(CriticalGlucoseAlarm.showTest(application, true));
+        assertNull(previewTimeout.get(null));
+
+        previewTimeout.set(null, marker);
+        assertFalse(CriticalGlucoseAlarm.previewSound(application,
+                "calm_chord"));
+        assertSame(marker, previewTimeout.get(null));
+        assertTrue(CriticalGlucoseAlarm.acknowledge(application, token()));
+        assertNull(previewTimeout.get(null));
+    }
+
+    @Test
+    public void dndGrantAfterFirstLaunchSelectsNewBypassChannels() {
+        ShadowNotificationManager shadow = shadowOf(notifications);
+        CriticalAlarmSoundCatalog.AlertType[] types =
+                CriticalAlarmSoundCatalog.AlertType.values();
+
+        shadow.setNotificationPolicyAccessGranted(false);
+        String[] standardIds = selectedCriticalChannelIds();
+        shadow.setNotificationPolicyAccessGranted(true);
+        String[] bypassIds = selectedCriticalChannelIds();
+        assertEquals(types.length, standardIds.length);
+        assertEquals(types.length, bypassIds.length);
+        for (int index = 0; index < types.length; index++) {
+            assertNotEquals(standardIds[index], bypassIds[index]);
+            notifications.deleteNotificationChannel(standardIds[index]);
+            notifications.deleteNotificationChannel(bypassIds[index]);
+        }
+
+        shadow.setNotificationPolicyAccessGranted(false);
+        CriticalGlucoseAlarm.ensureChannels(application);
+        CriticalAlarmDiagnostics.Snapshot beforeGrant =
+                CriticalAlarmDiagnostics.inspect(application);
+        assertFalse(beforeGrant.dndPolicyAccess);
+        assertFalse(beforeGrant.actualChannels.bypassDnd);
+        assertFalse(beforeGrant.predictiveChannels.bypassDnd);
+        assertFalse(beforeGrant.signalLossChannels.bypassDnd);
+        for (int index = 0; index < types.length; index++) {
+            NotificationChannel standard = notifications
+                    .getNotificationChannel(standardIds[index]);
+            assertNotNull(standardIds[index], standard);
+            assertFalse(standard.canBypassDnd());
+            assertNull(notifications.getNotificationChannel(
+                    bypassIds[index]));
+        }
+
+        shadow.setNotificationPolicyAccessGranted(true);
+        CriticalGlucoseAlarm.ensureChannels(application);
+        CriticalAlarmDiagnostics.Snapshot afterGrant =
+                CriticalAlarmDiagnostics.inspect(application);
+        assertTrue(afterGrant.dndPolicyAccess);
+        assertTrue(afterGrant.actualChannels.ready());
+        assertTrue(afterGrant.actualChannels.bypassDnd);
+        assertTrue(afterGrant.predictiveChannels.ready());
+        assertTrue(afterGrant.predictiveChannels.bypassDnd);
+        assertTrue(afterGrant.signalLossChannels.ready());
+        assertTrue(afterGrant.signalLossChannels.bypassDnd);
+        for (int index = 0; index < types.length; index++) {
+            NotificationChannel standard = notifications
+                    .getNotificationChannel(standardIds[index]);
+            NotificationChannel bypass = notifications
+                    .getNotificationChannel(bypassIds[index]);
+            assertNotNull(standardIds[index], standard);
+            assertFalse(standard.canBypassDnd());
+            assertNotNull(bypassIds[index], bypass);
+            assertTrue(bypass.canBypassDnd());
+            assertEquals(standard.getSound(), bypass.getSound());
+            assertEquals(AudioAttributes.USAGE_ALARM,
+                    bypass.getAudioAttributes().getUsage());
+        }
+    }
+
+    @Test
+    public void criticalEpisodeRaisesSilentAlarmVolumeAndAckRestoresIt() {
+        AudioManager audio = (AudioManager) application.getSystemService(
+                Context.AUDIO_SERVICE);
+        assertNotNull(audio);
+        int before = audio.getStreamVolume(AudioManager.STREAM_ALARM);
+        try {
+            audio.setStreamVolume(AudioManager.STREAM_ALARM, 0, 0);
+            assertTrue(CriticalGlucoseAlarm.showTest(application, true));
+            assertTrue(audio.getStreamVolume(AudioManager.STREAM_ALARM) > 0);
+
+            assertTrue(CriticalGlucoseAlarm.acknowledge(application, token()));
+            assertEquals(0,
+                    audio.getStreamVolume(AudioManager.STREAM_ALARM));
+        } finally {
+            CriticalGlucoseAlarm.acknowledge(application, token());
+            CriticalGlucoseAlarm.resolveActual(application);
+            CriticalGlucoseAlarm.cancelPredictive(application, true);
+            audio.setStreamVolume(AudioManager.STREAM_ALARM, before, 0);
+        }
+    }
+
+    @Test
+    public void oldAckVolumeRetriesNeverClobberNewCriticalFloor() {
+        AudioManager audio = (AudioManager) application.getSystemService(
+                Context.AUDIO_SERVICE);
+        assertNotNull(audio);
+        int before = audio.getStreamVolume(AudioManager.STREAM_ALARM);
+        try {
+            audio.setStreamVolume(AudioManager.STREAM_ALARM, 1, 0);
+            assertTrue(CriticalGlucoseAlarm.showTest(application,
+                    CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW));
+            String endedToken = token();
+            assertTrue(CriticalGlucoseAlarm.acknowledge(application,
+                    endedToken));
+            assertEquals(1,
+                    audio.getStreamVolume(AudioManager.STREAM_ALARM));
+
+            assertTrue(CriticalAlertPreferences.setMinimumVolumePercent(
+                    application,
+                    CriticalAlarmSoundCatalog.AlertType.ACTUAL_HIGH, 100));
+            assertTrue(CriticalGlucoseAlarm.showTest(application,
+                    CriticalAlarmSoundCatalog.AlertType.ACTUAL_HIGH));
+            String newerToken = token();
+            assertNotEquals(endedToken, newerToken);
+            int maximum = audio.getStreamMaxVolume(AudioManager.STREAM_ALARM);
+            assertEquals(maximum,
+                    audio.getStreamVolume(AudioManager.STREAM_ALARM));
+
+            shadowOf(Looper.getMainLooper()).idleFor(35L, TimeUnit.SECONDS);
+
+            assertNotNull(CriticalGlucoseAlarm.session(application, newerToken));
+            assertEquals(maximum,
+                    audio.getStreamVolume(AudioManager.STREAM_ALARM));
+        } finally {
+            String live = token();
+            if (!live.isEmpty()) {
+                CriticalGlucoseAlarm.acknowledge(application, live);
+            }
+            shadowOf(Looper.getMainLooper()).idleFor(35L, TimeUnit.SECONDS);
+            audio.setStreamVolume(AudioManager.STREAM_ALARM, before, 0);
+        }
+    }
+
+    @Test
+    public void ackVolumeRestoreStopsOwningExactFloorAfterFiveSeconds() {
+        AudioManager audio = (AudioManager) application.getSystemService(
+                Context.AUDIO_SERVICE);
+        assertNotNull(audio);
+        int before = audio.getStreamVolume(AudioManager.STREAM_ALARM);
+        try {
+            audio.setStreamVolume(AudioManager.STREAM_ALARM, 1, 0);
+            assertTrue(CriticalGlucoseAlarm.showTest(application,
+                    CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW));
+            int oldFloor = audio.getStreamVolume(AudioManager.STREAM_ALARM);
+            assertTrue(oldFloor > 1);
+
+            assertTrue(CriticalGlucoseAlarm.acknowledge(application, token()));
+            assertEquals(1,
+                    audio.getStreamVolume(AudioManager.STREAM_ALARM));
+            shadowOf(Looper.getMainLooper()).idleFor(6L, TimeUnit.SECONDS);
+
+            // Once the bounded OEM workaround has finished, an exact-floor
+            // value is user-owned too. Later notification-only cleanup must
+            // not mistake it for a stale channel-volume reassertion.
+            audio.setStreamVolume(AudioManager.STREAM_ALARM, oldFloor, 0);
+            shadowOf(Looper.getMainLooper()).idleFor(30L, TimeUnit.SECONDS);
+
+            assertEquals(oldFloor,
+                    audio.getStreamVolume(AudioManager.STREAM_ALARM));
+            assertTrue(application.getSharedPreferences(
+                    CriticalAlarmAudioReliability.PREFS_NAME,
+                    Context.MODE_PRIVATE).getAll().isEmpty());
+        } finally {
+            audio.setStreamVolume(AudioManager.STREAM_ALARM, before, 0);
+        }
+    }
+
+    @Test
+    public void shortSnoozeResumeSameTokenSurvivesOldCleanupCallbacks() {
+        AudioManager audio = (AudioManager) application.getSystemService(
+                Context.AUDIO_SERVICE);
+        assertNotNull(audio);
+        int before = audio.getStreamVolume(AudioManager.STREAM_ALARM);
+        try {
+            audio.setStreamVolume(AudioManager.STREAM_ALARM, 1, 0);
+            assertTrue(CriticalGlucoseAlarm.showTest(application,
+                    CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW));
+            String sameToken = token();
+            assertTrue(CriticalGlucoseAlarm.snooze(application, sameToken, 1L));
+            assertNull(activeNotification(8_405));
+            assertEquals(1,
+                    audio.getStreamVolume(AudioManager.STREAM_ALARM));
+
+            shadowOf(Looper.getMainLooper()).idleFor(2L,
+                    TimeUnit.MILLISECONDS);
+            CriticalGlucoseAlarm.resume(application, sameToken);
+            assertNotNull(CriticalGlucoseAlarm.session(application, sameToken));
+            assertNotNull(activeNotification(8_405));
+            int floor = CriticalAlarmAudioReliability.minimumAudibleIndex(
+                    audio.getStreamMaxVolume(AudioManager.STREAM_ALARM));
+            assertEquals(floor,
+                    audio.getStreamVolume(AudioManager.STREAM_ALARM));
+
+            shadowOf(Looper.getMainLooper()).idleFor(35L, TimeUnit.SECONDS);
+
+            assertNotNull(CriticalGlucoseAlarm.session(application, sameToken));
+            assertNotNull(activeNotification(8_405));
+            assertEquals(floor,
+                    audio.getStreamVolume(AudioManager.STREAM_ALARM));
+        } finally {
+            String live = token();
+            if (!live.isEmpty()) {
+                CriticalGlucoseAlarm.acknowledge(application, live);
+            }
+            shadowOf(Looper.getMainLooper()).idleFor(35L, TimeUnit.SECONDS);
+            audio.setStreamVolume(AudioManager.STREAM_ALARM, before, 0);
+        }
+    }
+
+    @Test
+    public void acknowledgeCancelsEveryCriticalIdButKeepsOrdinaryNotification() {
+        CriticalAlarmSoundCatalog.AlertType type =
+                CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW;
+        assertTrue(CriticalGlucoseAlarm.showTest(application, type));
+        String currentToken = token();
+
+        Notification ordinary = new Notification.Builder(application,
+                selectedChannel(type))
+                .setSmallIcon(R.drawable.novalue)
+                .setContentTitle("ordinary app notification")
+                .build();
+        notifications.notify(42, ordinary);
+        for (int id : criticalNotificationIds()) {
+            Notification orphan = new Notification.Builder(application,
+                    selectedChannel(type))
+                    .setSmallIcon(R.drawable.novalue)
+                    .setContentTitle("critical orphan " + id)
+                    .build();
+            orphan.flags |= Notification.FLAG_INSISTENT;
+            notifications.notify(id, orphan);
+        }
+
+        assertTrue(CriticalGlucoseAlarm.acknowledge(application, currentToken));
+
+        for (int id : criticalNotificationIds()) {
+            assertNull("critical notification survived: " + id,
+                    activeNotification(id));
+        }
+        assertNotNull("ordinary notification must be left alone",
+                activeNotification(42));
+    }
+
+    @Test
+    public void oemCleanupCopyCannotInsistRelaunchOrExposeActions() {
+        PendingIntent action = PendingIntent.getBroadcast(application, 91_001,
+                new Intent(application, CriticalGlucoseAlarmReceiver.class)
+                        .setAction(CriticalGlucoseAlarmReceiver.ACTION_ACK),
+                PendingIntent.FLAG_UPDATE_CURRENT
+                        | PendingIntent.FLAG_IMMUTABLE);
+        Notification original = new Notification.Builder(application,
+                selectedChannel(CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW))
+                .setSmallIcon(R.drawable.novalue)
+                .setContentTitle("critical")
+                .setContentIntent(action)
+                .setDeleteIntent(action)
+                .setFullScreenIntent(action, true)
+                .addAction(0, "Stop", action)
+                .build();
+        original.flags |= Notification.FLAG_INSISTENT
+                | Notification.FLAG_NO_CLEAR
+                | Notification.FLAG_ONGOING_EVENT;
+        original.flags &= ~Notification.FLAG_ONLY_ALERT_ONCE;
+        original.sound = android.net.Uri.parse("content://test/alarm");
+        original.vibrate = new long[]{0L, 1_000L};
+        original.defaults = Notification.DEFAULT_ALL;
+
+        Notification neutral = CriticalGlucoseAlarm
+                .neutralizedNotification(original);
+
+        assertNotNull(neutral);
+        assertNotEquals(original, neutral);
+        assertEquals(0, neutral.flags & Notification.FLAG_INSISTENT);
+        assertEquals(0, neutral.flags & Notification.FLAG_NO_CLEAR);
+        assertEquals(0, neutral.flags & Notification.FLAG_ONGOING_EVENT);
+        assertNotEquals(0,
+                neutral.flags & Notification.FLAG_ONLY_ALERT_ONCE);
+        assertEquals(0, neutral.defaults);
+        assertNull(neutral.sound);
+        assertNull(neutral.vibrate);
+        assertNull(neutral.fullScreenIntent);
+        assertNull(neutral.contentIntent);
+        assertNull(neutral.deleteIntent);
+        assertNull(neutral.actions);
+        // Clone-before-neutralize is important: SystemUI still owns the
+        // original object until the exact tag/id replacement is submitted.
+        assertNotNull(original.fullScreenIntent);
+        assertNotNull(original.actions);
+        assertNotEquals(0, original.flags & Notification.FLAG_INSISTENT);
+    }
+
+    @Test
+    public void delayedAckCleanupRemovesLateOemPost() {
+        CriticalAlarmSoundCatalog.AlertType type =
+                CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW;
+        assertTrue(CriticalGlucoseAlarm.showTest(application, type));
+        String currentToken = token();
+        assertTrue(CriticalGlucoseAlarm.acknowledge(application, currentToken));
+
+        // Model a vendor delivery that survives/reappears beyond the short
+        // post-Activity retries observed on the physical Fold device.
+        shadowOf(Looper.getMainLooper()).idleFor(31L, TimeUnit.SECONDS);
+        Notification late = new Notification.Builder(application,
+                selectedChannel(type))
+                .setSmallIcon(R.drawable.novalue)
+                .setContentTitle("late INSISTENT delivery")
+                .build();
+        late.flags |= Notification.FLAG_INSISTENT;
+        notifications.notify(8_405, late);
+        assertNotNull(activeNotification(8_405));
+
+        shadowOf(Looper.getMainLooper()).idleFor(30L, TimeUnit.SECONDS);
+
+        assertNull(activeNotification(8_405));
+    }
+
+    @Test
+    public void delayedAckCleanupNeverCancelsNewerCriticalEpisode() {
+        assertTrue(CriticalGlucoseAlarm.showTest(application,
+                CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW));
+        String endedToken = token();
+        assertTrue(CriticalGlucoseAlarm.acknowledge(application, endedToken));
+
+        assertTrue(CriticalGlucoseAlarm.showTest(application,
+                CriticalAlarmSoundCatalog.AlertType.ACTUAL_HIGH));
+        String newerToken = token();
+        assertNotEquals(endedToken, newerToken);
+        shadowOf(Looper.getMainLooper()).idleFor(65L, TimeUnit.SECONDS);
+
+        assertNotNull(CriticalGlucoseAlarm.session(application, newerToken));
+        assertNotNull(activeNotification(8_405));
+    }
+
+    @Test
+    public void delayedAckCleanupKeepsNewIdAndCancelsStaleOtherId() {
+        assertTrue(CriticalGlucoseAlarm.showTest(application,
+                CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW));
+        String endedToken = token();
+        assertTrue(CriticalGlucoseAlarm.acknowledge(application, endedToken));
+
+        assertTrue(CriticalGlucoseAlarm.showActual(application, 1, 215f,
+                "new measured high", true));
+        CriticalGlucoseAlarm.Session newer =
+                CriticalGlucoseAlarm.currentSession(application);
+        assertNotNull(newer);
+        assertNotEquals(endedToken, newer.token);
+        assertNotNull(activeNotification(8_402));
+
+        Notification stale = new Notification.Builder(application,
+                selectedChannel(CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW))
+                .setSmallIcon(R.drawable.novalue)
+                .setContentTitle("stale test delivery")
+                .build();
+        stale.flags |= Notification.FLAG_INSISTENT
+                | Notification.FLAG_NO_CLEAR;
+        notifications.notify(8_405, stale);
+        assertNotNull(activeNotification(8_405));
+
+        shadowOf(Looper.getMainLooper()).idleFor(65L, TimeUnit.SECONDS);
+
+        assertNotNull(CriticalGlucoseAlarm.session(application, newer.token));
+        assertNotNull(activeNotification(8_402));
+        assertNull(activeNotification(8_405));
+    }
+
+    @Test
+    public void signalLossUsesOwnAlarmChannelVolumeAndResolvesOnReading() {
+        AudioManager audio = (AudioManager) application.getSystemService(
+                Context.AUDIO_SERVICE);
+        assertNotNull(audio);
+        int before = audio.getStreamVolume(AudioManager.STREAM_ALARM);
+        try {
+            assertTrue(CriticalAlertPreferences.setMinimumVolumePercent(
+                    application,
+                    CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS, 100));
+            audio.setStreamVolume(AudioManager.STREAM_ALARM, 0, 0);
+            long lastReading = System.currentTimeMillis() - 20L * 60_000L;
+            assertTrue(CriticalGlucoseAlarm.showLossSignal(application,
+                    lastReading, "No readings for 20 minutes"));
+
+            CriticalGlucoseAlarm.Session session =
+                    CriticalGlucoseAlarm.currentSession(application);
+            assertNotNull(session);
+            assertTrue(session.signalLoss());
+            assertEquals(CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS,
+                    session.alertType);
+            assertEquals(100, session.minimumVolumePercent);
+            assertEquals(audio.getStreamMaxVolume(AudioManager.STREAM_ALARM),
+                    audio.getStreamVolume(AudioManager.STREAM_ALARM));
+            StatusBarNotification notification = activeNotification(8_406);
+            assertNotNull(notification);
+            assertEquals(selectedChannel(
+                            CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS),
+                    notification.getNotification().getChannelId());
+            assertEquals(1, notification.getNotification().actions.length);
+
+            CriticalGlucoseAlarm.resolveSignalLoss(application);
+            assertTrue(token().isEmpty());
+            assertNull(activeNotification(8_406));
+            assertEquals(0,
+                    audio.getStreamVolume(AudioManager.STREAM_ALARM));
+        } finally {
+            CriticalGlucoseAlarm.resolveSignalLoss(application);
+            audio.setStreamVolume(AudioManager.STREAM_ALARM, before, 0);
+        }
+    }
+
+    @Test
+    public void measuredReadingPreemptsSignalLossWithoutParallelFallback() {
+        long now = System.currentTimeMillis();
+        assertTrue(CriticalGlucoseAlarm.showLossSignal(application,
+                now - 20L * 60_000L, "Signal missing"));
+        String lossToken = token();
+
+        assertTrue(CriticalGlucoseAlarm.showActual(application, 0,
+                63f, "Measured low after reconnect", false));
+        CriticalGlucoseAlarm.Session measured =
+                CriticalGlucoseAlarm.currentSession(application);
+        assertNotNull(measured);
+        assertTrue(measured.actual());
+        assertEquals(CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW,
+                measured.alertType);
+        assertNotEquals(lossToken, measured.token);
+        assertNull(activeNotification(8_406));
+        assertNotNull(activeNotification(selectedChannel(
+                CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW)));
     }
 
     @Test
@@ -179,18 +721,18 @@ public class CriticalGlucoseAlarmTest {
 
         assertEquals(validToken, token());
         assertNotNull(CriticalGlucoseAlarm.session(application, validToken));
-        assertNotNull(activeNotification(
-                CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID));
+        assertNotNull(activeNotification(selectedChannel(
+                CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW)));
     }
 
     @Test
-    public void predictiveNotificationCarriesOnlyNotificationFsiAndThreeActions()
+    public void predictiveNotificationCarriesFsiAndOnlyStopSoundAction()
             throws Exception {
         long now = System.currentTimeMillis();
         assertTrue(showPrediction(true, "Likely low", "Act soon", now));
 
-        StatusBarNotification active = activeNotification(
-                CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID);
+        StatusBarNotification active = activeNotification(selectedChannel(
+                CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW));
         assertNotNull(active);
         Notification notification = active.getNotification();
         assertNotNull(notification.fullScreenIntent);
@@ -201,59 +743,41 @@ public class CriticalGlucoseAlarmTest {
         assertEquals(0, notification.flags
                 & Notification.FLAG_ONLY_ALERT_ONCE);
         assertNotNull(notification.actions);
-        assertEquals(3, notification.actions.length);
+        assertEquals(1, notification.actions.length);
+        Intent stopIntent = shadowOf(notification.actions[0].actionIntent)
+                .getSavedIntent();
+        assertEquals(CriticalGlucoseAlarmReceiver.ACTION_ACK,
+                stopIntent.getAction());
+        assertEquals(token(), stopIntent.getStringExtra(
+                CriticalGlucoseAlarmReceiver.EXTRA_TOKEN));
         assertNull(getStaticField("delayedLoop"));
         assertNull(getStaticField("ringtone"));
     }
 
     @Test
-    public void notificationOpenGraphUsesPrivateActivityGateAndRejectsStale()
+    public void typeAwareTestKeepsActualLowChannelAcrossColdRestore()
             throws Exception {
-        long now = System.currentTimeMillis();
-        assertTrue(showPrediction(true, "Low", "First", now));
-        String staleToken = token();
-        StatusBarNotification first = activeNotification(
-                CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID);
-        assertNotNull(first);
-        PendingIntent staleOpen = first.getNotification().actions[2].actionIntent;
-        Intent staleIntent = shadowOf(staleOpen).getSavedIntent();
-        assertEquals(CriticalGlucoseAlarmOpenGraphActivity.ACTION_OPEN_GRAPH,
-                staleIntent.getAction());
-        assertNotNull(staleIntent.getComponent());
-        assertEquals(CriticalGlucoseAlarmOpenGraphActivity.class.getName(),
-                staleIntent.getComponent().getClassName());
-        assertEquals(staleToken, staleIntent.getStringExtra(
-                CriticalGlucoseAlarmReceiver.EXTRA_TOKEN));
-        assertNotNull(staleIntent.getData());
-        assertTrue(staleIntent.getData().isOpaque());
-
-        assertTrue(showPrediction(false, "High", "Replacement", now + 1L));
+        CriticalAlarmSoundCatalog.AlertType type =
+                CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW;
+        assertTrue(CriticalGlucoseAlarm.showTest(application, type));
         String currentToken = token();
-        StatusBarNotification replacement = activeNotification(
-                CriticalAlarmDiagnostics.PREDICTIVE_HIGH_CHANNEL_ID);
-        assertNotNull(replacement);
-        PendingIntent currentOpen = replacement.getNotification()
-                .actions[2].actionIntent;
-        Intent currentIntent = shadowOf(currentOpen).getSavedIntent();
-        assertNotEquals(staleOpen, currentOpen);
-        assertNotEquals(staleIntent.getData(), currentIntent.getData());
-        assertEquals(currentToken, currentIntent.getStringExtra(
-                CriticalGlucoseAlarmReceiver.EXTRA_TOKEN));
+        CriticalGlucoseAlarm.Session session =
+                CriticalGlucoseAlarm.currentSession(application);
+        assertNotNull(session);
+        assertEquals(type, session.alertType);
+        assertEquals(CriticalAlertPreferences.DEFAULT_MINIMUM_VOLUME_PERCENT,
+                session.minimumVolumePercent);
+        assertNotNull(activeNotification(selectedChannel(type)));
 
-        assertFalse(application.getPackageManager().getActivityInfo(
-                staleIntent.getComponent(), 0).exported);
+        setStaticField("active", null);
+        setStaticField("initialized", false);
+        CriticalGlucoseAlarm.ensureChannels(application);
 
-        while (shadowOf(application).getNextStartedActivity() != null) { }
-        Robolectric.buildActivity(CriticalGlucoseAlarmOpenGraphActivity.class,
-                staleIntent).create().destroy();
-        assertNull(shadowOf(application).getNextStartedActivity());
-
-        Robolectric.buildActivity(CriticalGlucoseAlarmOpenGraphActivity.class,
-                currentIntent).create().destroy();
-        Intent graph = shadowOf(application).getNextStartedActivity();
-        assertNotNull(graph);
-        assertEquals(MainActivity.class.getName(),
-                graph.getComponent().getClassName());
+        CriticalGlucoseAlarm.Session restored =
+                CriticalGlucoseAlarm.session(application, currentToken);
+        assertNotNull(restored);
+        assertEquals(type, restored.alertType);
+        assertNotNull(activeNotification(selectedChannel(type)));
     }
 
     @Test
@@ -387,8 +911,8 @@ public class CriticalGlucoseAlarmTest {
                 230f, "Actual high", true));
         CriticalGlucoseAlarm.resolveActual(application);
         assertTrue(token().isEmpty());
-        assertNull(activeNotification(
-                CriticalAlarmDiagnostics.ACTUAL_HIGH_CHANNEL_ID));
+        assertNull(activeNotification(selectedChannel(
+                CriticalAlarmSoundCatalog.AlertType.ACTUAL_HIGH)));
     }
 
     @Test
@@ -410,8 +934,8 @@ public class CriticalGlucoseAlarmTest {
         assertTrue(preferences.snoozeBlocks(
                 PredictiveAlertPreferences.DIRECTION_LOW,
                 System.currentTimeMillis()));
-        assertNull(activeNotification(
-                CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID));
+        assertNull(activeNotification(selectedChannel(
+                CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW)));
     }
 
     @Test
@@ -695,6 +1219,11 @@ public class CriticalGlucoseAlarmTest {
         assertFalse(possibleBranch.contains(
                 "stopLegacyGlucoseAlarmAfterOwnership("));
         assertFalse(possibleBranch.contains("Notify.stopGlucoseAlarm()"));
+
+        assertTrue(notify.contains(
+                "CriticalGlucoseAlarm.showLossSignal("));
+        assertTrue(notify.contains(
+                "CriticalGlucoseAlarm.resolveSignalLoss(Applic.app)"));
     }
 
     @Test
@@ -742,6 +1271,8 @@ public class CriticalGlucoseAlarmTest {
         assertTrue(manifest.contains("android:exported=\"false\""));
         assertTrue(mainManifest.contains(
                 "android.permission.SYSTEM_ALERT_WINDOW"));
+        assertTrue(mainManifest.contains(
+                "android.permission.MODIFY_AUDIO_SETTINGS"));
 
         String controller = source(Paths.get("src", "main", "java", "tk",
                 "glucodata", "CriticalGlucoseAlarm.java"));
@@ -793,7 +1324,12 @@ public class CriticalGlucoseAlarmTest {
         String safetySurface = controller + activity + receiver + notify
                 + overlay;
         assertFalse(safetySurface.contains("setInterruptionFilter"));
-        assertFalse(safetySurface.contains("setStreamVolume"));
+        String audioReliability = source(Paths.get("src", "main", "java", "tk",
+                "glucodata", "CriticalAlarmAudioReliability.java"));
+        assertTrue(audioReliability.contains("setStreamVolume"));
+        assertTrue(audioReliability.contains("STREAM_ALARM"));
+        assertTrue(audioReliability.contains("restoreAlarmVolume"));
+        assertFalse(audioReliability.contains("setRingerMode"));
         assertFalse(safetySurface.contains("adjustStreamVolume"));
     }
 
@@ -846,6 +1382,10 @@ public class CriticalGlucoseAlarmTest {
         session.anchorMs = System.currentTimeMillis();
         session.expiresAtMs = session.anchorMs + 30L * 60_000L;
         session.soundRes = R.raw.lowsoon;
+        session.alertType =
+                CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW;
+        session.minimumVolumePercent =
+                CriticalAlertPreferences.DEFAULT_MINIMUM_VOLUME_PERCENT;
         return session;
     }
 
@@ -878,6 +1418,11 @@ public class CriticalGlucoseAlarmTest {
         return null;
     }
 
+    private String selectedChannel(
+            CriticalAlarmSoundCatalog.AlertType alertType) {
+        return CriticalGlucoseAlarm.selectedChannelId(application, alertType);
+    }
+
     private StatusBarNotification activeNotification(int id) {
         for (StatusBarNotification item : notifications.getActiveNotifications()) {
             if (item != null && item.getId() == id) return item;
@@ -903,6 +1448,7 @@ public class CriticalGlucoseAlarmTest {
         CriticalGlucoseAlarm.cancelPredictive(application, true);
         CriticalGlucoseAlarm.cancelPredictive(application, false);
         CriticalGlucoseAlarm.resolveActual(application);
+        CriticalGlucoseAlarm.resolveSignalLoss(application);
         application.getSharedPreferences(CRITICAL_PREFS,
                 Context.MODE_PRIVATE).edit().clear().commit();
     }
@@ -919,8 +1465,24 @@ public class CriticalGlucoseAlarmTest {
                 CriticalAlarmDiagnostics.ACTUAL_LOW_CHANNEL_ID,
                 CriticalAlarmDiagnostics.ACTUAL_HIGH_CHANNEL_ID,
                 CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID,
-                CriticalAlarmDiagnostics.PREDICTIVE_HIGH_CHANNEL_ID
+                CriticalAlarmDiagnostics.PREDICTIVE_HIGH_CHANNEL_ID,
+                CriticalAlarmDiagnostics.SIGNAL_LOSS_CHANNEL_ID
         };
+    }
+
+    private static int[] criticalNotificationIds() {
+        return new int[]{8_401, 8_402, 8_403, 8_404, 8_405, 8_406};
+    }
+
+    private String[] selectedCriticalChannelIds() {
+        String[] actual = CriticalGlucoseAlarm.selectedChannelIds(
+                application, true);
+        String[] predictive = CriticalGlucoseAlarm.selectedChannelIds(
+                application, false);
+        String[] signalLoss = CriticalGlucoseAlarm
+                .selectedSignalLossChannelIds(application);
+        return new String[]{actual[0], actual[1], predictive[0],
+                predictive[1], signalLoss[0]};
     }
 
     private static String source(Path relative) throws Exception {

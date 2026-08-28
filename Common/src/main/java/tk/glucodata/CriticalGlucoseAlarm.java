@@ -19,6 +19,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
@@ -36,14 +37,18 @@ import java.util.UUID;
  * <p>Android does not offer an unrevokable medical-alarm entitlement. This
  * class therefore combines an alarm-usage notification channel, a
  * full-screen intent where the OS permits it, and an application-owned alarm
- * loop. It never changes global volume or the user's Do Not Disturb mode.</p>
+ * loop. For the active episode it may temporarily raise only the alarm stream
+ * to that alert type's configured floor, then restore it. It never changes the
+ * ringer mode or the user's Do Not Disturb filter.</p>
  */
 final class CriticalGlucoseAlarm {
     static final String SOURCE_ACTUAL = "actual";
     static final String SOURCE_PREDICTIVE = "predictive";
+    static final String SOURCE_SIGNAL_LOSS = "signal_loss";
     static final String SOURCE_TEST = "test";
     static final String DIRECTION_LOW = "low";
     static final String DIRECTION_HIGH = "high";
+    static final String DIRECTION_SIGNAL = "signal";
 
     private static final String PREFS = "critical_glucose_alarm_v1";
     private static final String KEY_TOKEN = "token";
@@ -57,6 +62,10 @@ final class CriticalGlucoseAlarm {
     private static final String KEY_EXPIRES = "expires_at_ms";
     private static final String KEY_SNOOZE = "snooze_until_ms";
     private static final String KEY_SOUND_RES = "sound_res";
+    private static final String KEY_SOUND_TONE_ID = "sound_tone_id";
+    private static final String KEY_ALERT_TYPE = "alert_type";
+    private static final String KEY_MINIMUM_VOLUME_PERCENT =
+            "minimum_volume_percent";
     private static final String KEY_DISPLAY_PAYLOAD = "display_payload";
 
     private static final int ACTUAL_LOW_ID = 8_401;
@@ -64,16 +73,31 @@ final class CriticalGlucoseAlarm {
     private static final int PREDICTIVE_LOW_ID = 8_403;
     private static final int PREDICTIVE_HIGH_ID = 8_404;
     private static final int TEST_ID = 8_405;
+    private static final int SIGNAL_LOSS_ID = 8_406;
     private static final int[] CRITICAL_NOTIFICATION_IDS = {
             ACTUAL_LOW_ID, ACTUAL_HIGH_ID, PREDICTIVE_LOW_ID,
-            PREDICTIVE_HIGH_ID, TEST_ID
+            PREDICTIVE_HIGH_ID, TEST_ID, SIGNAL_LOSS_ID
+    };
+    // Some Android/OEM notification services complete an INSISTENT post after
+    // the app's first cancel IPC. Retry after the acknowledgement Activity has
+    // had time to finish, while guarding against a newer critical episode.
+    private static final long[] CRITICAL_CANCEL_RETRY_DELAYS_MS = {
+            150L, 750L, 2_500L, 10_000L, 30_000L, 60_000L
+    };
+    private static final long[] VOLUME_RESTORE_RETRY_DELAYS_MS = {
+            150L, 400L, 800L, 1_150L, 1_800L, 3_000L, 5_000L
     };
     private static final long ACTUAL_MAX_LIFETIME_MS = 24L * 60L * 60_000L;
+    private static final long SIGNAL_LOSS_MAX_LIFETIME_MS =
+            24L * 60L * 60_000L;
     private static final long TEST_LIFETIME_MS = 2L * 60_000L;
+    private static final String SELECTED_CHANNEL_VERSION = "v4";
     private static final long[] LOW_VIBRATION =
             {0L, 900L, 350L, 900L, 350L, 1_600L};
     private static final long[] HIGH_VIBRATION =
             {0L, 450L, 250L, 450L, 250L, 900L};
+    private static final long[] SIGNAL_LOSS_VIBRATION =
+            {0L, 650L, 300L, 650L, 300L, 1_200L};
     private static final AudioAttributes ALARM_ATTRIBUTES =
             new AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
@@ -98,8 +122,7 @@ final class CriticalGlucoseAlarm {
             NotificationManager manager = (NotificationManager)
                     app.getSystemService(Context.NOTIFICATION_SERVICE);
             if (manager != null) {
-                boolean bypass = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
-                        || manager.isNotificationPolicyAccessGranted();
+                boolean bypass = dndBypassAvailable(manager);
                 createChannel(app, manager,
                         CriticalAlarmDiagnostics.ACTUAL_LOW_CHANNEL_ID,
                         R.string.critical_alarm_channel_actual_low,
@@ -120,9 +143,34 @@ final class CriticalGlucoseAlarm {
                         R.string.critical_alarm_channel_predictive_high,
                         R.string.critical_alarm_channel_predictive_high_description,
                         R.raw.highsoon, HIGH_VIBRATION, bypass);
+                createChannel(app, manager,
+                        CriticalAlarmDiagnostics.SIGNAL_LOSS_CHANNEL_ID,
+                        R.string.critical_alarm_channel_signal_loss,
+                        R.string.critical_alarm_channel_signal_loss_description,
+                        R.raw.siren, SIGNAL_LOSS_VIBRATION, bypass);
+                // A channel's sound is immutable after creation. Give every
+                // explicit built-in selection its own stable channel so the
+                // first OS-owned sound and any app-owned fallback always use
+                // the same resource without deleting user-customized channels.
+                createSelectedChannel(app, manager,
+                        CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW,
+                        bypass);
+                createSelectedChannel(app, manager,
+                        CriticalAlarmSoundCatalog.AlertType.ACTUAL_HIGH,
+                        bypass);
+                createSelectedChannel(app, manager,
+                        CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW,
+                        bypass);
+                createSelectedChannel(app, manager,
+                        CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_HIGH,
+                        bypass);
+                createSelectedChannel(app, manager,
+                        CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS,
+                        bypass);
             }
         }
-        CriticalAlarmDiagnostics.registerTestHook(CriticalGlucoseAlarm::showTest);
+        CriticalAlarmDiagnostics.registerTestHook(
+                (testContext, alertType) -> showTest(testContext, alertType));
         if (!initialized) {
             initialized = true;
             restoreIfNeeded(app);
@@ -139,6 +187,64 @@ final class CriticalGlucoseAlarm {
         channel.setSound(resourceUri(context, soundRes), ALARM_ATTRIBUTES);
         channel.enableVibration(true);
         channel.setVibrationPattern(pattern);
+        channel.setLockscreenVisibility(Notification.VISIBILITY_PRIVATE);
+        channel.setBypassDnd(bypassDnd);
+        manager.createNotificationChannel(channel);
+    }
+
+    private static void createSelectedChannel(Context context,
+            NotificationManager manager,
+            CriticalAlarmSoundCatalog.AlertType alertType,
+            boolean bypassDnd) {
+        String toneId = CriticalAlarmSoundCatalog.selectedToneId(context,
+                alertType);
+        int soundRes = CriticalAlarmSoundCatalog.selectedSoundRes(context,
+                alertType);
+        createSelectedChannel(context, manager, alertType, toneId, soundRes,
+                bypassDnd);
+    }
+
+    private static void createSelectedChannel(Context context,
+            NotificationManager manager,
+            CriticalAlarmSoundCatalog.AlertType alertType, String toneId,
+            int soundRes, boolean bypassDnd) {
+        boolean low = alertType == CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW
+                || alertType
+                == CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW;
+        boolean signalLoss = alertType
+                == CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS;
+        boolean actual = alertType
+                == CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW
+                || alertType
+                == CriticalAlarmSoundCatalog.AlertType.ACTUAL_HIGH;
+        int nameRes = signalLoss
+                ? R.string.critical_alarm_channel_signal_loss
+                : actual
+                ? low ? R.string.critical_alarm_channel_actual_low
+                        : R.string.critical_alarm_channel_actual_high
+                : low ? R.string.critical_alarm_channel_predictive_low
+                        : R.string.critical_alarm_channel_predictive_high;
+        int descriptionRes = signalLoss
+                ? R.string.critical_alarm_channel_signal_loss_description
+                : actual
+                ? low ? R.string.critical_alarm_channel_actual_low_description
+                        : R.string.critical_alarm_channel_actual_high_description
+                : low ? R.string.critical_alarm_channel_predictive_low_description
+                        : R.string.critical_alarm_channel_predictive_high_description;
+        String baseName = context.getString(nameRes);
+        CharSequence toneLabel = CriticalAlarmSoundCatalog.label(context,
+                toneId);
+        NotificationChannel channel = new NotificationChannel(
+                selectedChannelId(alertType, toneId, bypassDnd),
+                toneLabel.length() == 0 ? baseName
+                        : baseName + " · " + toneLabel,
+                NotificationManager.IMPORTANCE_HIGH);
+        channel.setDescription(context.getString(descriptionRes));
+        channel.setSound(stableResourceUri(context, soundRes),
+                ALARM_ATTRIBUTES);
+        channel.enableVibration(true);
+        channel.setVibrationPattern(signalLoss ? SIGNAL_LOSS_VIBRATION
+                : low ? LOW_VIBRATION : HIGH_VIBRATION);
         channel.setLockscreenVisibility(Notification.VISIBILITY_PRIVATE);
         channel.setBypassDnd(bypassDnd);
         manager.createNotificationChannel(channel);
@@ -189,10 +295,12 @@ final class CriticalGlucoseAlarm {
         long presentedAtMs = System.currentTimeMillis();
         incoming.anchorMs = presentedAtMs;
         incoming.expiresAtMs = incoming.anchorMs + ACTUAL_MAX_LIFETIME_MS;
-        incoming.soundRes = low ? R.raw.verylow : R.raw.veryhigh;
+        configureDelivery(app, incoming, low
+                ? CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW
+                : CriticalAlarmSoundCatalog.AlertType.ACTUAL_HIGH);
         boolean replacesNonActual = current != null
                 && !SOURCE_ACTUAL.equals(current.source)
-                && incoming.priority > current.priority;
+                && incoming.priority >= current.priority;
         boolean reversesActualDirection = current != null
                 && SOURCE_ACTUAL.equals(current.source)
                 && !incoming.direction.equals(current.direction);
@@ -220,9 +328,9 @@ final class CriticalGlucoseAlarm {
         }
         Context app = context.getApplicationContext();
         ensureChannels(app);
-        String channel = low
-                ? CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID
-                : CriticalAlarmDiagnostics.PREDICTIVE_HIGH_CHANNEL_ID;
+        String channel = selectedChannelId(app,
+                CriticalAlarmSoundCatalog.alertType(SOURCE_PREDICTIVE,
+                        low ? DIRECTION_LOW : DIRECTION_HIGH));
         if (!canPost(app) || !channelEnabled(app, channel)) return false;
 
         long now = System.currentTimeMillis();
@@ -240,7 +348,9 @@ final class CriticalGlucoseAlarm {
             incoming.expiresAtMs = Math.min(incoming.expiresAtMs,
                     crossingAtMs + 30L * 60_000L);
         }
-        incoming.soundRes = low ? R.raw.lowsoon : R.raw.highsoon;
+        configureDelivery(app, incoming, low
+                ? CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW
+                : CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_HIGH);
         incoming.displayPayload = displayPayload == null
                 ? CriticalDisplayPayload.EMPTY : displayPayload;
         return acceptAndPresent(app, current(app, now), incoming, true);
@@ -333,7 +443,7 @@ final class CriticalGlucoseAlarm {
         }
         // Returning false hands actual alarms back to Notify's mature legacy
         // surface. Never claim ownership when the notification/channel that
-        // carries ACK/Snooze cannot be posted.
+        // carries the Stop sound action cannot be posted.
         stopPresentation(app, incoming, true);
         return false;
     }
@@ -377,26 +487,122 @@ final class CriticalGlucoseAlarm {
         }
     }
 
-    static synchronized boolean showTest(Context context, boolean low) {
+    /** Presents signal loss through the same acknowledge-until-stopped path. */
+    static synchronized boolean showLossSignal(Context context,
+            long lastReadingAtMs, String message) {
         if (context == null || Applic.isWearable) return false;
         Context app = context.getApplicationContext();
         ensureChannels(app);
-        String channel = low
-                ? CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID
-                : CriticalAlarmDiagnostics.PREDICTIVE_HIGH_CHANNEL_ID;
+        CriticalAlarmSoundCatalog.AlertType alertType =
+                CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS;
+        String channel = selectedChannelId(app, alertType);
+        if (!canPost(app) || !channelEnabled(app, channel)) return false;
+
+        long now = System.currentTimeMillis();
+        Session current = current(app, now);
+        // A live measured-glucose emergency is more specific than a missing
+        // reading. Treat loss detection as delivered without replacing it or
+        // starting the legacy loss ringtone alongside the current alarm.
+        if (current != null && current.actual()) {
+            return hasControlSurface(app, current);
+        }
+
+        Session incoming = new Session();
+        incoming.source = SOURCE_SIGNAL_LOSS;
+        incoming.direction = DIRECTION_SIGNAL;
+        // Signal loss outranks a forecast, while any current glucose alarm can
+        // still replace it as soon as a new reading arrives.
+        incoming.priority = CriticalAlarmEpisodePolicy.PRIORITY_ACTUAL;
+        incoming.title = app.getString(R.string.critical_alarm_signal_loss_title);
+        incoming.body = message == null || message.trim().isEmpty()
+                ? app.getString(R.string.critical_alarm_signal_loss_body)
+                : message;
+        incoming.value = app.getString(
+                R.string.critical_alarm_signal_loss_value);
+        incoming.anchorMs = now;
+        incoming.expiresAtMs = now + SIGNAL_LOSS_MAX_LIFETIME_MS;
+        incoming.displayPayload = CriticalDisplayPayload.EMPTY;
+        configureDelivery(app, incoming, alertType);
+        boolean presented = acceptAndPresent(app, current, incoming, true);
+        if (presented && active != null
+                && SOURCE_SIGNAL_LOSS.equals(active.source)) {
+            // Reuse the real-local-data capture path. It never fabricates a
+            // reading or starts network work, and leaves a clear empty chart
+            // when there is no usable history.
+            CriticalDisplayPayload.enrichTestAsync(app, active.token,
+                    Math.max(now, lastReadingAtMs));
+        }
+        return presented;
+    }
+
+    static synchronized void resolveSignalLoss(Context context) {
+        if (context == null) return;
+        Context app = context.getApplicationContext();
+        Session session = current(app, System.currentTimeMillis());
+        if (session != null && SOURCE_SIGNAL_LOSS.equals(session.source)) {
+            stopPresentation(app, session, true);
+        }
+    }
+
+    static synchronized boolean showTest(Context context, boolean low) {
+        return showTest(context, low
+                ? CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW
+                : CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_HIGH);
+    }
+
+    static synchronized boolean showTest(Context context,
+            CriticalAlarmSoundCatalog.AlertType alertType) {
+        if (context == null || Applic.isWearable) return false;
+        if (alertType == null) return false;
+        Context app = context.getApplicationContext();
+        ensureChannels(app);
+        String channel = selectedChannelId(app, alertType);
         if (!canPost(app) || !channelEnabled(app, channel)) return false;
         long now = System.currentTimeMillis();
         Session incoming = new Session();
         incoming.source = SOURCE_TEST;
-        incoming.direction = low ? DIRECTION_LOW : DIRECTION_HIGH;
+        incoming.direction = alertType
+                == CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS
+                ? DIRECTION_SIGNAL
+                : alertType == CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW
+                || alertType
+                == CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW
+                ? DIRECTION_LOW : DIRECTION_HIGH;
         incoming.priority = 0;
         incoming.title = app.getString(R.string.critical_alarm_test_title);
         incoming.body = app.getString(R.string.critical_alarm_test_body);
         incoming.value = app.getString(R.string.critical_alarm_test_badge);
         incoming.anchorMs = now;
         incoming.expiresAtMs = now + TEST_LIFETIME_MS;
-        incoming.soundRes = low ? R.raw.lowsoon : R.raw.highsoon;
-        return acceptAndPresent(app, current(app, now), incoming, true);
+        configureDelivery(app, incoming, alertType);
+        boolean presented = acceptAndPresent(app, current(app, now), incoming,
+                true);
+        if (presented && active != null && SOURCE_TEST.equals(active.source)) {
+            // Delivery and acknowledgement must never wait for a native
+            // history scan. The visible test is enriched on the bounded
+            // capture executor as soon as local data is available.
+            CriticalDisplayPayload.enrichTestAsync(app, active.token, now);
+        }
+        return presented;
+    }
+
+    private static void configureDelivery(Context context, Session session,
+            CriticalAlarmSoundCatalog.AlertType alertType) {
+        session.alertType = alertType;
+        session.soundToneId = CriticalAlarmSoundCatalog.selectedToneId(
+                context, alertType);
+        session.soundRes = CriticalAlarmSoundCatalog.soundRes(
+                session.soundToneId);
+        session.minimumVolumePercent = CriticalAlertPreferences
+                .getMinimumVolumePercent(context, alertType);
+    }
+
+    /** Serializes settings previews with the critical-alarm audio owner. */
+    static synchronized boolean previewSound(Context context, String toneId) {
+        if (context == null || Applic.isWearable) return false;
+        Context app = context.getApplicationContext();
+        if (current(app, System.currentTimeMillis()) != null) return false;
+        return CriticalAlarmSoundCatalog.preview(app, toneId);
     }
 
     static synchronized Session session(Context context, String token) {
@@ -422,8 +628,13 @@ final class CriticalGlucoseAlarm {
         save(app, session);
         active = session;
         notifySurfaces(app, session);
-        stopSound();
-        cancelNotification(app, session);
+        stopSound(app);
+        CriticalAlarmAudioReliability.RestorePlan restorePlan =
+                CriticalAlarmAudioReliability.prepareAlarmVolumeRestore(app,
+                        session.token);
+        neutralizeAndCancelCriticalNotifications(app, -1);
+        finishAlarmVolumeRestore(app, session.token, restorePlan);
+        scheduleCriticalNotificationCleanup(app, session.token);
         if (SOURCE_PREDICTIVE.equals(session.source)) {
             new PredictiveAlertPreferences(app).snoozePrediction(
                     session.direction, session.anchorMs,
@@ -495,17 +706,23 @@ final class CriticalGlucoseAlarm {
     }
 
     private static boolean postNotification(Context context, Session session) {
+        // A settings preview must never compete with a real/test alarm, and
+        // the alarm's red Stop action must leave no preview audio behind.
+        CriticalAlarmSoundCatalog.stopPreview();
         if (!canPost(context)) return false;
         ensureChannels(context);
-        String channel = channelId(session);
-        if (!channelEnabled(context, channel)) return false;
+        // Snapshot policy access once so the immutable channel we create is
+        // exactly the one attached to this notification. If the user grants
+        // DND access later, the next post uses the distinct bypass identity.
+        boolean bypassDnd = dndBypassAvailable(context);
+        String channel = selectedChannelId(session, bypassDnd);
+        ensureSessionChannel(context, session, bypassDnd);
+        if (!channelEnabled(context, channel)
+                || !channelAlarmSoundReady(context, channel)) return false;
 
         PendingIntent fullScreen = activityIntent(context, session);
         PendingIntent acknowledge = receiverIntent(context, session,
                 CriticalGlucoseAlarmReceiver.ACTION_ACK, 1);
-        PendingIntent snooze = receiverIntent(context, session,
-                CriticalGlucoseAlarmReceiver.ACTION_SNOOZE, 2);
-        PendingIntent open = openGraphActivityIntent(context, session);
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(
                 context, channel)
@@ -522,14 +739,11 @@ final class CriticalGlucoseAlarm {
                 .setOngoing(true)
                 .setAutoCancel(false)
                 .setWhen(session.anchorMs)
-                .setColor(DIRECTION_LOW.equals(session.direction)
+                .setColor(session.signalLoss()
+                        || DIRECTION_LOW.equals(session.direction)
                         ? 0xFFE65B65 : 0xFFF2B84B)
                 .addAction(0, context.getString(
-                        R.string.critical_alarm_ack_action), acknowledge)
-                .addAction(0, context.getString(
-                        R.string.critical_alarm_snooze_action), snooze)
-                .addAction(0, context.getString(
-                        R.string.critical_alarm_open_graph_action), open);
+                        R.string.critical_alarm_ack_action), acknowledge);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             builder.setSound(resourceUri(context, session.soundRes),
                     AudioManager.STREAM_ALARM)
@@ -548,7 +762,7 @@ final class CriticalGlucoseAlarm {
         builder.setPublicVersion(publicBuilder.build());
         Notification notification = builder.build();
         // The notification channel is the single audio owner. INSISTENT keeps
-        // its USAGE_ALARM sound active until ACK/Snooze/recovery cancels this
+        // its USAGE_ALARM sound active until Stop sound/recovery cancels this
         // notification, preserving channel-level DND bypass semantics.
         notification.flags |= Notification.FLAG_NO_CLEAR
                 | Notification.FLAG_INSISTENT;
@@ -556,13 +770,24 @@ final class CriticalGlucoseAlarm {
         NotificationManager manager = (NotificationManager)
                 context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return false;
+        PowerManager.WakeLock deliveryWakeLock =
+                CriticalAlarmAudioReliability.acquireDeliveryWakeLock(context);
         try {
-            cancelOtherNotifications(manager, session);
+            // Silent/vibrate ringer modes do not control STREAM_ALARM. If that
+            // stream itself is zero or barely audible, raise only it for this
+            // critical episode and restore it on ACK/Snooze/recovery.
+            CriticalAlarmAudioReliability.ensureAudibleAlarmVolume(context,
+                    session.minimumVolumePercent);
+            neutralizeAndCancelCriticalNotifications(context,
+                    notificationId(session));
             manager.notify(notificationId(session), notification);
             return true;
         } catch (RuntimeException failure) {
             Log.stack("CriticalAlarm", "notify", failure);
             return false;
+        } finally {
+            CriticalAlarmAudioReliability.releaseDeliveryWakeLock(
+                    deliveryWakeLock);
         }
     }
 
@@ -631,7 +856,7 @@ final class CriticalGlucoseAlarm {
     }
 
     private static void scheduleLoop(Context context, Session session) {
-        stopSound();
+        stopSound(context);
         long delayMs = soundDurationMs(session.soundRes) + 150L;
         String token = session.token;
         delayedLoop = () -> startLoop(context.getApplicationContext(), token);
@@ -649,7 +874,9 @@ final class CriticalGlucoseAlarm {
             stopPresentation(context.getApplicationContext(), session, true);
             return;
         }
-        stopSound();
+        stopSound(context);
+        CriticalAlarmAudioReliability.ensureAudibleAlarmVolume(context,
+                session.minimumVolumePercent);
         try {
             audioManager = (AudioManager)
                     context.getSystemService(Context.AUDIO_SERVICE);
@@ -675,7 +902,7 @@ final class CriticalGlucoseAlarm {
                 ringtone.play();
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
                     // Ringtone.setLooping() was added in API 28. Keep the
-                    // same acknowledge-until-stopped contract on API 21-27
+                    // same Stop-sound-until-pressed contract on API 21-27
                     // by replaying only while this exact session token is
                     // still active.
                     String repeatToken = session.token;
@@ -700,7 +927,7 @@ final class CriticalGlucoseAlarm {
         }
     }
 
-    private static synchronized void stopSound() {
+    private static synchronized void stopSound(Context context) {
         if (delayedLoop != null) {
             MAIN.removeCallbacks(delayedLoop);
             delayedLoop = null;
@@ -744,15 +971,30 @@ final class CriticalGlucoseAlarm {
 
     private static void stopPresentation(Context context, Session session,
             boolean clear) {
-        stopSound();
+        CriticalAlarmSoundCatalog.stopPreview();
+        stopSound(context);
+        String endedToken = session == null ? "" : session.token;
+        CriticalAlarmAudioReliability.RestorePlan restorePlan = clear
+                ? CriticalAlarmAudioReliability.prepareAlarmVolumeRestore(
+                context, endedToken) : null;
         if (session != null) {
-            cancelNotification(context, session);
             cancelScheduled(context, session);
         }
         if (clear) {
             active = null;
             clearSaved(context);
+            // Cancel every ID owned by this controller, not only the ID
+            // derived from the in-memory session. This also stops an orphaned
+            // INSISTENT post left by a replacement or an OEM delivery race.
+            cancelAllCriticalNotifications(context);
+            // Notification/channel audio must be neutralized before restoring
+            // the user's saved stream value. Samsung may otherwise reassert
+            // the channel's volume asynchronously after our restore.
+            finishAlarmVolumeRestore(context, endedToken, restorePlan);
+            scheduleCriticalNotificationCleanup(context, endedToken);
             notifySurfaces(context, null);
+        } else if (session != null) {
+            cancelNotification(context, session);
         }
     }
 
@@ -764,19 +1006,187 @@ final class CriticalGlucoseAlarm {
         }
     }
 
-    private static void cancelOtherNotifications(NotificationManager manager,
-            Session keep) {
-        int keepId = notificationId(keep);
+    private static void cancelAllCriticalNotifications(Context context) {
+        neutralizeAndCancelCriticalNotifications(context, -1);
+    }
+
+    /**
+     * Replaces each stale controller-owned notification with a non-alerting,
+     * non-insistent copy before cancelling its exact tag/id identity. Samsung
+     * SystemUI can otherwise retain the already-playing INSISTENT record after
+     * a plain cancel IPC even though the application session is gone.
+     */
+    private static boolean neutralizeAndCancelCriticalNotifications(
+            Context context, int keepId) {
+        if (context == null) return false;
+        NotificationManager manager = (NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                for (android.service.notification.StatusBarNotification item
+                        : manager.getActiveNotifications()) {
+                    if (item == null || item.getId() == keepId
+                            || !isCriticalNotificationId(item.getId())) {
+                        continue;
+                    }
+                    try {
+                        Notification neutral = neutralizedNotification(
+                                item.getNotification());
+                        if (neutral != null) {
+                            manager.notify(item.getTag(), item.getId(), neutral);
+                        }
+                    } catch (RuntimeException failure) {
+                        Log.stack("CriticalAlarm", "neutralize notification",
+                                failure);
+                    }
+                    try {
+                        manager.cancel(item.getTag(), item.getId());
+                    } catch (RuntimeException failure) {
+                        Log.stack("CriticalAlarm", "cancel tagged notification",
+                                failure);
+                    }
+                }
+            } catch (RuntimeException failure) {
+                Log.stack("CriticalAlarm", "query active notifications",
+                        failure);
+            }
+        }
+        // Also cancel unseen/in-flight untagged posts. The query above supplies
+        // exact tags for already-active records; controller posts are normally
+        // untagged, so this catches both delivery states without touching any
+        // ordinary notification ID.
         for (int id : CRITICAL_NOTIFICATION_IDS) {
-            if (id != keepId) manager.cancel(id);
+            if (id == keepId) continue;
+            try {
+                manager.cancel(id);
+            } catch (RuntimeException failure) {
+                Log.stack("CriticalAlarm", "cancel notification", failure);
+            }
+        }
+        return staleCriticalNotificationActive(manager, keepId);
+    }
+
+    static Notification neutralizedNotification(Notification original) {
+        if (original == null) return null;
+        Notification neutral = original.clone();
+        neutral.flags &= ~(Notification.FLAG_INSISTENT
+                | Notification.FLAG_NO_CLEAR
+                | Notification.FLAG_ONGOING_EVENT);
+        neutral.flags |= Notification.FLAG_ONLY_ALERT_ONCE;
+        neutral.defaults = 0;
+        neutral.sound = null;
+        neutral.vibrate = null;
+        neutral.fullScreenIntent = null;
+        neutral.contentIntent = null;
+        neutral.deleteIntent = null;
+        neutral.actions = null;
+        return neutral;
+    }
+
+    private static boolean isCriticalNotificationId(int candidate) {
+        for (int id : CRITICAL_NOTIFICATION_IDS) {
+            if (id == candidate) return true;
+        }
+        return false;
+    }
+
+    private static boolean staleCriticalNotificationActive(
+            NotificationManager manager, int keepId) {
+        if (manager == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return false;
+        }
+        try {
+            for (android.service.notification.StatusBarNotification item
+                    : manager.getActiveNotifications()) {
+                if (item != null && item.getId() != keepId
+                        && isCriticalNotificationId(item.getId())) return true;
+            }
+        } catch (RuntimeException failure) {
+            Log.stack("CriticalAlarm", "verify notification cleanup", failure);
+            // A failed verification is inconclusive; the remaining bounded
+            // retries still issue both neutralization and exact cancellation.
+            return true;
+        }
+        return false;
+    }
+
+    private static void scheduleCriticalNotificationCleanup(Context context,
+            String endedToken) {
+        if (context == null) return;
+        Context app = context.getApplicationContext();
+        String token = endedToken == null ? "" : endedToken;
+        for (long delayMs : CRITICAL_CANCEL_RETRY_DELAYS_MS) {
+            MAIN.postDelayed(() -> retryCriticalNotificationCleanup(app, token),
+                    delayMs);
         }
     }
 
-    private static void cancelAllCriticalNotifications(Context context) {
-        NotificationManager manager = (NotificationManager)
-                context.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager == null) return;
-        for (int id : CRITICAL_NOTIFICATION_IDS) manager.cancel(id);
+    private static synchronized void retryCriticalNotificationCleanup(
+            Context context, String endedToken) {
+        // Preserve only the notification ID owned by a newer session. Stale
+        // critical IDs must still be neutralized when that new episode uses a
+        // different ID. A new test reusing TEST_ID is also protected.
+        Session live = livePresentationOwner(context, endedToken);
+        int keepId = live != null
+                ? notificationId(live) : -1;
+        if (neutralizeAndCancelCriticalNotifications(context, keepId)
+                && Log.doLog) {
+            Log.e("CriticalAlarm",
+                    "Reserved notification still active after OEM cleanup");
+        }
+    }
+
+    private static void finishAlarmVolumeRestore(Context context,
+            String endedToken,
+            CriticalAlarmAudioReliability.RestorePlan restorePlan) {
+        if (context == null || restorePlan == null) return;
+        Context app = context.getApplicationContext();
+        CriticalAlarmAudioReliability.applyPreparedAlarmVolumeRestore(app,
+                restorePlan);
+        String restoreOwner = restorePlan.ownerToken.isEmpty()
+                ? endedToken : restorePlan.ownerToken;
+        for (int index = 0; index < VOLUME_RESTORE_RETRY_DELAYS_MS.length;
+                index++) {
+            final boolean finalAttempt = index
+                    == VOLUME_RESTORE_RETRY_DELAYS_MS.length - 1;
+            MAIN.postDelayed(() -> retryAlarmVolumeRestore(app, restoreOwner,
+                    restorePlan, finalAttempt),
+                    VOLUME_RESTORE_RETRY_DELAYS_MS[index]);
+        }
+    }
+
+    private static synchronized void retryAlarmVolumeRestore(Context context,
+            String endedToken,
+            CriticalAlarmAudioReliability.RestorePlan restorePlan,
+            boolean finalAttempt) {
+        // A new critical episode owns STREAM_ALARM now. Its floor must never be
+        // overwritten by a delayed restore from the acknowledged session.
+        if (livePresentationOwner(context, endedToken) != null) return;
+        CriticalAlarmAudioReliability.retryPreparedAlarmVolumeRestore(context,
+                restorePlan, finalAttempt);
+    }
+
+    private static Session livePresentationOwner(Context context,
+            String endedToken) {
+        long now = System.currentTimeMillis();
+        Session live = active;
+        if (!validPersistedSession(live) || live.expiresAtMs <= now) {
+            live = null;
+        }
+        if (live == null) {
+            Session persisted = load(context);
+            if (validPersistedSession(persisted)
+                    && persisted.expiresAtMs > now) live = persisted;
+        }
+        if (live == null) return null;
+        if (!CriticalAlarmEpisodePolicy.actionMatches(live.token,
+                endedToken)) return live;
+        // The same token deliberately remains persisted while snoozed. During
+        // the snooze it owns no notification/audio, but once the deadline has
+        // elapsed (or resume reset it to zero) it again protects its channel
+        // and volume floor from old bounded cleanup callbacks.
+        return live.snoozeUntilMs <= now ? live : null;
     }
 
     /**
@@ -785,8 +1195,14 @@ final class CriticalGlucoseAlarm {
      * clearing preferences alone is not enough to stop an orphan alarm.
      */
     private static void clearInvalidState(Context context, Session stale) {
-        stopSound();
+        stopSound(context);
+        String endedToken = stale == null || stale.token == null
+                ? "" : stale.token;
+        CriticalAlarmAudioReliability.RestorePlan restorePlan =
+                CriticalAlarmAudioReliability.prepareAlarmVolumeRestore(
+                        context, endedToken);
         cancelAllCriticalNotifications(context);
+        finishAlarmVolumeRestore(context, endedToken, restorePlan);
         // The request code is token-derived. When a usable stale token remains
         // we can also remove its exact RESUME/EXPIRE alarms; with no token the
         // receiver's stale-action check is the remaining fail-safe.
@@ -895,6 +1311,7 @@ final class CriticalGlucoseAlarm {
     }
 
     private static void save(Context context, Session session) {
+        session.soundToneId = sessionToneId(session);
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                 .putString(KEY_TOKEN, session.token)
                 .putString(KEY_SOURCE, session.source)
@@ -907,6 +1324,11 @@ final class CriticalGlucoseAlarm {
                 .putLong(KEY_EXPIRES, session.expiresAtMs)
                 .putLong(KEY_SNOOZE, session.snoozeUntilMs)
                 .putInt(KEY_SOUND_RES, session.soundRes)
+                .putString(KEY_SOUND_TONE_ID, session.soundToneId)
+                .putString(KEY_ALERT_TYPE, session.alertType == null ? ""
+                        : session.alertType.stableId())
+                .putInt(KEY_MINIMUM_VOLUME_PERCENT,
+                        session.minimumVolumePercent)
                 .putString(KEY_DISPLAY_PAYLOAD,
                         session.displayPayload == null ? ""
                                 : session.displayPayload.toJsonString())
@@ -931,7 +1353,33 @@ final class CriticalGlucoseAlarm {
             session.anchorMs = prefs.getLong(KEY_ANCHOR, 0L);
             session.expiresAtMs = prefs.getLong(KEY_EXPIRES, 0L);
             session.snoozeUntilMs = prefs.getLong(KEY_SNOOZE, 0L);
-            session.soundRes = prefs.getInt(KEY_SOUND_RES, R.raw.siren);
+            session.alertType = CriticalAlarmSoundCatalog.AlertType
+                    .fromStableId(prefs.getString(KEY_ALERT_TYPE, ""));
+            if (session.alertType == null) {
+                session.alertType = CriticalAlarmSoundCatalog.alertType(
+                        session.source, session.direction);
+            }
+            // Resource-table integers are not stable across APK upgrades.
+            // New sessions restore from the catalog id; legacy/corrupt ones
+            // resolve the user's current stable per-alert selection instead
+            // of trusting a possibly-colliding old integer.
+            session.soundToneId = prefs.getString(KEY_SOUND_TONE_ID, "");
+            session.soundRes = CriticalAlarmSoundCatalog.soundRes(
+                    session.soundToneId);
+            if (session.soundRes == 0) {
+                session.soundToneId = CriticalAlarmSoundCatalog
+                        .selectedToneId(context, session.alertType);
+                session.soundRes = CriticalAlarmSoundCatalog.soundRes(
+                        session.soundToneId);
+                prefs.edit()
+                        .putString(KEY_SOUND_TONE_ID, session.soundToneId)
+                        .putInt(KEY_SOUND_RES, session.soundRes)
+                        .apply();
+            }
+            session.minimumVolumePercent = prefs.getInt(
+                    KEY_MINIMUM_VOLUME_PERCENT,
+                    CriticalAlertPreferences.getMinimumVolumePercent(context,
+                            session.alertType));
             session.displayPayload = CriticalDisplayPayload.fromJsonString(
                     prefs.getString(KEY_DISPLAY_PAYLOAD, ""));
         } catch (RuntimeException corruptPreferences) {
@@ -950,25 +1398,41 @@ final class CriticalGlucoseAlarm {
         }
         boolean actual = SOURCE_ACTUAL.equals(session.source);
         boolean predictive = SOURCE_PREDICTIVE.equals(session.source);
+        boolean signalLoss = SOURCE_SIGNAL_LOSS.equals(session.source);
         boolean test = SOURCE_TEST.equals(session.source);
-        if (!actual && !predictive && !test) return false;
+        if (!actual && !predictive && !signalLoss && !test) return false;
         boolean low = DIRECTION_LOW.equals(session.direction);
         boolean high = DIRECTION_HIGH.equals(session.direction);
-        if (!low && !high) return false;
+        boolean signal = DIRECTION_SIGNAL.equals(session.direction);
+        if ((!signalLoss && !test && !low && !high)
+                || (signalLoss && !signal)
+                || (test && !low && !high && !signal)) return false;
+        CriticalAlarmSoundCatalog.AlertType expected =
+                expectedAlertType(session.source, session.direction,
+                        session.alertType);
+        if (session.alertType == null || session.alertType != expected
+                || !CriticalAlertPreferences.validMinimumVolumePercent(
+                        session.minimumVolumePercent)) return false;
+        if (CriticalAlarmSoundCatalog.soundRes(session.soundToneId)
+                != session.soundRes) return false;
+        if (test && !directionMatchesAlertType(session.direction,
+                session.alertType)) return false;
         if (actual) {
             if (session.priority != CriticalAlarmEpisodePolicy.PRIORITY_ACTUAL
                     && session.priority
                     != CriticalAlarmEpisodePolicy.PRIORITY_ACTUAL_SEVERE) {
                 return false;
             }
-            return session.soundRes == (low ? R.raw.verylow : R.raw.veryhigh);
+            return knownSoundRes(session.soundRes);
         }
+        if (signalLoss && session.priority
+                != CriticalAlarmEpisodePolicy.PRIORITY_ACTUAL) return false;
         if (predictive && session.priority
                 != CriticalAlarmEpisodePolicy.PRIORITY_PREDICTIVE_LIKELY) {
             return false;
         }
         if (test && session.priority != 0) return false;
-        return session.soundRes == (low ? R.raw.lowsoon : R.raw.highsoon);
+        return knownSoundRes(session.soundRes);
     }
 
     private static void clearSaved(Context context) {
@@ -1015,26 +1479,59 @@ final class CriticalGlucoseAlarm {
                 && value.getImportance() != NotificationManager.IMPORTANCE_NONE;
     }
 
+    /** Rejects a user-muted/misconfigured channel before claiming ownership. */
+    private static boolean channelAlarmSoundReady(Context context,
+            String channel) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true;
+        NotificationManager manager = (NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
+        NotificationChannel value = manager == null ? null
+                : manager.getNotificationChannel(channel);
+        AudioAttributes attributes = value == null ? null
+                : value.getAudioAttributes();
+        return value != null && value.getSound() != null
+                && attributes != null
+                && attributes.getUsage() == AudioAttributes.USAGE_ALARM;
+    }
+
     private static boolean hasControlSurface(Context context,
             Session session) {
         if (context == null || session == null) return false;
         if (session.snoozeUntilMs > System.currentTimeMillis()) return true;
-        return canPost(context) && channelEnabled(context, channelId(session))
-                && notificationActive(context, notificationId(session));
+        if (!canPost(context)) return false;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return notificationActive(context, notificationId(session));
+        }
+        // Validate the channel that carries the live notification rather than
+        // recomputing it from current policy access. A grant made during an
+        // active alarm must not make its still-valid standard channel appear
+        // to have lost the acknowledgement surface.
+        String channel = activeNotificationChannel(context,
+                notificationId(session));
+        return channel != null && channelEnabled(context, channel)
+                && channelAlarmSoundReady(context, channel);
     }
 
     private static boolean notificationActive(Context context, int id) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+        return activeNotificationChannel(context, id) != null;
+    }
+
+    private static String activeNotificationChannel(Context context, int id) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return "";
         NotificationManager manager = (NotificationManager)
                 context.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager == null) return false;
+        if (manager == null) return null;
         try {
             for (android.service.notification.StatusBarNotification value
                     : manager.getActiveNotifications()) {
-                if (value != null && value.getId() == id) return true;
+                if (value != null && value.getId() == id) {
+                    return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                            ? value.getNotification().getChannelId() : "";
+                }
             }
         } catch (RuntimeException ignored) {}
-        return false;
+        return null;
     }
 
     private static boolean isActualKind(int kind) {
@@ -1043,20 +1540,161 @@ final class CriticalGlucoseAlarm {
 
     private static int notificationId(Session session) {
         if (SOURCE_TEST.equals(session.source)) return TEST_ID;
+        if (SOURCE_SIGNAL_LOSS.equals(session.source)) return SIGNAL_LOSS_ID;
         boolean low = DIRECTION_LOW.equals(session.direction);
         return SOURCE_ACTUAL.equals(session.source)
                 ? low ? ACTUAL_LOW_ID : ACTUAL_HIGH_ID
                 : low ? PREDICTIVE_LOW_ID : PREDICTIVE_HIGH_ID;
     }
 
-    private static String channelId(Session session) {
-        boolean low = DIRECTION_LOW.equals(session.direction);
-        if (SOURCE_ACTUAL.equals(session.source)) {
-            return low ? CriticalAlarmDiagnostics.ACTUAL_LOW_CHANNEL_ID
-                    : CriticalAlarmDiagnostics.ACTUAL_HIGH_CHANNEL_ID;
+    static String[] selectedChannelIds(Context context, boolean actual) {
+        CriticalAlarmSoundCatalog.AlertType low = actual
+                ? CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW
+                : CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW;
+        CriticalAlarmSoundCatalog.AlertType high = actual
+                ? CriticalAlarmSoundCatalog.AlertType.ACTUAL_HIGH
+                : CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_HIGH;
+        return new String[]{selectedChannelId(context, low),
+                selectedChannelId(context, high)};
+    }
+
+    static String[] selectedSignalLossChannelIds(Context context) {
+        return new String[]{selectedChannelId(context,
+                CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS)};
+    }
+
+    static String selectedChannelId(Context context,
+            CriticalAlarmSoundCatalog.AlertType alertType) {
+        return selectedChannelId(alertType,
+                CriticalAlarmSoundCatalog.selectedToneId(context, alertType),
+                dndBypassAvailable(context));
+    }
+
+    private static String selectedChannelId(Session session,
+            boolean bypassDnd) {
+        CriticalAlarmSoundCatalog.AlertType alertType = alertType(session);
+        return selectedChannelId(alertType,
+                sessionToneId(session), bypassDnd);
+    }
+
+    private static CriticalAlarmSoundCatalog.AlertType alertType(
+            Session session) {
+        if (session == null) {
+            return CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_HIGH;
         }
-        return low ? CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID
-                : CriticalAlarmDiagnostics.PREDICTIVE_HIGH_CHANNEL_ID;
+        return expectedAlertType(session.source, session.direction,
+                session.alertType);
+    }
+
+    private static CriticalAlarmSoundCatalog.AlertType expectedAlertType(
+            String source, String direction,
+            CriticalAlarmSoundCatalog.AlertType persisted) {
+        if (SOURCE_TEST.equals(source) && persisted != null) return persisted;
+        return CriticalAlarmSoundCatalog.alertType(source, direction);
+    }
+
+    private static boolean directionMatchesAlertType(String direction,
+            CriticalAlarmSoundCatalog.AlertType alertType) {
+        if (alertType == CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS) {
+            return DIRECTION_SIGNAL.equals(direction);
+        }
+        boolean lowType = alertType
+                == CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW
+                || alertType
+                == CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW;
+        return lowType ? DIRECTION_LOW.equals(direction)
+                : DIRECTION_HIGH.equals(direction);
+    }
+
+    private static String selectedChannelId(
+            CriticalAlarmSoundCatalog.AlertType alertType, String toneId,
+            boolean bypassDnd) {
+        return "critical_delivery_" + channelTypeKey(alertType) + '_'
+                + SELECTED_CHANNEL_VERSION + '_'
+                + (bypassDnd ? "bypass" : "standard") + '_'
+                + safeToneId(toneId);
+    }
+
+    private static String channelTypeKey(
+            CriticalAlarmSoundCatalog.AlertType alertType) {
+        if (alertType == CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS) {
+            return "signal_loss";
+        }
+        if (alertType == CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW) {
+            return "actual_low";
+        }
+        if (alertType == CriticalAlarmSoundCatalog.AlertType.ACTUAL_HIGH) {
+            return "actual_high";
+        }
+        if (alertType == CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW) {
+            return "predictive_low";
+        }
+        return "predictive_high";
+    }
+
+    private static String safeToneId(String toneId) {
+        if (toneId == null || toneId.isEmpty()) return "siren";
+        StringBuilder safe = new StringBuilder(toneId.length());
+        for (int index = 0; index < toneId.length(); index++) {
+            char value = toneId.charAt(index);
+            if ((value >= 'a' && value <= 'z')
+                    || (value >= '0' && value <= '9') || value == '_') {
+                safe.append(value);
+            }
+        }
+        return safe.length() == 0 ? "siren" : safe.toString();
+    }
+
+    private static String toneIdForSoundRes(int soundRes) {
+        for (CriticalAlarmSoundCatalog.Tone tone
+                : CriticalAlarmSoundCatalog.tones()) {
+            if (tone.soundRes == soundRes) return tone.id;
+        }
+        return "siren";
+    }
+
+    private static String sessionToneId(Session session) {
+        if (session == null) return "siren";
+        if (CriticalAlarmSoundCatalog.soundRes(session.soundToneId)
+                == session.soundRes) return session.soundToneId;
+        return toneIdForSoundRes(session.soundRes);
+    }
+
+    private static boolean knownSoundRes(int soundRes) {
+        for (CriticalAlarmSoundCatalog.Tone tone
+                : CriticalAlarmSoundCatalog.tones()) {
+            if (tone.soundRes == soundRes) return true;
+        }
+        return false;
+    }
+
+    private static void ensureSessionChannel(Context context,
+            Session session, boolean bypassDnd) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                || context == null || session == null) return;
+        NotificationManager manager = (NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return;
+        CriticalAlarmSoundCatalog.AlertType alertType =
+                alertType(session);
+        createSelectedChannel(context, manager, alertType,
+                sessionToneId(session), session.soundRes,
+                bypassDnd);
+    }
+
+    private static boolean dndBypassAvailable(Context context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+        if (context == null) return false;
+        NotificationManager manager = (NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
+        return dndBypassAvailable(manager);
+    }
+
+    private static boolean dndBypassAvailable(
+            NotificationManager manager) {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || (manager != null
+                && manager.isNotificationPolicyAccessGranted());
     }
 
     private static Uri resourceUri(Context context, int res) {
@@ -1064,17 +1702,27 @@ final class CriticalGlucoseAlarm {
                 + '/' + res);
     }
 
+    private static Uri stableResourceUri(Context context, int res) {
+        try {
+            return new Uri.Builder()
+                    .scheme("android.resource")
+                    .authority(context.getPackageName())
+                    .appendPath(context.getResources().getResourceTypeName(res))
+                    .appendPath(context.getResources().getResourceEntryName(res))
+                    .build();
+        } catch (RuntimeException missingResource) {
+            return resourceUri(context, res);
+        }
+    }
+
     private static long[] vibration(Session session) {
+        if (session.signalLoss()) return SIGNAL_LOSS_VIBRATION;
         return DIRECTION_LOW.equals(session.direction)
                 ? LOW_VIBRATION : HIGH_VIBRATION;
     }
 
     private static long soundDurationMs(int soundRes) {
-        if (soundRes == R.raw.veryhigh) return 5_050L;
-        if (soundRes == R.raw.verylow) return 7_900L;
-        if (soundRes == R.raw.highsoon) return 7_900L;
-        if (soundRes == R.raw.lowsoon) return 9_600L;
-        return 8_500L;
+        return CriticalAlarmSoundCatalog.durationMs(soundRes);
     }
 
     static final class Session {
@@ -1089,6 +1737,10 @@ final class CriticalGlucoseAlarm {
         long expiresAtMs;
         long snoozeUntilMs;
         int soundRes;
+        String soundToneId;
+        CriticalAlarmSoundCatalog.AlertType alertType;
+        int minimumVolumePercent =
+                CriticalAlertPreferences.DEFAULT_MINIMUM_VOLUME_PERCENT;
         CriticalDisplayPayload displayPayload = CriticalDisplayPayload.EMPTY;
 
         boolean low() {
@@ -1101,6 +1753,11 @@ final class CriticalGlucoseAlarm {
 
         boolean test() {
             return SOURCE_TEST.equals(source);
+        }
+
+        boolean signalLoss() {
+            return alertType == CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS
+                    || SOURCE_SIGNAL_LOSS.equals(source);
         }
 
         Session copy() {
@@ -1116,6 +1773,9 @@ final class CriticalGlucoseAlarm {
             result.expiresAtMs = expiresAtMs;
             result.snoozeUntilMs = snoozeUntilMs;
             result.soundRes = soundRes;
+            result.soundToneId = soundToneId;
+            result.alertType = alertType;
+            result.minimumVolumePercent = minimumVolumePercent;
             result.displayPayload = displayPayload == null
                     ? CriticalDisplayPayload.EMPTY : displayPayload;
             return result;

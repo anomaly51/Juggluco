@@ -39,6 +39,12 @@ public class PredictiveAlertPreferencesTest {
         assertEquals(PredictiveAlertPreferences.SENSITIVITY_BALANCED,
                 snapshot.sensitivity);
         assertEquals(60, snapshot.cooldownMinutes);
+        assertEquals(PredictiveAlertPreferences.SENSITIVITY_BALANCED,
+                snapshot.lowSensitivity);
+        assertEquals(PredictiveAlertPreferences.SENSITIVITY_BALANCED,
+                snapshot.highSensitivity);
+        assertEquals(60, snapshot.lowCooldownMinutes);
+        assertEquals(60, snapshot.highCooldownMinutes);
         assertEquals(75.6f, PredictiveAlertPreferences.TARGET_LOW_MG_DL, .001f);
         assertEquals(162.0f, PredictiveAlertPreferences.TARGET_HIGH_MG_DL, .001f);
         assertEquals(4.2f, PredictiveAlertPreferences.TARGET_LOW_MMOL_L, 0f);
@@ -89,6 +95,133 @@ public class PredictiveAlertPreferencesTest {
         assertEquals(PredictiveAlertPreferences.SENSITIVITY_BALANCED,
                 clamped.sensitivity);
         assertEquals(60, clamped.cooldownMinutes);
+    }
+
+    @Test
+    public void sharedPolicyMigratesToBothDirections() {
+        context.getSharedPreferences(PredictiveAlertPreferences.PREFS_NAME,
+                Context.MODE_PRIVATE).edit()
+                .putInt("sensitivity",
+                        PredictiveAlertPreferences.SENSITIVITY_EARLY)
+                .putInt("cooldown_minutes", 120)
+                .commit();
+
+        PredictiveAlertPreferences.Snapshot migrated =
+                new PredictiveAlertPreferences(context).snapshot();
+
+        assertEquals(PredictiveAlertPreferences.SENSITIVITY_EARLY,
+                migrated.lowSensitivity);
+        assertEquals(PredictiveAlertPreferences.SENSITIVITY_EARLY,
+                migrated.highSensitivity);
+        assertEquals(120, migrated.lowCooldownMinutes);
+        assertEquals(120, migrated.highCooldownMinutes);
+    }
+
+    @Test
+    public void directionPoliciesAreIndependentAndValidated() {
+        PredictiveAlertPreferences preferences =
+                new PredictiveAlertPreferences(context);
+
+        preferences.setLowSensitivity(
+                PredictiveAlertPreferences.SENSITIVITY_EARLY);
+        preferences.setHighSensitivity(
+                PredictiveAlertPreferences.SENSITIVITY_FEWER);
+        preferences.setLowCooldownMinutes(15);
+        preferences.setHighCooldownMinutes(120);
+
+        PredictiveAlertPreferences.Snapshot selected = preferences.snapshot();
+        assertEquals(PredictiveAlertPreferences.SENSITIVITY_EARLY,
+                selected.lowSensitivity);
+        assertEquals(PredictiveAlertPreferences.SENSITIVITY_FEWER,
+                selected.highSensitivity);
+        assertEquals(15, selected.lowCooldownMinutes);
+        assertEquals(120, selected.highCooldownMinutes);
+        assertEquals(selected.lowSensitivity, selected.sensitivityFor(true));
+        assertEquals(selected.highSensitivity,
+                selected.sensitivityFor(false));
+        assertEquals(15, selected.cooldownMinutesFor(true));
+        assertEquals(120, selected.cooldownMinutesFor(false));
+
+        preferences.setDirectionSensitivity(true, 99);
+        preferences.setDirectionCooldownMinutes(false, 1);
+        PredictiveAlertPreferences.Snapshot clamped = preferences.snapshot();
+        assertEquals(PredictiveAlertPreferences.SENSITIVITY_BALANCED,
+                clamped.lowSensitivity);
+        assertEquals(PredictiveAlertPreferences.SENSITIVITY_FEWER,
+                clamped.highSensitivity);
+        assertEquals(15, clamped.lowCooldownMinutes);
+        assertEquals(60, clamped.highCooldownMinutes);
+    }
+
+    @Test
+    public void directionEnableTurnsMasterOnForFirstAndOffForLast() {
+        PredictiveAlertPreferences preferences =
+                new PredictiveAlertPreferences(context);
+
+        preferences.setDirectionEnabled(true, true);
+        PredictiveAlertPreferences.Snapshot lowOnly = preferences.snapshot();
+        assertTrue(lowOnly.enabled);
+        assertTrue(lowOnly.lowEnabled);
+        assertFalse(lowOnly.highEnabled);
+
+        preferences.setDirectionEnabled(false, true);
+        preferences.setDirectionEnabled(true, false);
+        PredictiveAlertPreferences.Snapshot highOnly = preferences.snapshot();
+        assertTrue(highOnly.enabled);
+        assertFalse(highOnly.lowEnabled);
+        assertTrue(highOnly.highEnabled);
+
+        preferences.setDirectionEnabled(false, false);
+        PredictiveAlertPreferences.Snapshot none = preferences.snapshot();
+        assertFalse(none.enabled);
+        assertFalse(none.lowEnabled);
+        assertFalse(none.highEnabled);
+    }
+
+    @Test
+    public void firstDirectionEnableDoesNotOptInLegacyDefaultDirection() {
+        context.getSharedPreferences(PredictiveAlertPreferences.PREFS_NAME,
+                Context.MODE_PRIVATE).edit()
+                .putBoolean("enabled", false)
+                .commit();
+        PredictiveAlertPreferences preferences =
+                new PredictiveAlertPreferences(context);
+
+        preferences.setDirectionEnabled(false, true);
+
+        PredictiveAlertPreferences.Snapshot highOnly = preferences.snapshot();
+        assertTrue(highOnly.enabled);
+        assertFalse(highOnly.lowEnabled);
+        assertTrue(highOnly.highEnabled);
+    }
+
+    @Test
+    public void existingEnabledMasterPreservesOtherLegacyDefaultDirection() {
+        PredictiveAlertPreferences preferences =
+                new PredictiveAlertPreferences(context);
+        preferences.setEnabled(true);
+
+        preferences.setDirectionEnabled(true, true);
+
+        PredictiveAlertPreferences.Snapshot both = preferences.snapshot();
+        assertTrue(both.enabled);
+        assertTrue(both.lowEnabled);
+        assertTrue(both.highEnabled);
+    }
+
+    @Test
+    public void explicitlyEnabledOtherDirectionSurvivesMasterReenable() {
+        PredictiveAlertPreferences preferences =
+                new PredictiveAlertPreferences(context);
+        preferences.setHighEnabled(true);
+        preferences.setEnabled(false);
+
+        preferences.setDirectionEnabled(true, true);
+
+        PredictiveAlertPreferences.Snapshot both = preferences.snapshot();
+        assertTrue(both.enabled);
+        assertTrue(both.lowEnabled);
+        assertTrue(both.highEnabled);
     }
 
     @Test

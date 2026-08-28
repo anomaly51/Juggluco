@@ -94,9 +94,13 @@ final class ForecastDetailsPage {
                     WindowInsetsCompat.Type.systemBars()
                             | WindowInsetsCompat.Type.displayCutout()
                             | WindowInsetsCompat.Type.ime());
-            page.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+            int readableGutter = ClinicalUi.readableHorizontalGutter(activity,
+                    Math.max(0, view.getWidth() - safe.left - safe.right), 0);
+            page.setPadding(safe.left + readableGutter, safe.top,
+                    safe.right + readableGutter, safe.bottom);
             return insets;
         });
+        ClinicalUi.reapplyInsetsOnWidthChanges(root);
 
         activity.addMyContentView(root,
                 new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT), false);

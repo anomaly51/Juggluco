@@ -10,9 +10,9 @@
     <string name="dashboard_target_range">Target %1$s–%2$s %3$s</string>
     <string name="dashboard_target_unavailable">Target range</string>
     <string name="dashboard_preview_short">Preview only — no sensor data</string>
-    <string name="dashboard_backend_checking">Backend · checking</string>
-    <string name="dashboard_backend_connected">Backend · connected</string>
-    <string name="dashboard_backend_offline">Backend · offline</string>
-    <string name="dashboard_backend_settings">Backend status. Open connection settings.</string>
-    <string name="dashboard_backend_open_settings">%1$s. Open backend settings.</string>
+    <string name="dashboard_backend_checking">Checking connection</string>
+    <string name="dashboard_backend_connected">Connected</string>
+    <string name="dashboard_backend_offline">Offline</string>
+    <string name="dashboard_backend_settings">Connection status. Open settings.</string>
+    <string name="dashboard_backend_open_settings">%1$s. Open connection settings.</string>
 </resources>

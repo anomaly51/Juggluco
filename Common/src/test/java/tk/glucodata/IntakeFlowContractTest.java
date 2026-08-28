@@ -75,52 +75,48 @@ public class IntakeFlowContractTest {
     }
 
     @Test
-    public void mealPhotosAndEditableVoiceTextUseOnlyTheBackend()
+    public void voiceTextAndPhotosUseOneCancellableBackendTurn()
             throws Exception {
         String client = mainJava("tk/glucodata/IntakeApiClient.java");
         String chat = methodBody(client,
-                "MealChatSession.Turn sendMealChatMessage",
-                "String transcribeAudio");
-        String transcription = methodBody(client,
-                "String transcribeAudio",
-                "IntakeEvent confirmMealChatSession");
+                "IntakeChatTurn sendIntakeChatTurn",
+                "IntakeChatTurn undoIntakeChatAction");
         String repository = mainJava("tk/glucodata/IntakeRepository.java");
         String composer = mainJava("tk/glucodata/IntakeComposer.java");
 
-        assertTrue(chat.contains("+ sessionId + \"/messages\""));
+        assertTrue(chat.contains("/v1/intake-chat/sessions/"));
+        assertTrue(chat.contains("+ encodedSession + \"/turns\""));
+        assertTrue(chat.contains("\"client_turn_id\""));
+        assertTrue(chat.contains("\"occurred_at_ms\""));
         assertTrue(chat.contains("for (File photo : photos)"));
         assertTrue(chat.contains("\"photos\", photo"));
-        assertTrue(transcription.contains("\"POST\", \"/v1/transcriptions\""));
-        assertTrue(transcription.contains("\"audio\", audio"));
-        assertTrue(transcription.contains("optString(\"text\", \"\")"));
+        assertTrue(chat.contains("\"audio\", audio"));
         assertTrue("Cancellation must be checked before connecting",
-                transcription.indexOf("cancellation.throwIfCancelled()")
-                        < transcription.indexOf("connection.connect()"));
+                chat.indexOf("cancellation.throwIfCancelled()")
+                        < chat.indexOf("connection.connect()"));
         assertTrue("Cancellation must be checked after connecting",
-                transcription.indexOf("connection.connect()")
-                        < transcription.lastIndexOf(
+                chat.indexOf("connection.connect()")
+                        < chat.lastIndexOf(
                                 "cancellation.throwIfCancelled()"));
         assertTrue("Multipart audio writes must be cancellation-aware",
                 client.contains("writeFile(output, boundary, \"audio\", audio,")
                         && client.contains("mimeForAudio(audio), cancellation)"));
-        assertTrue("Upload worker owns temporary audio cleanup",
-                repository.contains("finally {")
-                        && repository.contains("audio.delete()"));
         assertTrue("A new composer must not delete fresh in-flight audio",
                 composer.contains("STALE_MEDIA_AGE_MS")
                         && composer.contains("file.lastModified() <= cutoff"));
-        assertTrue(repository.contains(
-                "api.transcribeAudio(audio, cancellation)"));
-        assertTrue(repository.contains("transcriptionExecutor.submit"));
+        assertTrue(repository.contains("intakeChatExecutor.submit"));
         assertTrue(repository.contains("RequestCancellation cancellation"));
-        assertTrue(composer.contains("repository.transcribeAudio(audio"));
-        assertTrue(composer.contains("transcriptionCall.cancel()"));
-        assertTrue(composer.contains("insertEditableTranscript(transcript)"));
         assertTrue(composer.contains(
-                "repository.sendMealChat(mealSessionId, text, photos,"));
+                "repository.sendIntakeChat(intakeSessionId"));
+        assertTrue(composer.contains("sendIntakeTurn(completed)"));
+        assertFalse("Closing the surface must not hide a possible backend commit",
+                composer.contains("intakeTurnCall.cancel()"));
+        assertTrue("A completed receipt must merge before UI cancellation is observed",
+                repository.contains("mergeIntakeChatTurn(result)")
+                        && repository.contains("cancellation.isCancelled()"));
         assertFalse("Raw voice must not remain a chat attachment",
                 composer.contains("pendingAudio"));
-        assertFalse("The typed meal-chat API must not accept raw audio",
+        assertTrue("The primary turn must accept raw voice in one round-trip",
                 chat.contains("File audio"));
     }
 

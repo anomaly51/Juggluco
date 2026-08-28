@@ -169,11 +169,13 @@ public class CarbAbsorptionUiTest {
         String details = source("IntakeEventDetailsSheet.java");
         String forecast = source("ForecastDetailsPage.java");
 
-        assertTrue(composer.contains("CarbAbsorptionUi.details(activity"));
-        assertTrue(details.contains("CarbAbsorptionUi.valueDetails(activity"));
-        assertTrue(forecast.contains("CarbAbsorptionUi.compact(activity"));
+        // The unified composer now renders authoritative saved records rather
+        // than an unsaved meal proposal. Absorption remains available in the
+        // saved-event details and forecast summaries.
         assertFalse(composer.toLowerCase(Locale.ROOT)
                 .contains("sweetness index"));
+        assertTrue(details.contains("CarbAbsorptionUi.valueDetails(activity"));
+        assertTrue(forecast.contains("CarbAbsorptionUi.compact(activity"));
     }
 
     private static JSONObject eventJson() throws Exception {

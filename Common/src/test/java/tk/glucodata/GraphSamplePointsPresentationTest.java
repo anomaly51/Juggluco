@@ -66,7 +66,8 @@ public class GraphSamplePointsPresentationTest {
         assertTrue(stream.indexOf("glucosepointinfo(avg,tim,glu,posx,posy)")<
                 stream.indexOf("Visual density is adaptive"));
         assertTrue(stream.contains("it==lastvalid,statechanged,true"));
-        assertTrue(stream.contains("pointRadius*2.15f"));
+        assertTrue(stream.contains("drawModernGraphCurrentSample"));
+        assertTrue(source.contains("nvgCircle(avg,x,y,pointRadius*2.15f)"));
     }
 
     @Test
@@ -101,6 +102,36 @@ public class GraphSamplePointsPresentationTest {
         assertTrue(source.contains("histcurve(avg,sensors->getSensorData(index)"));
         assertTrue(source.contains("if(showcalibratedhistories)"));
         assertTrue(source.contains("calihistcurve(avg,sensors->getSensorData(index)"));
+    }
+
+    @Test
+    public void rangeAndForecastMarkersHaveNonColorShapes() throws Exception {
+        String source=cpp("curve.cpp");
+        String header=cpp("graphpoints.hpp");
+        assertTrue(header.contains("enum class MarkerShape"));
+        assertTrue(header.contains("MarkerShape::down_triangle"));
+        assertTrue(header.contains("MarkerShape::circle"));
+        assertTrue(header.contains("MarkerShape::up_triangle"));
+        assertTrue(source.contains("graphpoints::marker_shape(state)"));
+        assertTrue(source.contains("drawModernGraphCurrentSample"));
+        assertTrue(source.contains("A hollow diamond is a non-colour cue"));
+        assertTrue(source.contains("endpointRadius*1.85f"));
+    }
+
+    @Test
+    public void nativePlotGuttersAdaptToPhoneFoldAndTabletWidths() throws Exception {
+        String layout=cpp("graphlayout.hpp");
+        Path appCurvePath=Paths.get("src","main","cpp","curve","appcurve.cpp");
+        if(!Files.exists(appCurvePath))
+            appCurvePath=Paths.get("Common").resolve(appCurvePath);
+        String appCurve=new String(Files.readAllBytes(appCurvePath),
+                StandardCharsets.UTF_8);
+        assertTrue(layout.contains("logicalWidthDp<360.0f?14.0f"));
+        assertTrue(layout.contains("logicalWidthDp<600.0f?18.0f"));
+        assertTrue(layout.contains("logicalWidthDp<1200.0f?24.0f:28.0f"));
+        assertTrue(appCurve.contains("#include \"graphlayout.hpp\""));
+        assertTrue(appCurve.contains("graphlayout::horizontal_inset_px"));
+        assertFalse(appCurve.contains("modernui?density*20.0f"));
     }
 
     private static float densityScale(int hours) {

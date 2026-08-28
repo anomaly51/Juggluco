@@ -130,6 +130,42 @@ final class CriticalDisplayPayload {
                 trendMgDlMin, nowMs);
     }
 
+    /**
+     * Captures the newest real local sample for the delivery-only test UI.
+     * No network refresh is started and no synthetic medical values are ever
+     * introduced: when native history is unavailable the test chart remains
+     * an explicit empty state.
+     */
+    static CriticalDisplayPayload captureLatestForTest(Context context,
+            long nowMs) {
+        long safeNowMs = Math.max(1L, nowMs);
+        List<ForecastReading> recent = recentReadings(safeNowMs);
+        return fromLatestLocal(recent, cachedForecast(context), safeNowMs);
+    }
+
+    static CriticalDisplayPayload fromLatestLocal(
+            List<ForecastReading> recent, ForecastSnapshot cached,
+            long nowMs) {
+        ForecastReading latest = null;
+        long latestAllowedMs = safeAdd(Math.max(1L, nowMs),
+                FUTURE_CLOCK_SKEW_MS);
+        if (recent != null) {
+            for (ForecastReading reading : recent) {
+                if (reading == null || reading.measuredAtMs <= 0L
+                        || reading.measuredAtMs > latestAllowedMs
+                        || !validGlucose(reading.glucoseMgDl)) continue;
+                if (latest == null
+                        || reading.measuredAtMs > latest.measuredAtMs) {
+                    latest = reading;
+                }
+            }
+        }
+        if (latest == null) return EMPTY;
+        return fromActual(recent, cached, latest.measuredAtMs,
+                latest.glucoseMgDl, latest.trendMgDlMin,
+                Math.max(1L, nowMs));
+    }
+
     /** Immediate actual context; deliberately performs no JNI or repository I/O. */
     static CriticalDisplayPayload immediateActual(long readingAtMs,
             int currentMgDl, Float trendMgDlMin, long nowMs) {
@@ -313,6 +349,16 @@ final class CriticalDisplayPayload {
         } catch (JSONException impossible) {
             return "";
         }
+    }
+
+    /** Adds real local history to an already visible delivery-test surface. */
+    static void enrichTestAsync(Context context, String token,
+            long capturedAtMs) {
+        if (context == null || token == null || token.isEmpty()) return;
+        Context app = context.getApplicationContext();
+        executeCapture(() -> CriticalGlucoseAlarm.updateDisplayPayload(app,
+                token, captureLatestForTest(app,
+                        Math.max(capturedAtMs, System.currentTimeMillis()))));
     }
 
     static CriticalDisplayPayload fromJsonString(String encoded) {

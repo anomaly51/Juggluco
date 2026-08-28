@@ -15,15 +15,19 @@ shared surface, revoke it and create a new limited key before running this backe
 Never reuse the exposed value. The repository contains no working secret and does not
 create a `.env` file.
 
-The OpenRouter request enables Zero Data Retention routing and denies providers that
-collect request data. Images are decoded and re-encoded before upload, removing EXIF
-and GPS metadata. Raw photos and audio are never written to SQLite or retained by the
-application; the multipart runtime may use a short-lived OS temporary file for a large
-upload before validation finishes. SQLite still contains health-adjacent event data, so
-protect the Windows account and disk.
+Meal and vision requests enforce Zero Data Retention routing and deny providers that
+collect request data. Dedicated speech-to-text requests carry the same privacy
+preferences, but should also use account-wide OpenRouter ZDR/guardrails because STT
+provider-routing controls can differ from chat-completion controls. Images are decoded
+and re-encoded before upload, removing EXIF and GPS metadata. Raw photos and audio are
+never written to SQLite or retained by the application; the multipart runtime may use
+a short-lived OS temporary file for a large upload before validation finishes. SQLite
+still contains health-adjacent event data, so protect the Windows account and disk.
 
-AI carbohydrate values are estimates. The app must show the range and warnings and
-require user confirmation. This backend does not calculate or recommend insulin doses.
+AI carbohydrate values are estimates. The app shows the range and warnings, records
+the result immediately, and keeps an explicit Undo/correction path. This backend does
+not calculate or recommend insulin doses; only an unambiguous dose already reported
+by the user may be recorded automatically.
 
 For a container image and a single-replica Kubernetes deployment with persistent
 SQLite storage, see [`../deploy/kubernetes/README.md`](../deploy/kubernetes/README.md).
@@ -51,8 +55,13 @@ selected from OpenRouter's official model catalog with image input, structured-o
 and ZDR routing requirements. It remains configurable with
 `OPENROUTER_MEAL_CHAT_MODEL`; `google/gemini-2.5-flash-lite` is a reasonable manual
 fallback. There is no silent fallback that could weaken privacy/provider constraints.
-Voice transcription defaults to the lower-cost `google/gemini-2.5-flash-lite`, and
-the legacy single-request vision endpoint now uses the same Qwen vision default.
+Voice transcription defaults to the latency-oriented
+`openai/whisper-large-v3-turbo` model through OpenRouter's dedicated speech-to-text
+endpoint. Set `OPENROUTER_AUDIO_LANGUAGE=ru` (or another ISO-639-1/BCP-47 tag)
+when a deployment has a known voice language; leave it blank or set it to `auto`
+to retain automatic detection. Russian transcription also sends a narrowly scoped
+Groq vocabulary hint for NovoRapid and Tresiba without supplying or inferring dose
+values. The legacy single-request vision endpoint uses the same Qwen vision default.
 
 For USB-only access, start the backend on loopback:
 
@@ -63,8 +72,8 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
 Connect the physical phone to that loopback port without opening a LAN listener:
 
 ```powershell
-adb -s RFCY90R4HGT reverse tcp:8765 tcp:8765
-adb -s RFCY90R4HGT reverse --list
+adb -s <PHONE_SERIAL> reverse tcp:8765 tcp:8765
+adb -s <PHONE_SERIAL> reverse --list
 ```
 
 The Android base URL is then `http://127.0.0.1:8765`. The emulator can use the same
@@ -79,7 +88,7 @@ For a physical phone on the same trusted Wi-Fi network, use the LAN launcher:
 
 It detects the computer's active LAN address, adds that address to the backend's host
 allowlist, and listens on port 8765. Set the Android base URL to the address printed by
-the script, for example `http://192.168.1.121:8765`. If Windows Firewall prompts, allow
+the script, for example `http://<LAN_IP>:8765`. If Windows Firewall prompts, allow
 TCP 8765 only for the local/private subnet. No `adb reverse` rule is needed.
 
 The phone and computer must remain on the same network. A DHCP address can change after
@@ -204,8 +213,10 @@ returns credentials, provider names, endpoints, or model IDs.
 `POST /v1/transcriptions` uses `multipart/form-data` with one required `audio`
 file field. AAC, FLAC, M4A/MP4, MP3, OGG, and WAV are accepted up to
 `JUGGLUCO_MAX_AUDIO_BYTES`. The request requires the same backend Bearer token as
-the other protected `/v1` routes. A successful response contains only provider-neutral
-editable text:
+the other protected `/v1` routes. An optional `language` form field accepts `auto`,
+an ISO-639-1 code, or a BCP-47 locale such as `ru-RU`; when omitted, the deployment
+setting above is used. A successful response contains only provider-neutral editable
+text:
 
 ```json
 {"text": "I drank one glass of milk"}
@@ -224,8 +235,9 @@ change. It does not write the recording or transcript to SQLite.
 - `audio`: optional AAC, FLAC, M4A/MP4, MP3, OGG, or WAV recording.
 
 At least one of these inputs is required. A voice recording is first transcribed via
-the configured OpenRouter audio model, then the transcript and photos are analyzed by
-the configured vision model using a strict JSON schema. A successful response is:
+OpenRouter's dedicated speech-to-text endpoint, then the transcript and photos are
+analyzed by the configured vision model using a strict JSON schema. A successful
+response is:
 
 ```json
 {

@@ -261,6 +261,23 @@ static private int low(long tim,notGlucose    sglucose,float gl,float rate,int a
         }
        return alarm;
       }
+
+    /** Defensive upgrade boundary for alarm codes created by a legacy phone
+     * profile before the unified five-alert model became active. */
+    static int unifiedPhoneAlarmCode(int alarm,boolean wearable) {
+        if(wearable)
+            return alarm;
+        return switch(alarm) {
+            // Fold old urgent levels into Current high/low. Codes 4 and 5
+            // make the runtime re-check the visible current enable flags.
+            case 16 -> 4;
+            case 17 -> 5;
+            // Forecast is ML-owned and value-available is retired on phone.
+            case 18,19,3 -> 0;
+            default -> alarm;
+            };
+        }
+
     static void dowithglucose(String SerialNumber, int mgdl, float gl, float rate, int alarm, long timmsec,long sensorstartmsec,long showtime,int sensorgen) {
 
         if(gl==0.0)
@@ -282,10 +299,11 @@ static private int low(long tim,notGlucose    sglucose,float gl,float rate,int a
             fview.postInvalidate();
 
         try {
+            alarm=unifiedPhoneAlarmCode(alarm,isWearable);
 
             switch (alarm) {
                 case 4: {
-                    if(Natives.hasalarmveryhigh())
+                    if(isWearable&&Natives.hasalarmveryhigh())
                         alarm=veryhigh(tim,sglucose, gl, rate,alarm,alarmspeak) ;
                     else {
                         if(Natives.hasalarmhigh())
@@ -314,7 +332,7 @@ static private int low(long tim,notGlucose    sglucose,float gl,float rate,int a
                       alarm=high(tim,sglucose, gl, rate,alarm,alarmspeak) ;
                       break;
                 case 5: {
-                    if(Natives.hasalarmverylow()) {
+                    if(isWearable&&Natives.hasalarmverylow()) {
                        alarm=verylow(tim,sglucose, gl, rate,alarm,alarmspeak) ;
                        }
                     else {

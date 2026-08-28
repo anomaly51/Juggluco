@@ -172,7 +172,8 @@
                         android:layout_height="56dp"
                         android:background="@drawable/intake_choice_icon"
                         android:gravity="center"
-                        android:text="AI"
+                        android:importantForAccessibility="no"
+                        android:text="＋"
                         android:textColor="@color/modern_secondary_accent"
                         android:textSize="17sp"
                         android:textStyle="bold" />

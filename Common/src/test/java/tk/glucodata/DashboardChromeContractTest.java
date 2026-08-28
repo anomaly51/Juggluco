@@ -18,6 +18,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -212,6 +213,11 @@ public class DashboardChromeContractTest {
         assertTrue(now.getMinimumHeight() >= dp(48));
 
         LinearLayout ranges = root.findViewById(R.id.modern_dashboard_ranges);
+        HorizontalScrollView scroller = root.findViewById(
+                R.id.modern_dashboard_range_scroller);
+        assertNotNull(scroller);
+        assertTrue(scroller.isFillViewport());
+        assertEquals(android.view.Gravity.CENTER, ranges.getGravity());
         assertEquals(RANGE_IDS.length, ranges.getChildCount());
         for (int index = 0; index < RANGE_IDS.length; index++) {
             Button range = root.findViewById(RANGE_IDS[index]);

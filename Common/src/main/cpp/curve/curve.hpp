@@ -193,10 +193,10 @@ constcol NVGcolor dooryellow=nvgRGBAf2(0.9,0.9,0.1,0.3);
 // every phone-native canvas (graph, statistics and records) shares this
 // stable surface and contrast system.
 constcol NVGcolor modernGraphSurface=hexcolor(0x0C0F10);
-constcol NVGcolor modernGraphText=hexcolor(0xD4D9D6);
-constcol NVGcolor modernGraphMuted=nvgRGBAf2(0x8D/255.0f,0x96/255.0f,0x91/255.0f,0.78f);
+constcol NVGcolor modernGraphText=hexcolor(0xE2E7E4);
+constcol NVGcolor modernGraphMuted=nvgRGBAf2(0xAA/255.0f,0xB2/255.0f,0xAE/255.0f,0.92f);
 constcol NVGcolor modernGraphGrid=nvgRGBAf2(0x76/255.0f,0x80/255.0f,0x7B/255.0f,0.14f);
-constcol NVGcolor modernGraphGridStrong=nvgRGBAf2(0xA0/255.0f,0xA9/255.0f,0xA4/255.0f,0.25f);
+constcol NVGcolor modernGraphGridStrong=nvgRGBAf2(0xA0/255.0f,0xA9/255.0f,0xA4/255.0f,0.32f);
 // Clinical state palette: green is in range, amber is high and coral is low.
 constcol NVGcolor modernGraphGlucose=hexcolor(0x4ECB83);
 constcol NVGcolor modernGraphHigh=hexcolor(0xF2A93B);

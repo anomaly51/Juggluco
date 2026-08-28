@@ -10,7 +10,13 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.schemas import MealChatModelResult
-from conftest import FakeAnalyzer, FakeChatAnalyzer, TEST_TOKEN, make_settings
+from conftest import (
+    FakeAnalyzer,
+    FakeChatAnalyzer,
+    TEST_TOKEN,
+    make_settings,
+    valid_wav_bytes,
+)
 
 
 def create_session(client, auth_headers, *, client_event_id=None, occurred_at_ms=None):
@@ -78,6 +84,7 @@ def test_multiturn_chat_persists_corrections_but_never_raw_media(
     fake_chat_analyzer,
     jpeg_bytes,
 ):
+    wav_audio = valid_wav_bytes()
     initial = FakeChatAnalyzer.default_result().model_copy(
         update={
             "assistant_message": "Is that one bowl or two?",
@@ -110,7 +117,7 @@ def test_multiturn_chat_persists_corrections_but_never_raw_media(
             ("photos", (f"food-{index}.jpg", jpeg_bytes, "image/jpeg"))
             for index in range(3)
         ]
-        + [("audio", ("meal.m4a", b"synthetic-audio", "audio/mp4"))],
+        + [("audio", ("meal.wav", wav_audio, "audio/wav"))],
     )
     assert first.status_code == 200, first.text
     assert first.json()["ready_to_confirm"] is False
@@ -134,7 +141,7 @@ def test_multiturn_chat_persists_corrections_but_never_raw_media(
     first_call = fake_chat_analyzer.calls[0]
     assert len(first_call[2]) == 3
     assert all(image.source_bytes == len(jpeg_bytes) for image in first_call[2])
-    assert first_call[3].format == "m4a"
+    assert first_call[3].format == "wav"
     second_history = fake_chat_analyzer.calls[1][0]
     assert [entry.role for entry in second_history] == ["user", "assistant"]
     assert second_history[1].proposal_json is not None
@@ -182,7 +189,7 @@ def test_multiturn_chat_persists_corrections_but_never_raw_media(
         path.read_bytes() for path in sqlite_files if path.exists()
     )
     assert jpeg_bytes not in persisted_bytes
-    assert b"synthetic-audio" not in persisted_bytes
+    assert wav_audio not in persisted_bytes
 
 
 def test_confirm_is_explicit_idempotent_and_creates_meal_only_intake(

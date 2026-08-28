@@ -75,8 +75,8 @@ public final class CriticalGlucoseAlarmActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        // Back/Home/opening the graph is not acknowledgement. The user must
-        // choose the explicit acknowledge or snooze action.
+        // Leaving is not acknowledgement. The explicit red Stop sound action
+        // is the only visible way to end a critical presentation.
     }
 
     @android.annotation.TargetApi(Build.VERSION_CODES.TIRAMISU)
@@ -133,30 +133,6 @@ public final class CriticalGlucoseAlarmActivity extends Activity {
                         if (CriticalGlucoseAlarm.acknowledge(
                                 CriticalGlucoseAlarmActivity.this, token)) {
                             finishSafely();
-                        }
-                    }
-
-                    @Override
-                    public void snooze() {
-                        if (CriticalGlucoseAlarm.snooze(
-                                CriticalGlucoseAlarmActivity.this, token,
-                                5L * 60_000L)) {
-                            finishSafely();
-                        }
-                    }
-
-                    @Override
-                    public void openGraph() {
-                        String currentToken = token;
-                        if (CriticalGlucoseAlarmOverlay.launchGraph(
-                                CriticalGlucoseAlarmActivity.this,
-                                currentToken)) {
-                            try {
-                                moveTaskToBack(true);
-                            } catch (RuntimeException unavailable) {
-                                // The graph launch already succeeded. Its
-                                // lifecycle now scopes overlay visibility.
-                            }
                         }
                     }
                 });

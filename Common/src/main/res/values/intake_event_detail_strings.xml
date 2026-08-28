@@ -23,9 +23,9 @@
     <string name="intake_event_details_dose">%1$s U</string>
     <string name="intake_event_details_combined_amount">%1$s g carbohydrates · %2$s U</string>
     <string name="intake_event_details_amount_unknown">Not specified</string>
-    <string name="intake_event_details_ai_source">Carbohydrates were estimated with AI and confirmed by you. Estimate confidence: %1$d%%.</string>
-    <string name="intake_event_details_ai_source_reviewed">Carbohydrates were estimated with AI and confirmed by you.</string>
-    <string name="intake_event_details_pending_sync">Saved on this phone. Waiting for the backend; synchronization will retry automatically.</string>
+    <string name="intake_event_details_ai_source">Carbohydrates were estimated and confirmed by you. Estimate confidence: %1$d%%.</string>
+    <string name="intake_event_details_ai_source_reviewed">Carbohydrates were estimated and confirmed by you.</string>
+    <string name="intake_event_details_pending_sync">Saved on this phone. Waiting for the service; synchronization will retry automatically.</string>
     <string name="intake_event_portion_label">ACTUALLY EATEN</string>
     <string name="intake_event_portion_summary">%1$s of %2$s g</string>
     <string name="intake_event_portion_input_hint">Consumed portion, g</string>
@@ -39,7 +39,7 @@
     <string name="intake_event_portion_saving">Saving consumed portion</string>
     <string name="intake_event_portion_saved">Consumed portion updated</string>
     <string name="intake_event_portion_invalid">Enter a value from 0 to %1$s g.</string>
-    <string name="intake_event_portion_error">Couldn’t update the portion. Check the backend connection and try again.</string>
+    <string name="intake_event_portion_error">Couldn’t update the portion. Check the connection and try again.</string>
     <string name="intake_event_delete">Delete record</string>
     <string name="intake_event_delete_accessibility">Delete this intake record</string>
     <string name="intake_event_delete_confirm_title">Delete this record?</string>
@@ -48,5 +48,5 @@
     <string name="intake_event_delete_confirm">Delete</string>
     <string name="intake_event_delete_confirm_accessibility">Permanently delete this intake record</string>
     <string name="intake_event_deleting">Deleting record</string>
-    <string name="intake_event_delete_error">Couldn’t delete the record. Check the backend connection and try again.</string>
+    <string name="intake_event_delete_error">Couldn’t delete the record. Check the connection and try again.</string>
 </resources>

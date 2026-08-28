@@ -77,7 +77,15 @@ public final class IntakeBackendSettings {
 
     private boolean storeFields() {
         try {
-            repository.configure(url.getText().toString(),token.getText().toString());
+            if(!repository.configure(url.getText().toString(),
+                    token.getText().toString())) {
+                status.setVisibility(VISIBLE);
+                status.setSelected(false);
+                status.setText(R.string.intake_backend_change_pending);
+                status.setTextColor(ContextCompat.getColor(activity,
+                        R.color.modern_secondary_warning));
+                return false;
+            }
             url.setText(repository.backendUrl());
             if(onChanged!=null) onChanged.run();
             return true;

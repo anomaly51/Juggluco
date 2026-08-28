@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,30 @@ from dotenv import load_dotenv
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+
+
+_AUDIO_LANGUAGE_TAG = re.compile(
+    r"^[A-Za-z]{2}(?:[-_][A-Za-z0-9]{2,8})*$"
+)
+
+
+def normalize_audio_language(value: str | None) -> str | None:
+    """Return the ISO-639-1 primary language for a configured locale hint.
+
+    OpenRouter's transcription endpoint accepts a two-letter language.  The
+    Android/API boundary may naturally supply a BCP-47 locale such as
+    ``ru-RU``, so accept a deliberately small tag shape and send only its
+    primary subtag.  Blank values and ``auto`` preserve provider detection.
+    """
+
+    clean = (value or "").strip()
+    if not clean or clean.casefold() == "auto":
+        return None
+    if len(clean) > 35 or _AUDIO_LANGUAGE_TAG.fullmatch(clean) is None:
+        raise ValueError(
+            "audio language must be auto or a two-letter/BCP-47 language tag"
+        )
+    return re.split(r"[-_]", clean, maxsplit=1)[0].lower()
 
 
 def _positive_int(name: str, default: int) -> int:
@@ -49,6 +74,7 @@ class Settings:
     allowed_hosts: tuple[str, ...]
     max_image_bytes: int
     max_audio_bytes: int
+    openrouter_audio_language: str | None = None
     openrouter_meal_chat_model: str = "qwen/qwen3-vl-8b-instruct"
     meal_chat_max_photos: int = 24
     meal_chat_max_aggregate_image_bytes: int = 32 * 1024 * 1024
@@ -59,6 +85,17 @@ class Settings:
     viewer_token: str | None = None
 
     def __post_init__(self) -> None:
+        try:
+            normalized_audio_language = normalize_audio_language(
+                self.openrouter_audio_language
+            )
+        except ValueError as error:
+            raise ValueError(
+                "OPENROUTER_AUDIO_LANGUAGE must be auto or a valid language tag"
+            ) from error
+        object.__setattr__(
+            self, "openrouter_audio_language", normalized_audio_language
+        )
         if self.viewer_token is not None and len(self.viewer_token) < 32:
             raise ValueError("JUGGLUCO_VIEWER_TOKEN must be at least 32 characters")
         if (
@@ -98,7 +135,7 @@ class Settings:
                 "OPENROUTER_VISION_MODEL", "qwen/qwen3-vl-8b-instruct"
             ),
             openrouter_audio_model=os.getenv(
-                "OPENROUTER_AUDIO_MODEL", "google/gemini-2.5-flash-lite"
+                "OPENROUTER_AUDIO_MODEL", "openai/whisper-large-v3-turbo"
             ),
             openrouter_base_url=os.getenv(
                 "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
@@ -110,6 +147,9 @@ class Settings:
             max_image_bytes=_positive_int("JUGGLUCO_MAX_IMAGE_BYTES", 8 * 1024 * 1024),
             max_audio_bytes=_positive_int(
                 "JUGGLUCO_MAX_AUDIO_BYTES", 15 * 1024 * 1024
+            ),
+            openrouter_audio_language=os.getenv(
+                "OPENROUTER_AUDIO_LANGUAGE"
             ),
             openrouter_meal_chat_model=os.getenv(
                 "OPENROUTER_MEAL_CHAT_MODEL", "qwen/qwen3-vl-8b-instruct"

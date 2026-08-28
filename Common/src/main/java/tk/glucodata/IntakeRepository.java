@@ -43,10 +43,22 @@ public final class IntakeRepository {
     private static final long SYNC_RETRY_MS = 30_000L;
     private static final String CONFIGURATION_CHANGED =
             "Backend configuration changed. Try again.";
+    private static final String INTAKE_CHAT_SAVE_FAILED =
+            "Could not save the confirmed intake-chat result.";
 
     public interface Callback<T> {
         void onSuccess(T value);
         void onError(String message);
+
+        /**
+         * A server/contract rejection whose retry outcome is no longer
+         * ambiguous. Callers that do not need recovery UI keep the ordinary
+         * error behavior.
+         */
+        default void onDefinitiveError(String message,
+                boolean commitMayHaveOccurred) {
+            onError(message);
+        }
     }
 
     public interface Listener {
@@ -59,9 +71,13 @@ public final class IntakeRepository {
 
     private static volatile IntakeRepository instance;
 
+    private final Context applicationContext;
     private final SharedPreferences preferences;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ExecutorService transcriptionExecutor =
+            Executors.newSingleThreadExecutor();
+    /** Serializes conversation turns without blocking durable outbox replay. */
+    private final ExecutorService intakeChatExecutor =
             Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final CopyOnWriteArrayList<Listener> listeners =
@@ -79,7 +95,8 @@ public final class IntakeRepository {
     private boolean syncScheduled;
 
     private IntakeRepository(Context context) {
-        preferences = context.getApplicationContext().getSharedPreferences(
+        applicationContext = context.getApplicationContext();
+        preferences = applicationContext.getSharedPreferences(
                 PREFS, Context.MODE_PRIVATE);
         pendingCreates = readPendingCreates();
         events = Collections.unmodifiableList(readCache());
@@ -109,11 +126,19 @@ public final class IntakeRepository {
         return preferences.getString(KEY_TOKEN, "");
     }
 
-    public void configure(String url, String token) {
+    public boolean configure(String url, String token) {
         String normalized = normalizeBackendUrl(url);
         String cleanToken = IntakeEvent.clean(token);
         boolean backendChanged = !normalized.equals(backendUrl())
                 || !cleanToken.equals(backendToken());
+        // A pending chat turn is bound to its original endpoint, credentials,
+        // server session and client-turn id. Changing identity here would make
+        // an exact retry impossible and could let the same medical fact be
+        // recorded twice on a later fresh session.
+        if (backendChanged
+                && IntakeChatStateStore.hasPendingTurn(applicationContext)) {
+            return false;
+        }
         preferences.edit().putString(KEY_URL, normalized)
                 .putString(KEY_TOKEN, cleanToken).apply();
         if (backendChanged) {
@@ -124,6 +149,7 @@ public final class IntakeRepository {
             notifyConfigurationChanged();
             schedulePendingSync(250L);
         }
+        return true;
     }
 
     public static String normalizeBackendUrl(String input) {
@@ -314,6 +340,145 @@ public final class IntakeRepository {
                 occurredAtMs, mealText, carbsGrams, portionGrams), callback);
     }
 
+    void startIntakeChat(String clientSessionId,
+            Callback<IntakeChatSession> callback) {
+        executeForCurrentBackend(intakeChatExecutor, callback,
+                api -> api.createIntakeChatSession(clientSessionId));
+    }
+
+    /**
+     * Sends one idempotent, backend-authoritative unified intake turn.
+     *
+     * <p>Cancellation disconnects the current transport and suppresses its UI
+     * callback. If a complete authoritative receipt already arrived, it is
+     * still durably merged. The caller can safely retry with the same
+     * {@code clientTurnId}; the backend returns the already stored action result
+     * if it committed before the connection was interrupted.</p>
+     */
+    Cancellable sendIntakeChat(String sessionId, String clientTurnId,
+            long occurredAtMs, String text, File audio, List<File> photos,
+            Callback<IntakeChatTurn> callback) {
+        final long generation = configurationGeneration;
+        final IntakeApiClient api = client();
+        // The composer clears its attachment model after a completed turn.
+        // Snapshot it before the work is queued so another UI action cannot
+        // mutate the multipart payload while this serialized executor waits.
+        final List<File> photoSnapshot = photos == null
+                ? Collections.emptyList() : new ArrayList<>(photos);
+        final IntakeApiClient.RequestCancellation cancellation =
+                new IntakeApiClient.RequestCancellation();
+        intakeChatExecutor.submit(() -> {
+            boolean hadAmbiguousAttempt = false;
+            try {
+                IntakeChatTurn result;
+                try {
+                    result = api.sendIntakeChatTurn(sessionId, clientTurnId,
+                            occurredAtMs, text, audio, photoSnapshot,
+                            cancellation);
+                } catch (IntakeApiClient.ApiException
+                        | IntakeApiClient.ApiContractException definitive) {
+                    throw definitive;
+                } catch (Exception ambiguousTransportFailure) {
+                    // A response can be lost after the backend committed. One
+                    // exact retry with the same turn ID and immutable logical
+                    // payload resolves that ambiguity through the backend's
+                    // durable idempotency cache instead of creating a duplicate.
+                    if (cancellation.isCancelled()) {
+                        throw ambiguousTransportFailure;
+                    }
+                    hadAmbiguousAttempt = true;
+                    result = api.sendIntakeChatTurn(sessionId, clientTurnId,
+                            occurredAtMs, text, audio, photoSnapshot,
+                            cancellation);
+                }
+                final IntakeChatTurn receipt = result;
+                main.post(() -> deliverIntakeChatResult(generation,
+                        cancellation, receipt, callback));
+            } catch (Exception error) {
+                boolean definitive = error instanceof IntakeApiClient.ApiException
+                        || error instanceof IntakeApiClient.ApiContractException;
+                boolean commitMayHaveOccurred =
+                        hadAmbiguousAttempt
+                        || error instanceof IntakeApiClient.ApiContractException;
+                if (error instanceof IntakeApiClient.ApiException) {
+                    int status = ((IntakeApiClient.ApiException) error)
+                            .statusCode;
+                    commitMayHaveOccurred = hadAmbiguousAttempt
+                            || status == 409 || status >= 500;
+                }
+                String message = IntakeEvent.clean(error.getMessage());
+                if (message.isEmpty()) {
+                    message = error.getClass().getSimpleName();
+                }
+                final String finalMessage = message;
+                final boolean finalDefinitive = definitive;
+                final boolean finalCommitMayHaveOccurred =
+                        commitMayHaveOccurred;
+                if (callback != null) {
+                    main.post(() -> {
+                        if (cancellation.isCancelled()) return;
+                        String delivered = generation
+                                != configurationGeneration
+                                ? CONFIGURATION_CHANGED : finalMessage;
+                        if (generation == configurationGeneration
+                                && finalDefinitive) {
+                            callback.onDefinitiveError(delivered,
+                                    finalCommitMayHaveOccurred);
+                        } else {
+                            callback.onError(delivered);
+                        }
+                    });
+                }
+            }
+        });
+        return cancellation::cancel;
+    }
+
+    void undoIntakeChatAction(String actionId,
+            Callback<IntakeChatTurn> callback) {
+        executeForCurrentBackend(intakeChatExecutor,
+                new Callback<IntakeChatTurn>() {
+            @Override public void onSuccess(IntakeChatTurn result) {
+                try {
+                    mergeIntakeChatTurn(result);
+                    if (callback != null) callback.onSuccess(result);
+                } catch (java.io.IOException error) {
+                    if (callback != null) {
+                        callback.onError(INTAKE_CHAT_SAVE_FAILED);
+                    }
+                }
+            }
+
+            @Override public void onError(String message) {
+                if (callback != null) callback.onError(message);
+            }
+        }, api -> api.undoIntakeChatAction(actionId));
+    }
+
+    private void deliverIntakeChatResult(long generation,
+            IntakeApiClient.RequestCancellation cancellation,
+            IntakeChatTurn result, Callback<IntakeChatTurn> callback) {
+        if (generation != configurationGeneration) {
+            if (callback != null && !cancellation.isCancelled()) {
+                callback.onError(CONFIGURATION_CHANGED);
+            }
+            return;
+        }
+        try {
+            // Merge before checking UI cancellation. A close/back action must
+            // not hide a medical record that the backend already committed.
+            mergeIntakeChatTurn(result);
+        } catch (java.io.IOException error) {
+            if (callback != null && !cancellation.isCancelled()) {
+                callback.onError(INTAKE_CHAT_SAVE_FAILED);
+            }
+            return;
+        }
+        if (callback != null && !cancellation.isCancelled()) {
+            callback.onSuccess(result);
+        }
+    }
+
     void startMealChat(String clientEventId, long occurredAtMs,
             Callback<MealChatSession> callback) {
         executeForCurrentBackend(callback, api -> api.createMealChatSession(
@@ -482,6 +647,52 @@ public final class IntakeRepository {
         replaceEvents(merged);
     }
 
+    /** Applies one chat receipt to the phone cache as a single durable update. */
+    private void mergeIntakeChatTurn(IntakeChatTurn turn)
+            throws java.io.IOException {
+        if (turn == null || (turn.events.isEmpty()
+                && turn.deletedEventIds.isEmpty())) return;
+        Set<String> deletedIds = new HashSet<>(turn.deletedEventIds);
+        Set<String> replacementIds = new HashSet<>();
+        Set<String> replacementClientIds = new HashSet<>();
+        for (IntakeEvent event : turn.events) {
+            replacementIds.add(event.id);
+            if (!event.clientEventId.isEmpty()) {
+                replacementClientIds.add(event.clientEventId);
+            }
+        }
+
+        synchronized (this) {
+            List<IntakeEvent> previousEvents = events;
+            ArrayList<PendingIntakeOperation> previousPending =
+                    new ArrayList<>(pendingCreates);
+            ArrayList<IntakeEvent> merged = new ArrayList<>(events.size()
+                    + turn.events.size());
+            for (IntakeEvent existing : events) {
+                boolean replacedByClientId = !existing.clientEventId.isEmpty()
+                        && replacementClientIds.contains(existing.clientEventId);
+                if (!deletedIds.contains(existing.id)
+                        && !replacementIds.contains(existing.id)
+                        && !replacedByClientId) {
+                    merged.add(existing);
+                }
+            }
+            merged.addAll(turn.events);
+            // A returned authoritative record also acknowledges an equivalent
+            // local create if a previous manual flow used the same client ID.
+            pendingCreates.removeIf(operation ->
+                    replacementClientIds.contains(operation.clientEventId));
+            setSortedEvents(merged);
+            if (!persistStateLocked()) {
+                pendingCreates.clear();
+                pendingCreates.addAll(previousPending);
+                events = previousEvents;
+                throw new java.io.IOException(INTAKE_CHAT_SAVE_FAILED);
+            }
+        }
+        notifyEventListeners();
+    }
+
     int pendingCreateCount() {
         synchronized (this) {
             return pendingCreates.size();
@@ -646,9 +857,14 @@ public final class IntakeRepository {
 
     private <T> void executeForCurrentBackend(Callback<T> callback,
             BackendWork<T> work) {
+        executeForCurrentBackend(executor, callback, work);
+    }
+
+    private <T> void executeForCurrentBackend(ExecutorService workExecutor,
+            Callback<T> callback, BackendWork<T> work) {
         final long generation = configurationGeneration;
         final IntakeApiClient api = client();
-        executor.execute(() -> {
+        workExecutor.execute(() -> {
             try {
                 T result = work.run(api);
                 if (callback != null) {

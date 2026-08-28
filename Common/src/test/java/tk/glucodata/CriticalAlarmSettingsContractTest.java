@@ -70,6 +70,21 @@ public class CriticalAlarmSettingsContractTest {
     }
 
     @Test
+    public void fullScreenRefreshCreatesCurrentPolicyChannelsBeforeInspecting()
+            throws Exception {
+        String page = source(Paths.get("src", "main", "java", "tk",
+                "glucodata", "FullScreenAlertSettingsPage.java"));
+        int rebuild = page.indexOf("private void rebuildReadiness()");
+        int ensure = page.indexOf(
+                "CriticalGlucoseAlarm.ensureChannels(activity);", rebuild);
+        int inspect = page.indexOf(
+                "CriticalAlarmDiagnostics.inspect(activity);", rebuild);
+        assertTrue(rebuild >= 0);
+        assertTrue(ensure > rebuild);
+        assertTrue(inspect > ensure);
+    }
+
+    @Test
     public void russianCopyUsesConfiguredNotGuaranteedLanguage()
             throws Exception {
         String russian = source(Paths.get("src", "main", "res", "values-ru",

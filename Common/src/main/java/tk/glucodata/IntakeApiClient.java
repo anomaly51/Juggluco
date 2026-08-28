@@ -40,6 +40,17 @@ final class IntakeApiClient {
         }
     }
 
+    /** A successful HTTP response that violates the intake-chat contract. */
+    static final class ApiContractException extends IOException {
+        ApiContractException(String message) {
+            super(message);
+        }
+
+        ApiContractException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     /** Allows the UI owner to abort a long multipart upload/read immediately. */
     static final class RequestCancellation {
         private boolean cancelled;
@@ -121,6 +132,167 @@ final class IntakeApiClient {
             cursor = next;
         }
         throw new IOException("Backend returned too many intake pages");
+    }
+
+    IntakeChatSession createIntakeChatSession(String clientSessionId)
+            throws IOException, JSONException {
+        String cleanId = IntakeEvent.clean(clientSessionId);
+        if (cleanId.isEmpty()) {
+            throw new IOException("Intake-chat client session ID is missing");
+        }
+        JSONObject request = new JSONObject();
+        request.put("client_session_id", cleanId);
+        try {
+            IntakeChatSession result = IntakeChatSession.fromJson(requestJson(
+                    "POST", "/v1/intake-chat/sessions", request,
+                    REQUEST_TIMEOUT_MS, cleanId));
+            return requireSessionIdentity(result, cleanId);
+        } catch (JSONException error) {
+            throw new ApiContractException(
+                    "Invalid intake-chat session response", error);
+        }
+    }
+
+    IntakeChatTurn sendIntakeChatTurn(String sessionId,
+            String clientTurnId, long occurredAtMs, String text,
+            File audio, List<File> photos, RequestCancellation cancellation)
+            throws IOException, JSONException {
+        String cleanSessionId = IntakeEvent.clean(sessionId);
+        String cleanTurnId = IntakeEvent.clean(clientTurnId);
+        String cleanText = IntakeEvent.clean(text);
+        if (cleanSessionId.isEmpty() || cleanTurnId.isEmpty()) {
+            throw new IOException("Intake-chat turn identity is missing");
+        }
+        if (occurredAtMs <= 0L) {
+            throw new IOException("Intake-chat occurrence time is invalid");
+        }
+        ArrayList<File> validPhotos = new ArrayList<>();
+        if (photos != null) {
+            for (File photo : photos) {
+                if (photo == null || !photo.isFile() || photo.length() <= 0L) {
+                    throw new IOException("Intake-chat photo is missing");
+                }
+                validPhotos.add(photo);
+            }
+        }
+        if (audio != null && (!audio.isFile() || audio.length() <= 0L)) {
+            throw new IOException("Intake-chat voice recording is empty");
+        }
+        if (cleanText.isEmpty() && audio == null && validPhotos.isEmpty()) {
+            throw new IOException("Intake-chat turn is empty");
+        }
+
+        String encodedSession = URLEncoder.encode(cleanSessionId,
+                StandardCharsets.UTF_8.name()).replace("+", "%20");
+        String boundary = "----JugglucoIntakeChat" + UUID.randomUUID();
+        HttpURLConnection connection = open("POST",
+                "/v1/intake-chat/sessions/" + encodedSession + "/turns",
+                AI_TIMEOUT_MS);
+        if (cancellation != null && !cancellation.attach(connection)) {
+            throw new IOException("Request cancelled");
+        }
+        try {
+            connection.setDoOutput(true);
+            connection.setChunkedStreamingMode(8_192);
+            connection.setRequestProperty("Content-Type",
+                    "multipart/form-data; boundary=" + boundary);
+            connection.setRequestProperty("Idempotency-Key", cleanTurnId);
+            if (cancellation != null) cancellation.throwIfCancelled();
+            connection.connect();
+            if (cancellation != null) cancellation.throwIfCancelled();
+            try (DataOutputStream output = new DataOutputStream(
+                    new BufferedOutputStream(connection.getOutputStream()))) {
+                writeField(output, boundary, "client_turn_id", cleanTurnId);
+                writeField(output, boundary, "occurred_at_ms",
+                        Long.toString(occurredAtMs));
+                if (!cleanText.isEmpty()) {
+                    writeField(output, boundary, "text", cleanText);
+                }
+                for (File photo : validPhotos) {
+                    writeFile(output, boundary, "photos", photo,
+                            "image/jpeg", cancellation);
+                }
+                if (audio != null) {
+                    writeFile(output, boundary, "audio", audio,
+                            mimeForAudio(audio), cancellation);
+                }
+                if (cancellation != null) cancellation.throwIfCancelled();
+                output.writeBytes("--" + boundary + "--\r\n");
+                output.flush();
+            }
+            if (cancellation != null) cancellation.throwIfCancelled();
+            try {
+                JSONObject response = readJson(connection);
+                // Once a complete success body exists, cancellation only
+                // suppresses UI delivery. Parse and durably merge its receipt.
+                IntakeChatTurn result = IntakeChatTurn.fromJson(response);
+                return requireTurnIdentity(result, cleanSessionId,
+                        cleanTurnId);
+            } catch (JSONException error) {
+                throw new ApiContractException(
+                        "Invalid intake-chat turn response", error);
+            }
+        } finally {
+            if (cancellation != null) cancellation.detach(connection);
+            connection.disconnect();
+        }
+    }
+
+    IntakeChatTurn undoIntakeChatAction(String actionId)
+            throws IOException, JSONException {
+        String cleanId = IntakeEvent.clean(actionId);
+        if (cleanId.isEmpty()) {
+            throw new IOException("Intake-chat action ID is missing");
+        }
+        String encoded = URLEncoder.encode(cleanId,
+                StandardCharsets.UTF_8.name()).replace("+", "%20");
+        try {
+            JSONObject response = requestJson("POST",
+                    "/v1/intake-chat/actions/" + encoded + "/undo",
+                    new JSONObject(), REQUEST_TIMEOUT_MS, cleanId);
+            return requireUndoIdentity(IntakeChatTurn.fromUndoJson(response),
+                    cleanId);
+        } catch (JSONException error) {
+            throw new ApiContractException(
+                    "Invalid intake-chat undo response", error);
+        }
+    }
+
+    static IntakeChatSession requireSessionIdentity(IntakeChatSession result,
+            String expectedClientSessionId) throws ApiContractException {
+        String expected = IntakeEvent.clean(expectedClientSessionId);
+        if (result == null || expected.isEmpty()
+                || !expected.equals(result.clientSessionId)) {
+            throw new ApiContractException(
+                    "Intake-chat response client_session_id mismatch");
+        }
+        return result;
+    }
+
+    static IntakeChatTurn requireTurnIdentity(IntakeChatTurn result,
+            String expectedSessionId, String expectedClientTurnId)
+            throws ApiContractException {
+        String expectedSession = IntakeEvent.clean(expectedSessionId);
+        String expectedTurn = IntakeEvent.clean(expectedClientTurnId);
+        if (result == null || expectedSession.isEmpty()
+                || expectedTurn.isEmpty()
+                || !expectedSession.equals(result.sessionId)
+                || !expectedTurn.equals(result.clientTurnId)) {
+            throw new ApiContractException(
+                    "Intake-chat response turn identity mismatch");
+        }
+        return result;
+    }
+
+    static IntakeChatTurn requireUndoIdentity(IntakeChatTurn result,
+            String expectedActionId) throws ApiContractException {
+        String expected = IntakeEvent.clean(expectedActionId);
+        if (result == null || expected.isEmpty()
+                || !expected.equals(result.actionId)) {
+            throw new ApiContractException(
+                    "Intake-chat response action_id mismatch");
+        }
+        return result;
     }
 
     IntakeEvent createInsulin(IntakeDraft draft)

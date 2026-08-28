@@ -65,6 +65,36 @@ public class PredictiveAlertEngineTest {
     }
 
     @Test
+    public void sensitivityIsAppliedIndependentlyByDirection() {
+        long now = 1_800_000_000_000L;
+        ForecastSnapshot forecast = forecast(now, 115f, true,
+                crossing("low", "possible", now + 15 * 60_000L,
+                        15, 90f, 72f),
+                crossing("high", "possible", now + 10 * 60_000L,
+                        10, 168f, 164f));
+
+        ForecastRiskEvaluator.Decision lowEarly =
+                ForecastRiskEvaluator.evaluate(forecast,
+                        new ForecastRiskEvaluator.Policy(true, true, true,
+                                20, 30,
+                                ForecastRiskEvaluator.SENSITIVITY_EARLY,
+                                ForecastRiskEvaluator.SENSITIVITY_BALANCED),
+                        now);
+        assertEquals(ForecastRiskEvaluator.Direction.LOW,
+                lowEarly.direction);
+
+        ForecastRiskEvaluator.Decision highEarly =
+                ForecastRiskEvaluator.evaluate(forecast,
+                        new ForecastRiskEvaluator.Policy(true, true, true,
+                                20, 30,
+                                ForecastRiskEvaluator.SENSITIVITY_BALANCED,
+                                ForecastRiskEvaluator.SENSITIVITY_EARLY),
+                        now);
+        assertEquals(ForecastRiskEvaluator.Direction.HIGH,
+                highEarly.direction);
+    }
+
+    @Test
     public void onlyPossibleToLikelyInSameDirectionBypassesEpisodeCooldown() {
         assertTrue(PredictiveAlertCoordinator.isEvidenceUpgrade(
                 PredictiveAlertPreferences.DIRECTION_LOW,
@@ -110,6 +140,23 @@ public class PredictiveAlertEngineTest {
                 PredictiveAlertPreferences.EVIDENCE_LIKELY,
                 PredictiveAlertPreferences.DIRECTION_LOW,
                 PredictiveAlertPreferences.EVIDENCE_LIKELY));
+    }
+
+    @Test
+    public void coordinatorSelectsCooldownForAlertDirection() {
+        PredictiveAlertPreferences.Snapshot settings =
+                new PredictiveAlertPreferences.Snapshot(true, true, true,
+                        20, 30,
+                        PredictiveAlertPreferences.SENSITIVITY_EARLY,
+                        PredictiveAlertPreferences.SENSITIVITY_FEWER,
+                        15, 120);
+
+        assertEquals(15,
+                PredictiveAlertCoordinator.cooldownMinutesForDirection(
+                        settings, PredictiveAlertPreferences.DIRECTION_LOW));
+        assertEquals(120,
+                PredictiveAlertCoordinator.cooldownMinutesForDirection(
+                        settings, PredictiveAlertPreferences.DIRECTION_HIGH));
     }
 
     @Test

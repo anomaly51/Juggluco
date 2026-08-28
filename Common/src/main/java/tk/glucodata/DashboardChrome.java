@@ -13,6 +13,7 @@ import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
 import android.graphics.Color;
 import android.os.Looper;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -20,6 +21,7 @@ import android.view.ViewParent;
 import android.view.ViewTreeObserver;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -58,6 +60,9 @@ final class DashboardChrome {
     private static final int INTAKE_FLAG_CARBS_PRESENT = 1 << 1;
     private static final int INTAKE_FLAG_RAPID_INSULIN = 1 << 2;
     private static final int INTAKE_FLAG_LONG_INSULIN = 1 << 3;
+    private static final int NAVIGATION_RAIL_WIDTH_DP = 72;
+    static final int NAVIGATION_RAIL_ITEM_HEIGHT_DP = 96;
+    private static final int MAX_BODY_CONTENT_WIDTH_DP = 1240;
     private static final int[] RANGE_IDS = {
             R.id.modern_dashboard_range_3h,
             R.id.modern_dashboard_range_6h,
@@ -100,6 +105,8 @@ final class DashboardChrome {
     private Button sensorAction;
     private View graphCard;
     private View graphControls;
+    private HorizontalScrollView rangeScroller;
+    private LinearLayout rangeTrack;
     private View heroReading;
     private TextView heroValue;
     private TextView heroTrend;
@@ -125,6 +132,7 @@ final class DashboardChrome {
     private long lastIntakeRefreshMs;
     private int backendStatusGeneration;
     private boolean backendCheckInFlight;
+    private CharSequence graphSummaryDescription = "";
 
     private final IntakeRepository.Listener intakeListener;
     private final ForecastRepository.Listener forecastListener;
@@ -206,6 +214,9 @@ final class DashboardChrome {
         graphCard = root.findViewById(R.id.modern_dashboard_graph_card);
         graphCard.setClipToOutline(true);
         graphControls = root.findViewById(R.id.modern_dashboard_graph_controls);
+        rangeScroller = root.findViewById(
+                R.id.modern_dashboard_range_scroller);
+        rangeTrack = root.findViewById(R.id.modern_dashboard_ranges);
         heroReading = root.findViewById(R.id.modern_dashboard_hero_reading);
         heroValue = root.findViewById(R.id.modern_dashboard_value);
         heroTrend = root.findViewById(R.id.modern_dashboard_trend);
@@ -231,6 +242,8 @@ final class DashboardChrome {
             ((ViewGroup) currentParent).removeView(curve);
         }
         graphHost.addView(curve, new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+        curve.setContentDescription(activity.getString(
+                R.string.dashboard_graph_hint));
 
         updateDestinationSelection();
         updateRangeSelection();
@@ -494,6 +507,8 @@ final class DashboardChrome {
                 unit,
                 trendDescription,
                 heroFreshness.getText()));
+        graphSummaryDescription = heroReading.getContentDescription();
+        refreshGraphAccessibilityDescription();
     }
 
     private void setGraphPreviewEnabled(boolean enabled) {
@@ -571,6 +586,8 @@ final class DashboardChrome {
         heroReading.setActivated(false);
         heroReading.setContentDescription(
                 activity.getString(R.string.dashboard_no_current_reading));
+        graphSummaryDescription = heroReading.getContentDescription();
+        refreshGraphAccessibilityDescription();
     }
 
     private void showPreviewState() {
@@ -599,6 +616,8 @@ final class DashboardChrome {
         heroReading.setActivated(false);
         heroReading.setContentDescription(activity.getString(
                 R.string.dashboard_preview_description, value, unit));
+        graphSummaryDescription = heroReading.getContentDescription();
+        refreshGraphAccessibilityDescription();
     }
 
     private void showLoadingState() {
@@ -621,6 +640,8 @@ final class DashboardChrome {
         heroReading.setActivated(false);
         heroReading.setContentDescription(
                 activity.getString(R.string.dashboard_loading_description));
+        graphSummaryDescription = heroReading.getContentDescription();
+        refreshGraphAccessibilityDescription();
     }
 
     private String previewValueLabel() {
@@ -725,6 +746,37 @@ final class DashboardChrome {
                     unitLabel));
         } catch (UnsatisfiedLinkError error) {
             targetRange.setText(R.string.dashboard_target_unavailable);
+        } finally {
+            refreshGraphAccessibilityDescription();
+        }
+    }
+
+    private void refreshGraphAccessibilityDescription() {
+        if (curve == null) {
+            return;
+        }
+        StringBuilder description = new StringBuilder();
+        appendAccessibilitySentence(description, graphSummaryDescription);
+        if (targetRange != null && targetRange.getText().length() > 0) {
+            appendAccessibilitySentence(description, targetRange.getText());
+        }
+        appendAccessibilitySentence(description,
+                activity.getString(R.string.dashboard_graph_hint));
+        curve.setContentDescription(description);
+    }
+
+    static void appendAccessibilitySentence(StringBuilder target,
+            CharSequence text) {
+        if (text == null || text.length() == 0) {
+            return;
+        }
+        if (target.length() > 0) {
+            target.append(' ');
+        }
+        target.append(text);
+        char last = target.charAt(target.length() - 1);
+        if (last != '.' && last != '!' && last != '?') {
+            target.append('.');
         }
     }
 
@@ -1225,6 +1277,8 @@ final class DashboardChrome {
         int heightDp = Math.round(availableHeight / density);
         boolean railLayout = shouldUseNavigationRail(widthDp, heightDp);
         boolean twoPaneLayout = shouldUseTwoPaneLayout(widthDp, heightDp);
+        int horizontalGutter = chartContentGutterDp(
+                widthDp, railLayout);
 
         content.setOrientation(railLayout
                 ? LinearLayout.HORIZONTAL
@@ -1240,6 +1294,18 @@ final class DashboardChrome {
         actions.setOrientation(railLayout
                 ? LinearLayout.VERTICAL
                 : LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER);
+        body.setPadding(dp(horizontalGutter), 0, dp(horizontalGutter),
+                dp(railLayout ? 12 : 8));
+        appBar.setPadding(dp(horizontalGutter + 4
+                        + (railLayout ? NAVIGATION_RAIL_WIDTH_DP : 0)), 0,
+                dp(horizontalGutter), 0);
+        if (rangeScroller != null) {
+            rangeScroller.setFillViewport(true);
+        }
+        if (rangeTrack != null) {
+            rangeTrack.setGravity(Gravity.CENTER);
+        }
 
         int desiredActionsIndex = railLayout ? 0 : content.getChildCount() - 1;
         if (content.indexOfChild(actions) != desiredActionsIndex) {
@@ -1256,7 +1322,8 @@ final class DashboardChrome {
                 ? new LinearLayout.LayoutParams(0, MATCH_PARENT, 1.0f)
                 : new LinearLayout.LayoutParams(MATCH_PARENT, 0, 1.0f);
         LinearLayout.LayoutParams actionsParams = railLayout
-                ? new LinearLayout.LayoutParams(dp(72), MATCH_PARENT)
+                ? new LinearLayout.LayoutParams(dp(NAVIGATION_RAIL_WIDTH_DP),
+                        MATCH_PARENT)
                 : new LinearLayout.LayoutParams(MATCH_PARENT, dp(64));
         body.setLayoutParams(bodyParams);
         actions.setLayoutParams(actionsParams);
@@ -1272,14 +1339,16 @@ final class DashboardChrome {
                 continue;
             }
             LinearLayout.LayoutParams navigationParams = railLayout
-                    ? new LinearLayout.LayoutParams(MATCH_PARENT, 0, 1.0f)
+                    ? new LinearLayout.LayoutParams(MATCH_PARENT,
+                            dp(NAVIGATION_RAIL_ITEM_HEIGHT_DP))
                     : new LinearLayout.LayoutParams(0, MATCH_PARENT, 1.0f);
             navigation.setLayoutParams(navigationParams);
         }
 
-        int twoPaneHeroWidth = widthDp < 720 ? 210 : 232;
+        int twoPaneHeroWidth = summaryPaneWidthDp(widthDp, horizontalGutter,
+                railLayout);
         LinearLayout.LayoutParams heroParams = twoPaneLayout
-                ? new LinearLayout.LayoutParams(dp(twoPaneHeroWidth), MATCH_PARENT)
+                ? new LinearLayout.LayoutParams(dp(twoPaneHeroWidth), WRAP_CONTENT)
                 : new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
         LinearLayout.LayoutParams graphParams = twoPaneLayout
                 ? new LinearLayout.LayoutParams(0, MATCH_PARENT, 1.0f)
@@ -1298,6 +1367,7 @@ final class DashboardChrome {
 
         if (twoPaneLayout) {
             heroParams.setMarginEnd(cardSpacing);
+            heroParams.gravity = Gravity.CENTER_VERTICAL;
         } else {
             heroParams.bottomMargin = cardSpacing;
         }
@@ -1307,6 +1377,15 @@ final class DashboardChrome {
         readingColumn.setLayoutParams(readingParams);
         heroFreshness.setLayoutParams(freshnessParams);
         sensorAction.setLayoutParams(sensorParams);
+        int expandedChipWidth = railLayout ? 176 : 128;
+        targetRange.setMaxWidth(dp(expandedChipWidth));
+        targetRange.setVisibility(railLayout ? View.VISIBLE : View.GONE);
+        forecastAction.setMaxWidth(dp(railLayout ? 120 : 88));
+        int heroHorizontalPadding = twoPaneLayout ? 18 : 16;
+        int heroVerticalPadding = twoPaneLayout ? 18 : 12;
+        heroCard.setPadding(dp(heroHorizontalPadding),
+                dp(heroVerticalPadding), dp(heroHorizontalPadding),
+                dp(twoPaneLayout ? 18 : 13));
     }
 
     static boolean shouldUseNavigationRail(int widthDp, int heightDp) {
@@ -1324,7 +1403,30 @@ final class DashboardChrome {
 
     static boolean shouldUseTwoPaneLayout(int widthDp, int heightDp) {
         return shouldUseNavigationRail(widthDp, heightDp)
-                && (widthDp > heightDp || widthDp >= 720);
+                && widthDp >= 700
+                && widthDp > heightDp;
+    }
+
+    /**
+     * Medical timelines benefit from more horizontal context than text pages.
+     * Keep the plot comfortably inset while allowing up to 1240dp of data.
+     */
+    static int chartContentGutterDp(int widthDp, boolean railLayout) {
+        int usableWidth = Math.max(0, widthDp
+                - (railLayout ? NAVIGATION_RAIL_WIDTH_DP : 0));
+        int baseGutter = usableWidth >= 840 ? 20 : 12;
+        int excess = Math.max(0,
+                usableWidth - (MAX_BODY_CONTENT_WIDTH_DP + baseGutter * 2));
+        return baseGutter + excess / 2;
+    }
+
+    static int summaryPaneWidthDp(int widthDp, int horizontalGutter,
+            boolean railLayout) {
+        int usableWidth = Math.max(0, widthDp
+                - (railLayout ? NAVIGATION_RAIL_WIDTH_DP : 0)
+                - horizontalGutter * 2);
+        return Math.max(232, Math.min(320,
+                Math.round(usableWidth * 0.28f)));
     }
 
     private int dp(int value) {

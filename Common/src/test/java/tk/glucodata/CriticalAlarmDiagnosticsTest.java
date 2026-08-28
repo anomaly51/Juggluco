@@ -37,6 +37,8 @@ public class CriticalAlarmDiagnosticsTest {
                 CriticalAlarmDiagnostics.PREDICTIVE_LOW_CHANNEL_ID);
         assertEquals("critical_predictive_high_v2",
                 CriticalAlarmDiagnostics.PREDICTIVE_HIGH_CHANNEL_ID);
+        assertEquals("critical_signal_loss_v2",
+                CriticalAlarmDiagnostics.SIGNAL_LOSS_CHANNEL_ID);
     }
 
     @Test
@@ -114,6 +116,7 @@ public class CriticalAlarmDiagnosticsTest {
         assertEquals(50, ready.alarmVolumePercent());
         assertTrue(ready.actualConfigured());
         assertTrue(ready.predictiveConfigured());
+        assertTrue(ready.signalLossConfigured());
         assertTrue(ready.maximallyConfigured());
 
         CriticalAlarmDiagnostics.Snapshot silent =
@@ -147,12 +150,15 @@ public class CriticalAlarmDiagnosticsTest {
         assertFalse(CriticalAlarmDiagnostics.inspect(context).testAvailable);
         assertFalse(CriticalAlarmDiagnostics.showTest(context, true));
 
-        CriticalAlarmDiagnostics.registerTestHook((ignored, low) -> low);
+        CriticalAlarmDiagnostics.registerTestHook((ignored, type) -> type
+                == CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW);
         assertTrue(CriticalAlarmDiagnostics.inspect(context).testAvailable);
         assertTrue(CriticalAlarmDiagnostics.showTest(context, true));
         assertFalse(CriticalAlarmDiagnostics.showTest(context, false));
+        assertFalse(CriticalAlarmDiagnostics.showTest(context,
+                CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS));
 
-        CriticalAlarmDiagnostics.registerTestHook((ignored, low) -> {
+        CriticalAlarmDiagnostics.registerTestHook((ignored, type) -> {
             throw new IllegalStateException("test failure");
         });
         assertFalse(CriticalAlarmDiagnostics.showTest(context, true));

@@ -98,8 +98,27 @@ public class CriticalAlarmVisualTest {
     }
 
     @Test
-    public void reusableSurfaceRedactsLockedMedicalDetailsAndWiresActions() {
+    public void staleHistoryIsNotPresentedAsARecentLatestPoint() {
         Application application = RuntimeEnvironment.getApplication();
+        long now = System.currentTimeMillis();
+        long stale = now - 60L * 60_000L;
+        CriticalDisplayPayload payload = CriticalDisplayPayload.fromActual(
+                Collections.singletonList(reading(stale, 72)),
+                ForecastSnapshot.empty("no_data"), stale, 72f, null, now);
+        CriticalAlarmMiniChart chart = new CriticalAlarmMiniChart(application);
+
+        chart.bind(CriticalAlarmChartData.from(payload, now),
+                0xFFFF5F69, false);
+
+        assertEquals(application.getString(
+                        R.string.critical_alarm_chart_empty),
+                chart.getContentDescription().toString());
+    }
+
+    @Test
+    public void reusableSurfaceRedactsExactLockedDetailsButKeepsTimeline() {
+        Application application = RuntimeEnvironment.getApplication();
+        long now = System.currentTimeMillis();
         CriticalGlucoseAlarm.Session session = new CriticalGlucoseAlarm.Session();
         session.token = "visual-session";
         session.source = CriticalGlucoseAlarm.SOURCE_ACTUAL;
@@ -112,28 +131,32 @@ public class CriticalAlarmVisualTest {
         AtomicInteger action = new AtomicInteger();
         CriticalAlarmSurface.Actions actions = new CriticalAlarmSurface.Actions() {
             @Override public void acknowledge() { action.set(1); }
-            @Override public void snooze() { action.set(2); }
-            @Override public void openGraph() { action.set(3); }
         };
+        CriticalDisplayPayload payload = CriticalDisplayPayload.fromActual(
+                Arrays.asList(reading(now - 10L * 60_000L, 92),
+                        reading(now - 5L * 60_000L, 76)),
+                ForecastSnapshot.empty("no_data"), now, 64f, -2f, now);
         surface.bind(session, true,
-                CriticalAlarmChartData.empty(System.currentTimeMillis()),
-                actions);
+                CriticalAlarmChartData.from(payload, now), actions);
 
         assertEquals(2, surface.getChildCount());
         assertFalse(containsText(surface, "SECRET 3.1 mmol/L"));
         assertFalse(containsText(surface, "Sensitive medical detail"));
         CriticalAlarmMiniChart lockedChart = findChart(surface);
         assertNotNull(lockedChart);
-        assertEquals(application.getString(R.string.critical_alarm_chart_locked),
-                lockedChart.getContentDescription().toString());
+        assertTrue(lockedChart.getContentDescription().toString().contains(
+                application.getString(
+                        R.string.critical_alarm_chart_private_hint)));
+        assertFalse(lockedChart.getContentDescription().toString().contains(
+                "SECRET"));
 
         surface.findViewById(CriticalAlarmSurface.ACKNOWLEDGE_ID)
                 .performClick();
         assertEquals(1, action.get());
-        surface.findViewById(CriticalAlarmSurface.SNOOZE_ID).performClick();
-        assertEquals(2, action.get());
-        surface.findViewById(CriticalAlarmSurface.OPEN_GRAPH_ID).performClick();
-        assertEquals(3, action.get());
+        assertFalse(containsText(surface, application.getString(
+                R.string.critical_alarm_snooze_button)));
+        assertFalse(containsText(surface, application.getString(
+                R.string.critical_alarm_open_graph_button)));
 
         surface.bind(session, false,
                 CriticalAlarmChartData.empty(System.currentTimeMillis()),
@@ -163,6 +186,40 @@ public class CriticalAlarmVisualTest {
                 StandardCharsets.UTF_8);
         assertTrue(activity.contains(
                 "WindowManager.LayoutParams.FLAG_SECURE"));
+        assertTrue(surface.contains("0xFFE5484D"));
+        assertFalse(surface.contains("Button snooze"));
+        assertFalse(surface.contains("Button graph"));
+    }
+
+    @Test
+    public void signalLossSurfaceUsesDedicatedCopyAndSingleStopControl() {
+        Application application = RuntimeEnvironment.getApplication();
+        CriticalGlucoseAlarm.Session session = new CriticalGlucoseAlarm.Session();
+        session.token = "loss-visual";
+        session.source = CriticalGlucoseAlarm.SOURCE_SIGNAL_LOSS;
+        session.direction = CriticalGlucoseAlarm.DIRECTION_SIGNAL;
+        session.alertType = CriticalAlarmSoundCatalog.AlertType.SIGNAL_LOSS;
+        session.title = application.getString(
+                R.string.critical_alarm_signal_loss_title);
+        session.body = application.getString(
+                R.string.critical_alarm_signal_loss_body);
+        session.value = application.getString(
+                R.string.critical_alarm_signal_loss_value);
+
+        CriticalAlarmSurface surface = new CriticalAlarmSurface(application);
+        surface.bind(session, false, CriticalAlarmChartData.empty(
+                System.currentTimeMillis()), () -> { });
+
+        assertTrue(containsText(surface, application.getString(
+                R.string.critical_alarm_signal_loss_direction)));
+        assertTrue(containsText(surface, application.getString(
+                R.string.critical_alarm_signal_loss_instruction)));
+        assertTrue(containsText(surface, application.getString(
+                R.string.critical_alarm_ack_button)));
+        assertFalse(containsText(surface, application.getString(
+                R.string.critical_alarm_snooze_button)));
+        assertFalse(containsText(surface, application.getString(
+                R.string.critical_alarm_open_graph_button)));
     }
 
     private static ForecastReading reading(long atMs, int glucose) {

@@ -101,6 +101,27 @@ public class CriticalDisplayPayloadTest {
     }
 
     @Test
+    public void deliveryTestPreviewUsesNewestRealLocalReading() {
+        long now = System.currentTimeMillis();
+        long anchor = now - 60_000L;
+        ArrayList<ForecastReading> recent = readings(anchor, 8, 82);
+        // A sensor timestamp beyond the small accepted clock skew must never
+        // become the medical preview anchor.
+        recent.add(ForecastReading.historical(now + 2L * 60_000L,
+                210, 4f));
+        ForecastSnapshot forecast = forecast(now, anchor, 82f, 21);
+
+        CriticalDisplayPayload payload =
+                CriticalDisplayPayload.fromLatestLocal(recent, forecast, now);
+
+        assertFalse(payload.isEmpty());
+        assertEquals(anchor, payload.readingAtMs);
+        assertEquals(Float.valueOf(82f), payload.currentMgDl);
+        assertTrue(payload.history.size() >= 2);
+        assertTrue(payload.hasForecast(now));
+    }
+
+    @Test
     public void actualTimestampAcceptsRealEpochSecondsAndMillis() {
         long nowMs = 1_787_200_123_456L;
         long epochSeconds = 1_787_200_123L;

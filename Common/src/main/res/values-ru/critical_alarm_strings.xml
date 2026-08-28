@@ -8,6 +8,8 @@
     <string name="critical_alarm_channel_predictive_low_description">Срочное предупреждение, когда допущенный прогноз вероятно пересекает нижнюю границу цели</string>
     <string name="critical_alarm_channel_predictive_high">Вероятный прогноз повышения</string>
     <string name="critical_alarm_channel_predictive_high_description">Срочное предупреждение, когда допущенный прогноз вероятно пересекает верхнюю границу цели</string>
+    <string name="critical_alarm_channel_signal_loss">Срочная потеря сигнала</string>
+    <string name="critical_alarm_channel_signal_loss_description">Звук через громкость будильника и полноэкранный сигнал, когда новые показания сенсора перестают поступать</string>
 
     <string name="critical_alarm_actual_low_title">Текущая глюкоза низкая</string>
     <string name="critical_alarm_actual_very_low_title">Текущая глюкоза критически низкая</string>
@@ -17,28 +19,35 @@
     <string name="critical_alarm_high_direction">ВЫСОКАЯ ГЛЮКОЗА</string>
     <string name="critical_alarm_actual_badge">ТЕКУЩЕЕ ПОКАЗАНИЕ</string>
     <string name="critical_alarm_predictive_badge">ВЕРОЯТНЫЙ ПРОГНОЗ · ЭКСПЕРИМЕНТАЛЬНО</string>
+    <string name="critical_alarm_signal_loss_badge">СВЯЗЬ С СЕНСОРОМ</string>
     <string name="critical_alarm_test_badge">ТЕСТ · ЭТО НЕ СОБЫТИЕ ГЛЮКОЗЫ</string>
     <string name="critical_alarm_status_current">Требует внимания сейчас</string>
     <string name="critical_alarm_status_predicted">Вероятное изменение впереди</string>
+    <string name="critical_alarm_status_signal_loss">Новые показания перестали поступать</string>
     <string name="critical_alarm_status_test">Проверка доставки и экрана</string>
     <string name="critical_alarm_instruction">Проверьте глюкозу и следуйте согласованному плану. Сигнал не рассчитывает дозу инсулина или количество углеводов.</string>
-    <string name="critical_alarm_ack_button">Понял — выключить звук</string>
+    <string name="critical_alarm_ack_button">Остановить звук</string>
     <string name="critical_alarm_snooze_button">Напомнить через 5 минут</string>
     <string name="critical_alarm_open_graph_button">Открыть график глюкозы</string>
-    <string name="critical_alarm_ack_action">Понял</string>
+    <string name="critical_alarm_ack_action">Остановить звук</string>
     <string name="critical_alarm_snooze_action">Отложить на 5 мин</string>
     <string name="critical_alarm_open_graph_action">Открыть график</string>
     <string name="critical_alarm_unlock_for_value">Разблокируйте телефон, чтобы увидеть точное значение</string>
     <string name="critical_alarm_lockscreen_body">Откройте сигнал, чтобы посмотреть подробности. Проверьте глюкозу до принятия решения.</string>
     <string name="critical_alarm_private_title">Срочный сигнал о глюкозе</string>
-    <string name="critical_alarm_private_body">Откройте, чтобы подтвердить или отложить</string>
+    <string name="critical_alarm_private_body">Откройте, чтобы проверить и остановить звук</string>
     <string name="critical_alarm_test_title">Тест критической доставки</string>
-    <string name="critical_alarm_test_body">Это только тест доставки. Изменение глюкозы не обнаружено. Нажмите «Понял», чтобы выключить звук.</string>
+    <string name="critical_alarm_test_body">Это только тест доставки. Изменение глюкозы не обнаружено. Нажмите «Остановить звук», чтобы завершить тест.</string>
+    <string name="critical_alarm_signal_loss_title">Потерян сигнал сенсора глюкозы</string>
+    <string name="critical_alarm_signal_loss_direction">СИГНАЛ ПОТЕРЯН</string>
+    <string name="critical_alarm_signal_loss_value">Нет новых показаний</string>
+    <string name="critical_alarm_signal_loss_body">Juggluco не получил новое показание сенсора за настроенное время.</string>
+    <string name="critical_alarm_signal_loss_instruction">Проверьте сенсор и связь с телефоном. При необходимости измерьте глюкозу глюкометром и следуйте согласованному плану.</string>
 
     <string name="critical_alarm_chart_title">Динамика глюкозы</string>
     <string name="critical_alarm_chart_subtitle_recent">Последние %1$d минут</string>
     <string name="critical_alarm_chart_subtitle_forecast">Последние %1$d мин · прогноз до %2$d мин</string>
-    <string name="critical_alarm_chart_private_hint">Подробности скрыты, пока телефон заблокирован</string>
+    <string name="critical_alarm_chart_private_hint">Линия тренда видна · разблокируйте для точного значения</string>
     <string name="critical_alarm_chart_recent">Факт</string>
     <string name="critical_alarm_chart_forecast">Прогноз</string>
     <string name="critical_alarm_chart_target">Цель</string>
@@ -49,6 +58,7 @@
     <string name="critical_alarm_chart_locked">Разблокируйте телефон, чтобы увидеть график</string>
     <string name="critical_alarm_chart_description_recent">График недавних значений глюкозы и целевого диапазона</string>
     <string name="critical_alarm_chart_description_forecast">График недавних значений, целевого диапазона и прогноза на %1$d минут</string>
+    <string name="critical_alarm_chart_accessibility_latest">Последнее значение: %1$s. %2$s</string>
     <string name="critical_alarm_trend_rising_fast">Глюкоза быстро растёт</string>
     <string name="critical_alarm_trend_rising">Глюкоза растёт</string>
     <string name="critical_alarm_trend_stable">Глюкоза стабильна</string>

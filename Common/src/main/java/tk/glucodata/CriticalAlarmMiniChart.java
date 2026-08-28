@@ -12,20 +12,21 @@ import android.util.TypedValue;
 import android.view.View;
 
 import java.util.List;
+import java.util.Locale;
 
 /** Read-only recent + forecast glucose chart for the critical alarm surface. */
 final class CriticalAlarmMiniChart extends View {
     private static final int HISTORY_COLOR = 0xFFE7EFEB;
     private static final int TARGET_COLOR = 0xFF4CC38A;
-    private static final int GRID_COLOR = 0xFF303735;
-    private static final int MUTED_COLOR = 0xFF8C9792;
+    private static final int GRID_COLOR = 0xFF3A4340;
+    private static final int MUTED_COLOR = 0xFFA0AAA5;
     private static final long MIN_FUTURE_WINDOW_MS = 15L * 60_000L;
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
     private CriticalAlarmChartData data;
     private int accent = 0xFFE65B65;
-    private boolean redacted;
+    private boolean hideExactValue;
 
     CriticalAlarmMiniChart(Context context) {
         super(context);
@@ -39,23 +40,19 @@ final class CriticalAlarmMiniChart extends View {
 
     private void initialize() {
         setMinimumHeight(dp(164));
+        setBackgroundColor(Color.TRANSPARENT);
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
     }
 
     void bind(CriticalAlarmChartData value, int color, boolean hidden) {
         data = value;
         accent = color;
-        redacted = hidden;
-        if (redacted) {
+        hideExactValue = hidden;
+        if (!hasRenderableData()) {
             setContentDescription(getContext().getString(
-                    R.string.critical_alarm_chart_locked));
-        } else if (data != null && data.hasForecast()) {
-            setContentDescription(getContext().getString(
-                    R.string.critical_alarm_chart_description_forecast,
-                    data.forecastMinutes));
+                    R.string.critical_alarm_chart_empty));
         } else {
-            setContentDescription(getContext().getString(
-                    R.string.critical_alarm_chart_description_recent));
+            setContentDescription(accessibilityDescription());
         }
         invalidate();
     }
@@ -73,11 +70,7 @@ final class CriticalAlarmMiniChart extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        if (redacted) {
-            drawRedacted(canvas);
-            return;
-        }
-        if (data == null || !data.hasData()) {
+        if (!hasRenderableData()) {
             drawEmpty(canvas);
             return;
         }
@@ -188,12 +181,20 @@ final class CriticalAlarmMiniChart extends View {
             float top, float bottom) {
         paint.reset();
         paint.setAntiAlias(true);
-        paint.setColor(withAlpha(GRID_COLOR, 150));
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setColor(withAlpha(GRID_COLOR, 175));
         paint.setStrokeWidth(dp(1));
         for (int index = 0; index < 4; index++) {
             float y = top + (bottom - top) * index / 3f;
             canvas.drawLine(left, y, right, y, paint);
         }
+        for (int index = 0; index < 4; index++) {
+            float x = left + (right - left) * index / 3f;
+            canvas.drawLine(x, top, x, bottom, paint);
+        }
+        paint.setColor(withAlpha(Color.WHITE, 42));
+        canvas.drawRoundRect(new RectF(left, top, right, bottom),
+                dp(4), dp(4), paint);
     }
 
     private void drawForecastBand(Canvas canvas,
@@ -230,7 +231,7 @@ final class CriticalAlarmMiniChart extends View {
         paint.reset();
         paint.setAntiAlias(true);
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(dashed ? 2.5f : 2.8f));
+        paint.setStrokeWidth(dp(dashed ? 2.6f : 3.2f));
         paint.setStrokeCap(Paint.Cap.ROUND);
         paint.setStrokeJoin(Paint.Join.ROUND);
         paint.setColor(color);
@@ -262,15 +263,21 @@ final class CriticalAlarmMiniChart extends View {
         if (data.history.isEmpty()) return;
         CriticalAlarmChartData.Point point =
                 data.history.get(data.history.size() - 1);
+        if (point.atMs < minTime || point.atMs > maxTime) return;
         float x = x(point.atMs, minTime, maxTime, left, right);
         float y = y(point.glucoseMgDl, minValue, maxValue, top, bottom);
         paint.reset();
         paint.setAntiAlias(true);
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(0xFF111513);
-        canvas.drawCircle(x, y, dp(5.5f), paint);
+        paint.setColor(0xFF0B0E0F);
+        canvas.drawCircle(x, y, dp(6.5f), paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(withAlpha(Color.WHITE, 170));
+        canvas.drawCircle(x, y, dp(5f), paint);
+        paint.setStyle(Paint.Style.FILL);
         paint.setColor(accent);
-        canvas.drawCircle(x, y, dp(3.4f), paint);
+        canvas.drawCircle(x, y, dp(3.3f), paint);
     }
 
     private void drawAxisLabels(Canvas canvas, float left, float right,
@@ -298,27 +305,21 @@ final class CriticalAlarmMiniChart extends View {
     }
 
     private void drawEmpty(Canvas canvas) {
-        drawPlaceholder(canvas, false,
+        drawPlaceholder(canvas,
                 getContext().getString(R.string.critical_alarm_chart_empty));
     }
 
-    private void drawRedacted(Canvas canvas) {
-        drawPlaceholder(canvas, true,
-                getContext().getString(R.string.critical_alarm_chart_locked));
-    }
-
-    private void drawPlaceholder(Canvas canvas, boolean lock, String label) {
-        paint.reset();
-        paint.setAntiAlias(true);
-        paint.setColor(GRID_COLOR);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(1));
+    private void drawPlaceholder(Canvas canvas, String label) {
         float left = dp(12);
         float right = getWidth() - dp(12);
+        float top = Math.max(dp(28), sp(10) + dp(13));
+        float bottom = getHeight() - Math.max(dp(27), sp(9) + dp(15));
+        if (right > left && bottom > top) {
+            drawGrid(canvas, left, right, top, bottom);
+        }
+        paint.reset();
+        paint.setAntiAlias(true);
         float centerY = getHeight() * .46f;
-        canvas.drawLine(left, centerY + dp(18), right,
-                centerY + dp(18), paint);
-        if (lock) drawLock(canvas, getWidth() * .5f, centerY - dp(17));
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(MUTED_COLOR);
         paint.setTextSize(sp(12));
@@ -329,20 +330,59 @@ final class CriticalAlarmMiniChart extends View {
         }
         paint.setTextAlign(Paint.Align.CENTER);
         canvas.drawText(label, getWidth() * .5f,
-                centerY + (lock ? dp(25) : dp(4)), paint);
+                centerY + dp(4), paint);
     }
 
-    private void drawLock(Canvas canvas, float centerX, float top) {
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(2));
-        paint.setStrokeCap(Paint.Cap.ROUND);
-        paint.setColor(withAlpha(Color.WHITE, 145));
-        RectF shackle = new RectF(centerX - dp(7), top,
-                centerX + dp(7), top + dp(15));
-        canvas.drawArc(shackle, 190f, 160f, false, paint);
-        paint.setStyle(Paint.Style.FILL);
-        canvas.drawRoundRect(new RectF(centerX - dp(10), top + dp(8),
-                centerX + dp(10), top + dp(24)), dp(3), dp(3), paint);
+    private String accessibilityDescription() {
+        String base = data.hasForecast()
+                ? getContext().getString(
+                        R.string.critical_alarm_chart_description_forecast,
+                        data.forecastMinutes)
+                : getContext().getString(
+                        R.string.critical_alarm_chart_description_recent);
+        if (hideExactValue) {
+            return base + ". " + getContext().getString(
+                    R.string.critical_alarm_chart_private_hint);
+        }
+        CriticalAlarmChartData.Point latest = latestVisibleHistoryPoint();
+        if (latest == null) return base;
+        Locale locale = Applic.usedlocale == null
+                ? Locale.getDefault() : Applic.usedlocale;
+        String glucose = Applic.unit == 1
+                ? String.format(locale, "%.1f %s",
+                        latest.glucoseMgDl / Applic.mgdLmult,
+                        getContext().getString(R.string.mmolL))
+                : String.format(locale, "%.0f %s", latest.glucoseMgDl,
+                        getContext().getString(R.string.mgdL));
+        String trend = getContext().getString(trendLabel(data.trend()));
+        return base + ". " + getContext().getString(
+                R.string.critical_alarm_chart_accessibility_latest,
+                glucose, trend);
+    }
+
+    private static int trendLabel(int trend) {
+        if (trend >= 2) return R.string.critical_alarm_trend_rising_fast;
+        if (trend == 1) return R.string.critical_alarm_trend_rising;
+        if (trend <= -2) return R.string.critical_alarm_trend_falling_fast;
+        if (trend == -1) return R.string.critical_alarm_trend_falling;
+        return R.string.critical_alarm_trend_stable;
+    }
+
+    private boolean hasRenderableData() {
+        return data != null && (data.hasForecast()
+                || latestVisibleHistoryPoint() != null);
+    }
+
+    private CriticalAlarmChartData.Point latestVisibleHistoryPoint() {
+        if (data == null || data.history.isEmpty()) return null;
+        long minimum = data.nowMs - data.historyMinutes * 60_000L;
+        for (int index = data.history.size() - 1; index >= 0; index--) {
+            CriticalAlarmChartData.Point point = data.history.get(index);
+            if (point.atMs >= minimum && point.atMs <= data.nowMs) {
+                return point;
+            }
+        }
+        return null;
     }
 
     private static float includeMinimum(float current,

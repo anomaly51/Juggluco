@@ -344,9 +344,8 @@
                             android:id="@+id/modern_dashboard_target_range"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:drawableStart="@drawable/modern_dashboard_status_dot"
+                            android:drawableStart="@drawable/modern_dashboard_target_band"
                             android:drawablePadding="6dp"
-                            android:drawableTint="?attr/colorControlActivated"
                             android:fontFamily="sans-serif-medium"
                             android:includeFontPadding="false"
                             android:ellipsize="end"
@@ -374,11 +373,12 @@
                             android:visibility="gone" />
 
                         <HorizontalScrollView
+                            android:id="@+id/modern_dashboard_range_scroller"
                             android:layout_width="0dp"
                             android:layout_height="48dp"
                             android:layout_weight="1"
                             android:clipToPadding="false"
-                            android:fillViewport="false"
+                            android:fillViewport="true"
                             android:overScrollMode="never"
                             android:scrollbars="none">
 
@@ -387,7 +387,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="48dp"
                                 android:background="@drawable/modern_dashboard_range_track"
-                                android:gravity="center_vertical"
+                                android:gravity="center"
                                 android:orientation="horizontal">
 
                                 <Button

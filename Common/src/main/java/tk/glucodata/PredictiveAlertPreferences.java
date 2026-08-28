@@ -37,6 +37,10 @@ final class PredictiveAlertPreferences {
     private static final String KEY_HIGH_HORIZON = "high_horizon_minutes";
     private static final String KEY_SENSITIVITY = "sensitivity";
     private static final String KEY_COOLDOWN = "cooldown_minutes";
+    private static final String KEY_LOW_SENSITIVITY = "low_sensitivity";
+    private static final String KEY_HIGH_SENSITIVITY = "high_sensitivity";
+    private static final String KEY_LOW_COOLDOWN = "low_cooldown_minutes";
+    private static final String KEY_HIGH_COOLDOWN = "high_cooldown_minutes";
     private static final String KEY_LAST_ALERT_PREFIX = "last_alert_at_";
     private static final String KEY_ACTIVE_EPISODE_DIRECTION =
             "active_episode_direction";
@@ -58,14 +62,20 @@ final class PredictiveAlertPreferences {
     PredictiveAlertPreferences(Context context) {
         Context app = context.getApplicationContext();
         preferences = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        migrateSharedDirectionPolicy();
         migrateNativeTargetOnce();
     }
 
     Snapshot snapshot() {
         // A repository may be constructed before the native library has
         // finished loading. Retrying here makes the one-time migration robust.
+        migrateSharedDirectionPolicy();
         migrateNativeTargetOnce();
         boolean enabled = effectiveEnabled();
+        int lowSensitivity = directionSensitivity(true);
+        int highSensitivity = directionSensitivity(false);
+        int lowCooldown = directionCooldownMinutes(true);
+        int highCooldown = directionCooldownMinutes(false);
         return new Snapshot(
                 enabled,
                 preferences.getBoolean(KEY_LOW_ENABLED, true),
@@ -76,11 +86,8 @@ final class PredictiveAlertPreferences {
                 validOption(preferences.getInt(KEY_HIGH_HORIZON,
                                 DEFAULT_HIGH_HORIZON_MINUTES),
                         HORIZON_OPTIONS_MINUTES, DEFAULT_HIGH_HORIZON_MINUTES),
-                validSensitivity(preferences.getInt(KEY_SENSITIVITY,
-                        SENSITIVITY_BALANCED)),
-                validOption(preferences.getInt(KEY_COOLDOWN,
-                                DEFAULT_COOLDOWN_MINUTES),
-                        COOLDOWN_OPTIONS_MINUTES, DEFAULT_COOLDOWN_MINUTES));
+                lowSensitivity, highSensitivity,
+                lowCooldown, highCooldown);
     }
 
     void setEnabled(boolean enabled) {
@@ -101,6 +108,43 @@ final class PredictiveAlertPreferences {
         preferences.edit().putBoolean(KEY_HIGH_ENABLED, enabled).apply();
     }
 
+    /**
+     * Updates one direction and keeps the master switch coherent. Enabling any
+     * direction enables the master; disabling the last enabled direction turns
+     * it off. A disabled master is never turned on merely by turning a
+     * direction off.
+     */
+    void setDirectionEnabled(boolean lowDirection, boolean enabled) {
+        String key = lowDirection ? KEY_LOW_ENABLED : KEY_HIGH_ENABLED;
+        String otherKey = lowDirection ? KEY_HIGH_ENABLED : KEY_LOW_ENABLED;
+        boolean masterWasEnabled = preferences.getBoolean(KEY_ENABLED, false);
+        boolean otherEnabled = preferences.getBoolean(otherKey, true);
+        // Older installs represented an untouched direction as a missing key,
+        // whose read-time default was true. On the first enable from a disabled
+        // master that implicit default must not silently opt the other
+        // direction in. Preserve it only when the master is already active or
+        // the user previously made an explicit choice for that direction.
+        boolean preserveOther = masterWasEnabled
+                || preferences.contains(otherKey);
+        if (enabled && !preserveOther) otherEnabled = false;
+        boolean requestedMaster = enabled || (masterWasEnabled && otherEnabled);
+        boolean effectiveMaster = requestedMaster
+                && PredictiveAlertNotifier.supportsExpiringAlerts();
+        SharedPreferences.Editor editor = preferences.edit()
+                .putBoolean(key, enabled)
+                .putBoolean(KEY_ENABLED, effectiveMaster);
+        if (enabled && !preserveOther) {
+            // Materialize the one-time choice so subsequent toggles no longer
+            // need to distinguish the legacy default from user intent.
+            editor.putBoolean(otherKey, false);
+        }
+        editor.apply();
+        if (!effectiveMaster) {
+            clearEpisode();
+            setSnoozeUntil(0L);
+        }
+    }
+
     void setLowHorizonMinutes(int minutes) {
         preferences.edit().putInt(KEY_LOW_HORIZON,
                 validOption(minutes, HORIZON_OPTIONS_MINUTES,
@@ -113,15 +157,61 @@ final class PredictiveAlertPreferences {
                         DEFAULT_HIGH_HORIZON_MINUTES)).apply();
     }
 
+    void setDirectionHorizonMinutes(boolean lowDirection, int minutes) {
+        if (lowDirection) {
+            setLowHorizonMinutes(minutes);
+        } else {
+            setHighHorizonMinutes(minutes);
+        }
+    }
+
     void setSensitivity(int sensitivity) {
-        preferences.edit().putInt(KEY_SENSITIVITY,
-                validSensitivity(sensitivity)).apply();
+        int valid = validSensitivity(sensitivity);
+        preferences.edit()
+                .putInt(KEY_SENSITIVITY, valid)
+                .putInt(KEY_LOW_SENSITIVITY, valid)
+                .putInt(KEY_HIGH_SENSITIVITY, valid)
+                .apply();
     }
 
     void setCooldownMinutes(int minutes) {
-        preferences.edit().putInt(KEY_COOLDOWN,
-                validOption(minutes, COOLDOWN_OPTIONS_MINUTES,
-                        DEFAULT_COOLDOWN_MINUTES)).apply();
+        int valid = validOption(minutes, COOLDOWN_OPTIONS_MINUTES,
+                DEFAULT_COOLDOWN_MINUTES);
+        preferences.edit()
+                .putInt(KEY_COOLDOWN, valid)
+                .putInt(KEY_LOW_COOLDOWN, valid)
+                .putInt(KEY_HIGH_COOLDOWN, valid)
+                .apply();
+    }
+
+    void setDirectionSensitivity(boolean lowDirection, int sensitivity) {
+        preferences.edit().putInt(
+                lowDirection ? KEY_LOW_SENSITIVITY : KEY_HIGH_SENSITIVITY,
+                validSensitivity(sensitivity)).apply();
+    }
+
+    void setLowSensitivity(int sensitivity) {
+        setDirectionSensitivity(true, sensitivity);
+    }
+
+    void setHighSensitivity(int sensitivity) {
+        setDirectionSensitivity(false, sensitivity);
+    }
+
+    void setDirectionCooldownMinutes(boolean lowDirection, int minutes) {
+        int fallback = DEFAULT_COOLDOWN_MINUTES;
+        preferences.edit().putInt(
+                lowDirection ? KEY_LOW_COOLDOWN : KEY_HIGH_COOLDOWN,
+                validOption(minutes, COOLDOWN_OPTIONS_MINUTES, fallback))
+                .apply();
+    }
+
+    void setLowCooldownMinutes(int minutes) {
+        setDirectionCooldownMinutes(true, minutes);
+    }
+
+    void setHighCooldownMinutes(int minutes) {
+        setDirectionCooldownMinutes(false, minutes);
     }
 
     long lastAlertAt(String direction) {
@@ -264,6 +354,51 @@ final class PredictiveAlertPreferences {
         return enabled;
     }
 
+    /** Copies the former shared policy into both direction-specific slots. */
+    private void migrateSharedDirectionPolicy() {
+        if (preferences.contains(KEY_LOW_SENSITIVITY)
+                && preferences.contains(KEY_HIGH_SENSITIVITY)
+                && preferences.contains(KEY_LOW_COOLDOWN)
+                && preferences.contains(KEY_HIGH_COOLDOWN)) {
+            return;
+        }
+        int sharedSensitivity = validSensitivity(preferences.getInt(
+                KEY_SENSITIVITY, SENSITIVITY_BALANCED));
+        int sharedCooldown = validOption(preferences.getInt(KEY_COOLDOWN,
+                        DEFAULT_COOLDOWN_MINUTES), COOLDOWN_OPTIONS_MINUTES,
+                DEFAULT_COOLDOWN_MINUTES);
+        SharedPreferences.Editor editor = preferences.edit();
+        if (!preferences.contains(KEY_LOW_SENSITIVITY)) {
+            editor.putInt(KEY_LOW_SENSITIVITY, sharedSensitivity);
+        }
+        if (!preferences.contains(KEY_HIGH_SENSITIVITY)) {
+            editor.putInt(KEY_HIGH_SENSITIVITY, sharedSensitivity);
+        }
+        if (!preferences.contains(KEY_LOW_COOLDOWN)) {
+            editor.putInt(KEY_LOW_COOLDOWN, sharedCooldown);
+        }
+        if (!preferences.contains(KEY_HIGH_COOLDOWN)) {
+            editor.putInt(KEY_HIGH_COOLDOWN, sharedCooldown);
+        }
+        editor.commit();
+    }
+
+    private int directionSensitivity(boolean lowDirection) {
+        int shared = validSensitivity(preferences.getInt(KEY_SENSITIVITY,
+                SENSITIVITY_BALANCED));
+        return validSensitivity(preferences.getInt(lowDirection
+                ? KEY_LOW_SENSITIVITY : KEY_HIGH_SENSITIVITY, shared));
+    }
+
+    private int directionCooldownMinutes(boolean lowDirection) {
+        int shared = validOption(preferences.getInt(KEY_COOLDOWN,
+                        DEFAULT_COOLDOWN_MINUTES), COOLDOWN_OPTIONS_MINUTES,
+                DEFAULT_COOLDOWN_MINUTES);
+        return validOption(preferences.getInt(lowDirection
+                        ? KEY_LOW_COOLDOWN : KEY_HIGH_COOLDOWN, shared),
+                COOLDOWN_OPTIONS_MINUTES, shared);
+    }
+
     private void migrateNativeTargetOnce() {
         if (preferences.getBoolean(KEY_TARGET_MIGRATED, false)
                 || !Applic.Nativesloaded) {
@@ -339,19 +474,52 @@ final class PredictiveAlertPreferences {
         final boolean highEnabled;
         final int lowHorizonMinutes;
         final int highHorizonMinutes;
+        final int lowSensitivity;
+        final int highSensitivity;
+        final int lowCooldownMinutes;
+        final int highCooldownMinutes;
+        /** Compatibility alias for callers that still use one shared value. */
         final int sensitivity;
+        /** Compatibility alias for callers that still use one shared value. */
         final int cooldownMinutes;
 
         Snapshot(boolean enabled, boolean lowEnabled, boolean highEnabled,
                 int lowHorizonMinutes, int highHorizonMinutes,
                 int sensitivity, int cooldownMinutes) {
+            this(enabled, lowEnabled, highEnabled, lowHorizonMinutes,
+                    highHorizonMinutes, sensitivity, sensitivity,
+                    cooldownMinutes, cooldownMinutes);
+        }
+
+        Snapshot(boolean enabled, boolean lowEnabled, boolean highEnabled,
+                int lowHorizonMinutes, int highHorizonMinutes,
+                int lowSensitivity, int highSensitivity,
+                int lowCooldownMinutes, int highCooldownMinutes) {
             this.enabled = enabled;
             this.lowEnabled = lowEnabled;
             this.highEnabled = highEnabled;
             this.lowHorizonMinutes = lowHorizonMinutes;
             this.highHorizonMinutes = highHorizonMinutes;
-            this.sensitivity = sensitivity;
-            this.cooldownMinutes = cooldownMinutes;
+            this.lowSensitivity = validSensitivity(lowSensitivity);
+            this.highSensitivity = validSensitivity(highSensitivity);
+            this.lowCooldownMinutes = validOption(lowCooldownMinutes,
+                    COOLDOWN_OPTIONS_MINUTES, DEFAULT_COOLDOWN_MINUTES);
+            this.highCooldownMinutes = validOption(highCooldownMinutes,
+                    COOLDOWN_OPTIONS_MINUTES, DEFAULT_COOLDOWN_MINUTES);
+            this.sensitivity = this.lowSensitivity;
+            this.cooldownMinutes = this.lowCooldownMinutes;
+        }
+
+        int sensitivityFor(boolean lowDirection) {
+            return lowDirection ? lowSensitivity : highSensitivity;
+        }
+
+        int cooldownMinutesFor(boolean lowDirection) {
+            return lowDirection ? lowCooldownMinutes : highCooldownMinutes;
+        }
+
+        int horizonMinutesFor(boolean lowDirection) {
+            return lowDirection ? lowHorizonMinutes : highHorizonMinutes;
         }
     }
 }

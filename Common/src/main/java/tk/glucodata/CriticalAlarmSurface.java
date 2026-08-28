@@ -23,15 +23,11 @@ import androidx.core.widget.TextViewCompat;
  */
 final class CriticalAlarmSurface extends LinearLayout {
     static final int ACKNOWLEDGE_ID = View.generateViewId();
-    static final int SNOOZE_ID = View.generateViewId();
-    static final int OPEN_GRAPH_ID = View.generateViewId();
 
     private Runnable forecastFreshnessRefresh;
 
     interface Actions {
         void acknowledge();
-        void snooze();
-        void openGraph();
     }
 
     CriticalAlarmSurface(Context context) {
@@ -54,12 +50,9 @@ final class CriticalAlarmSurface extends LinearLayout {
         removeAllViews();
         if (session == null) return;
 
-        int accent = session.low() ? 0xFFFF5F69 : 0xFFFFBF4B;
-        int accentText = session.low() ? 0xFF170809 : 0xFF171209;
-        setBackground(new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{withAlpha(accent, 44), 0xFF090B0D,
-                        0xFF07090A}));
+        int accent = session.low() || session.signalLoss()
+                ? 0xFFFF5F69 : 0xFFFFBF4B;
+        setBackgroundColor(0xFF07090A);
 
         ScrollView scroll = new ScrollView(getContext());
         scroll.setFillViewport(true);
@@ -67,72 +60,90 @@ final class CriticalAlarmSurface extends LinearLayout {
         LinearLayout content = new LinearLayout(getContext());
         content.setOrientation(VERTICAL);
         content.setGravity(Gravity.CENTER_HORIZONTAL);
-        content.setPadding(dp(20), dp(22), dp(20), dp(16));
+        content.setPadding(dp(16), dp(18), dp(16), dp(14));
         scroll.addView(content, new ScrollView.LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
         addView(scroll, new LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f));
 
+        // Keep the urgent surface visually calm and unmistakably bounded.
+        // The outline carries severity; large saturated background areas do
+        // not compete with the glucose value, chart, or acknowledgement.
+        LinearLayout panel = new LinearLayout(getContext());
+        panel.setOrientation(VERTICAL);
+        panel.setGravity(Gravity.CENTER_HORIZONTAL);
+        panel.setPadding(dp(16), dp(16), dp(16), dp(15));
+        panel.setBackground(shape(0xD90C0F10, 22,
+                withAlpha(accent, 190), 2));
+        content.addView(panel, matchWrap(0));
+
         TextView badge = text(session.test()
-                        ? getString(R.string.critical_alarm_test_badge)
+                         ? getString(R.string.critical_alarm_test_badge)
+                        : session.signalLoss()
+                        ? getString(R.string.critical_alarm_signal_loss_badge)
                         : session.actual()
                         ? getString(R.string.critical_alarm_actual_badge)
                         : getString(R.string.critical_alarm_predictive_badge),
-                12, accent, true);
+                11, accent, true);
         badge.setGravity(Gravity.CENTER);
         badge.setLetterSpacing(.06f);
-        badge.setPadding(dp(13), dp(7), dp(13), dp(7));
-        badge.setBackground(shape(withAlpha(accent, 25), 99,
-                withAlpha(accent, 105), 1));
-        content.addView(badge, wrapCenter(0));
+        badge.setPadding(dp(11), dp(6), dp(11), dp(6));
+        badge.setBackground(shape(withAlpha(accent, 12), 99,
+                withAlpha(accent, 150), 1));
+        panel.addView(badge, wrapCenter(0));
 
-        TextView direction = text(session.low()
+        TextView direction = text(session.signalLoss()
+                        ? getString(R.string.critical_alarm_signal_loss_direction)
+                        : session.low()
                         ? getString(R.string.critical_alarm_low_direction)
                         : getString(R.string.critical_alarm_high_direction),
-                31, Color.WHITE, true);
+                27, Color.WHITE, true);
         direction.setGravity(Gravity.CENTER);
         direction.setLetterSpacing(.025f);
         direction.setMaxLines(2);
         direction.setAccessibilityLiveRegion(
                 View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE);
-        content.addView(direction, matchWrap(15));
+        panel.addView(direction, matchWrap(12));
 
-        TextView status = text(session.actual()
-                        ? getString(R.string.critical_alarm_status_current)
-                        : session.test()
+        TextView status = text(session.test()
                         ? getString(R.string.critical_alarm_status_test)
+                        : session.signalLoss()
+                        ? getString(R.string.critical_alarm_status_signal_loss)
+                        : session.actual()
+                        ? getString(R.string.critical_alarm_status_current)
                         : getString(R.string.critical_alarm_status_predicted),
                 13, 0xFFAAB4AF, false);
         status.setGravity(Gravity.CENTER);
-        content.addView(status, matchWrap(5));
+        panel.addView(status, matchWrap(4));
 
         LinearLayout alertCard = new LinearLayout(getContext());
         alertCard.setOrientation(VERTICAL);
         alertCard.setGravity(Gravity.CENTER_HORIZONTAL);
-        alertCard.setPadding(dp(18), dp(17), dp(18), dp(18));
-        alertCard.setBackground(shape(0xE814181A, 22,
-                withAlpha(accent, 65), 1));
-        content.addView(alertCard, matchWrap(17));
+        alertCard.setPadding(dp(15), dp(14), dp(15), dp(15));
+        alertCard.setBackground(shape(0x4D141819, 15,
+                withAlpha(accent, 115), 1));
+        panel.addView(alertCard, matchWrap(14));
 
-        TextView title = text(session.title, 19, Color.WHITE, true);
+        TextView title = text(session.title, 17, Color.WHITE, true);
         title.setGravity(Gravity.CENTER);
         title.setMaxLines(3);
         alertCard.addView(title, matchWrap(0));
 
         String visibleValue = locked && !session.test()
+                && !session.signalLoss()
                 ? getString(R.string.critical_alarm_unlock_for_value)
                 : session.value;
         LinearLayout valueRow = new LinearLayout(getContext());
         valueRow.setGravity(Gravity.CENTER);
         valueRow.setOrientation(HORIZONTAL);
-        alertCard.addView(valueRow, wrapCenter(12));
+        alertCard.addView(valueRow, wrapCenter(10));
 
-        TextView value = text(visibleValue, locked ? 15 : 38,
+        TextView value = text(visibleValue, locked ? 15 : 35,
                 locked ? 0xFFD3DBD7 : accent, !locked);
         value.setGravity(Gravity.CENTER);
         value.setMaxLines(2);
         if (!locked) {
             TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(value,
-                    22, 38, 1, TypedValue.COMPLEX_UNIT_SP);
+                    21, 35, 1, TypedValue.COMPLEX_UNIT_SP);
         }
         valueRow.addView(value, new LayoutParams(
                 LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT));
@@ -146,23 +157,24 @@ final class CriticalAlarmSurface extends LinearLayout {
         }
 
         String visibleBody = locked && !session.test()
+                && !session.signalLoss()
                 ? getString(R.string.critical_alarm_lockscreen_body)
                 : session.body;
-        TextView body = text(visibleBody, 15, 0xFFC7D0CC, false);
+        TextView body = text(visibleBody, 14, 0xFFC7D0CC, false);
         body.setGravity(Gravity.CENTER);
         body.setMaxLines(5);
         alertCard.addView(body, matchWrap(9));
 
         LinearLayout chartCard = new LinearLayout(getContext());
         chartCard.setOrientation(VERTICAL);
-        chartCard.setPadding(dp(12), dp(13), dp(12), dp(8));
-        chartCard.setBackground(shape(0xE8111516, 20,
-                0xFF252C2A, 1));
-        content.addView(chartCard, matchWrap(13));
+        chartCard.setPadding(dp(10), dp(11), dp(10), dp(7));
+        chartCard.setBackground(shape(0x4D111516, 15,
+                withAlpha(accent, 100), 1));
+        panel.addView(chartCard, matchWrap(11));
 
         TextView chartTitle = text(
                 getString(R.string.critical_alarm_chart_title),
-                15, Color.WHITE, true);
+                14, Color.WHITE, true);
         chartTitle.setPadding(dp(4), 0, dp(4), 0);
         chartCard.addView(chartTitle, matchWrap(0));
 
@@ -175,7 +187,7 @@ final class CriticalAlarmSurface extends LinearLayout {
                         : getString(R.string.critical_alarm_chart_subtitle_recent,
                                 chartData == null ? 45
                                         : chartData.historyMinutes),
-                12, 0xFF8F9A95, false);
+                11, 0xFFA3ADA8, false);
         chartSubtitle.setPadding(dp(4), 0, dp(4), 0);
         chartCard.addView(chartSubtitle, matchWrap(3));
 
@@ -184,60 +196,32 @@ final class CriticalAlarmSurface extends LinearLayout {
         chartCard.addView(chart, new LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
-        TextView instruction = text(getString(
-                        R.string.critical_alarm_instruction),
-                13, 0xFF98A29D, false);
+        TextView instruction = text(getString(session.signalLoss()
+                        && !session.test()
+                        ? R.string.critical_alarm_signal_loss_instruction
+                        : R.string.critical_alarm_instruction),
+                12, 0xFF98A29D, false);
         instruction.setGravity(Gravity.CENTER);
         instruction.setLineSpacing(0f, 1.13f);
-        content.addView(instruction, matchWrap(15));
+        content.addView(instruction, matchWrap(12));
 
         LinearLayout footer = new LinearLayout(getContext());
         footer.setOrientation(VERTICAL);
-        footer.setPadding(dp(20), dp(10), dp(20), dp(18));
-        footer.setBackground(new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0xF20A0C0D, 0xFF07090A}));
+        footer.setPadding(dp(16), dp(10), dp(16), dp(16));
+        footer.setBackground(shape(0xFA080A0B, 0, 0xFF272E2B, 1));
         addView(footer, new LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
         Button acknowledge = button(getString(
-                R.string.critical_alarm_ack_button), accent, accentText, true);
+                R.string.critical_alarm_ack_button), 0xFFE5484D,
+                Color.WHITE, true);
         acknowledge.setId(ACKNOWLEDGE_ID);
         acknowledge.setOnClickListener(view -> {
             if (actions != null) actions.acknowledge();
         });
-        acknowledge.setMinHeight(dp(60));
-        acknowledge.setMinimumHeight(dp(60));
+        acknowledge.setMinHeight(dp(56));
+        acknowledge.setMinimumHeight(dp(56));
         footer.addView(acknowledge, matchWrap(0));
-
-        Button snooze = button(getString(
-                R.string.critical_alarm_snooze_button), 0xFF1B211F,
-                Color.WHITE, false);
-        snooze.setId(SNOOZE_ID);
-        snooze.setOnClickListener(view -> {
-            if (actions != null) actions.snooze();
-        });
-        Button graph = button(getString(
-                R.string.critical_alarm_open_graph_button), 0xFF111513,
-                0xFFB7C1BC, false);
-        graph.setId(OPEN_GRAPH_ID);
-        graph.setOnClickListener(view -> {
-            if (actions != null) actions.openGraph();
-        });
-        snooze.setMinHeight(dp(56));
-        snooze.setMinimumHeight(dp(56));
-        graph.setMinHeight(dp(56));
-        graph.setMinimumHeight(dp(56));
-        LinearLayout secondary = new LinearLayout(getContext());
-        secondary.setOrientation(HORIZONTAL);
-        LayoutParams secondaryParams = matchWrap(9);
-        footer.addView(secondary, secondaryParams);
-        LayoutParams half = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f);
-        secondary.addView(snooze, half);
-        LayoutParams otherHalf = new LayoutParams(
-                0, LayoutParams.WRAP_CONTENT, 1f);
-        otherHalf.leftMargin = dp(8);
-        secondary.addView(graph, otherHalf);
 
         scheduleForecastFreshnessRefresh(session, locked, chartData,
                 actions);
@@ -355,7 +339,7 @@ final class CriticalAlarmSurface extends LinearLayout {
         button.setAllCaps(false);
         button.setGravity(Gravity.CENTER);
         button.setPadding(dp(12), dp(9), dp(12), dp(9));
-        button.setBackground(shape(background, 17,
+        button.setBackground(shape(background, 12,
                 primary || background == Color.TRANSPARENT
                         ? Color.TRANSPARENT : 0xFF303835,
                 primary || background == Color.TRANSPARENT ? 0 : 1));

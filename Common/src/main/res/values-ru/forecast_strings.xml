@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="forecast_dashboard_unavailable">AI-прогноз</string>
-    <string name="forecast_dashboard_loading">AI · проверка</string>
-    <string name="forecast_dashboard_ready">AI · %1$d мин</string>
-    <string name="forecast_dashboard_learning">AI · обучение</string>
-    <string name="forecast_dashboard_preview">AI · демо</string>
+    <string name="forecast_dashboard_unavailable">Прогноз</string>
+    <string name="forecast_dashboard_loading">Проверяем…</string>
+    <string name="forecast_dashboard_ready">%1$d мин</string>
+    <string name="forecast_dashboard_learning">Подготовка</string>
+    <string name="forecast_dashboard_preview">Демо</string>
     <string name="forecast_dashboard_description">Статус прогноза: %1$s. Открыть подробности.</string>
 
-    <string name="forecast_page_title">AI-прогноз</string>
-    <string name="forecast_page_subtitle">Персональный прогноз глюкозы на 120 минут</string>
+    <string name="forecast_page_title">Прогноз глюкозы</string>
+    <string name="forecast_page_subtitle">Расчётная динамика на следующие 120 минут</string>
     <string name="forecast_refresh">Обновить прогноз</string>
     <string name="forecast_refresh_loading">Обновляем прогноз</string>
-    <string name="forecast_status_checking">Проверяем backend</string>
+    <string name="forecast_status_checking">Проверяем соединение</string>
     <string name="forecast_status_ready">Прогноз готов</string>
-    <string name="forecast_status_learning">Персональная модель обучается</string>
+    <string name="forecast_status_learning">Подготавливаем прогноз</string>
     <string name="forecast_status_cold_start">Нужно больше истории</string>
     <string name="forecast_status_no_data">Ожидаем данные CGM</string>
     <string name="forecast_status_stale">Текущее показание устарело</string>
@@ -26,7 +26,7 @@
     <string name="forecast_value_unavailable">—</string>
     <string name="forecast_not_generated">Прогноз ещё не сформирован</string>
     <string name="forecast_generated_at">Сформирован %1$s · по показанию в %2$s</string>
-    <string name="forecast_backend_error">Не удалось подключиться к настроенному backend. Проверьте соединение и повторите попытку.</string>
+    <string name="forecast_backend_error">Не удалось обновить прогноз. Проверьте соединение и повторите попытку.</string>
     <string name="forecast_default_notice">Экспериментальная оценка. Еда, инсулин, активность, болезнь и погрешность сенсора могут изменить траекторию.</string>
 
     <string name="forecast_factors_title">Активные факторы</string>
@@ -65,16 +65,16 @@
         <item quantity="many">Перекрывается ещё с %1$d записями; кривые показаны отдельно.</item>
         <item quantity="other">Перекрывается ещё с %1$d записи; кривые показаны отдельно.</item>
     </plurals>
-    <string name="forecast_profile_ai">AI-оценка еды</string>
+    <string name="forecast_profile_ai">оценка еды</string>
     <string name="forecast_profile_nutrient">оценка по составу</string>
-    <string name="forecast_profile_personalized">персональный изученный профиль</string>
+    <string name="forecast_profile_personalized">персональный профиль</string>
     <string name="forecast_profile_population">начальный популяционный профиль</string>
     <string name="forecast_profile_unknown">источник недоступен</string>
-    <string name="forecast_factor_meal_explanation">Расчётное %1$s усвоение может повышать глюкозу; кривая показывает изменение смоделированного вклада во времени.</string>
-    <string name="forecast_factor_rapid_explanation">Расчётное действие NovoRapid может снижать глюкозу. Показанные время и сила — оценка модели, а не измеренный физиологический пик.</string>
+    <string name="forecast_factor_meal_explanation">Расчётное %1$s усвоение может повышать глюкозу; кривая показывает, как вклад может меняться со временем.</string>
+    <string name="forecast_factor_rapid_explanation">Расчётное действие NovoRapid может снижать глюкозу. Показанные время и сила — оценка, а не измеренный физиологический пик.</string>
     <string name="forecast_factor_long_explanation">Tresiba показана как расчётный перекрывающийся базальный фон. Пик отдельной инъекции обычно нельзя надёжно выделить только по CGM.</string>
-    <string name="forecast_factor_contribution">Наибольший смоделированный вклад: %1$s мг/дл</string>
-    <string name="forecast_factor_contribution_mmol">Наибольший смоделированный вклад: %1$s ммоль/л</string>
+    <string name="forecast_factor_contribution">Наибольший расчётный вклад: %1$s мг/дл</string>
+    <string name="forecast_factor_contribution_mmol">Наибольший расчётный вклад: %1$s ммоль/л</string>
     <string name="forecast_factor_contribution_unknown">Кривая вклада ещё рассчитывается</string>
     <string name="forecast_factor_chart_description">График активности и вклада %1$s в глюкозу. %2$s</string>
 
@@ -93,21 +93,21 @@
     <string name="forecast_mae_value">%1$.1f мг/дл</string>
     <string name="forecast_mae_value_mmol">%1$.1f ммоль/л</string>
 
-    <string name="forecast_model_title">Состояние модели</string>
-    <string name="forecast_model_waiting">Обучение ещё не началось</string>
+    <string name="forecast_model_title">Готовность прогноза</string>
+    <string name="forecast_model_waiting">Пока недостаточно истории</string>
     <string name="forecast_training_summary">%1$s · %2$d из %3$d примеров</string>
     <string name="forecast_training_state_unknown">Ожидание</string>
-    <string name="forecast_training_not_started">Ещё не запущено</string>
+    <string name="forecast_training_not_started">Не готов</string>
     <string name="forecast_training_insufficient">Копим историю</string>
-    <string name="forecast_training_trained">Обучена</string>
-    <string name="forecast_training_in_progress">Обучается</string>
-    <string name="forecast_training_frozen">Зафиксированная версия модели</string>
-    <string name="forecast_training_manual_only">Только ручное переобучение</string>
-    <string name="forecast_training_manual_mode">Автоматическое переобучение отключено. Новая версия модели активируется вручную.</string>
-    <string name="forecast_training_samples">Примеров для обучения: %1$d</string>
-    <string name="forecast_training_data_changed">После обучения этой версии появились новые данные. До следующего ручного переобучения прогнозы продолжат использовать зафиксированную модель.</string>
-    <string name="forecast_last_trained">Последнее обучение: %1$s</string>
-    <string name="forecast_not_trained">Ещё не обучалась</string>
-    <string name="forecast_model_version">Модель %1$s</string>
-    <string name="forecast_model_version_unknown">Версия модели недоступна</string>
+    <string name="forecast_training_trained">Готов</string>
+    <string name="forecast_training_in_progress">Обновляется</string>
+    <string name="forecast_training_frozen">Текущая версия зафиксирована</string>
+    <string name="forecast_training_manual_only">Только ручное обновление</string>
+    <string name="forecast_training_manual_mode">Автоматическое обновление отключено. Новая версия прогноза активируется вручную.</string>
+    <string name="forecast_training_samples">Подтверждённых примеров: %1$d</string>
+    <string name="forecast_training_data_changed">Появились новые данные. До ручного обновления прогноз продолжит использовать текущую версию.</string>
+    <string name="forecast_last_trained">Последнее обновление: %1$s</string>
+    <string name="forecast_not_trained">Пока не готов</string>
+    <string name="forecast_model_version">Версия прогноза %1$s</string>
+    <string name="forecast_model_version_unknown">Версия прогноза недоступна</string>
 </resources>

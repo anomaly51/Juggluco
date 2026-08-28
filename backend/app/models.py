@@ -111,6 +111,138 @@ class MealChatMessageRecord(Base):
     )
 
 
+class IntakeChatSessionRecord(Base):
+    __tablename__ = "intake_chat_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    client_session_id: Mapped[str] = mapped_column(
+        String(36), nullable=False, unique=True
+    )
+    created_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index("ix_intake_chat_sessions_updated_at_ms", "updated_at_ms"),
+    )
+
+
+class IntakeChatTurnReservationRecord(Base):
+    """Durable pre-provider binding for one idempotent chat request."""
+
+    __tablename__ = "intake_chat_turn_reservations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("intake_chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    client_turn_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    context_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "client_turn_id",
+            name="uq_intake_chat_turn_reservation_client",
+        ),
+        Index("ix_intake_chat_turn_reservations_session", "session_id"),
+    )
+
+
+class IntakeChatActionRecord(Base):
+    """One reversible, atomically-applied set of intake mutations."""
+
+    __tablename__ = "intake_chat_actions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("intake_chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    intent: Mapped[str] = mapped_column(String(24), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    undone_at_ms: Mapped[int | None] = mapped_column(Integer)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "sequence", name="uq_intake_chat_action_sequence"
+        ),
+        Index("ix_intake_chat_actions_session_sequence", "session_id", "sequence"),
+    )
+
+
+class IntakeChatActionEventRecord(Base):
+    """Forward mutation membership used to calculate an exact inverse."""
+
+    __tablename__ = "intake_chat_action_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    action_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("intake_chat_actions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("intake_events.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "action_id", "event_id", name="uq_intake_chat_action_event"
+        ),
+        UniqueConstraint(
+            "action_id", "sequence", name="uq_intake_chat_action_event_sequence"
+        ),
+        Index("ix_intake_chat_action_events_action", "action_id"),
+    )
+
+
+class IntakeChatTurnRecord(Base):
+    """Durable response cache and privacy-preserving conversation history."""
+
+    __tablename__ = "intake_chat_turns"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("intake_chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    client_turn_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    occurred_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_text: Mapped[str] = mapped_column(Text, nullable=False)
+    transcript: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    photo_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    assistant_message: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(24), nullable=False)
+    action_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("intake_chat_actions.id", ondelete="SET NULL")
+    )
+    response_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "client_turn_id", name="uq_intake_chat_turn_client"
+        ),
+        UniqueConstraint(
+            "session_id", "sequence", name="uq_intake_chat_turn_sequence"
+        ),
+        Index("ix_intake_chat_turns_session", "session_id"),
+    )
+
+
 class GlucoseReadingRecord(Base):
     """A source reading, keyed by the stable identifier supplied by the phone.
 

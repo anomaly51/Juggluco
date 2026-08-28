@@ -10,9 +10,9 @@
     <string name="dashboard_target_range">Цель %1$s–%2$s %3$s</string>
     <string name="dashboard_target_unavailable">Целевой диапазон</string>
     <string name="dashboard_preview_short">Предпросмотр — не данные сенсора</string>
-    <string name="dashboard_backend_checking">Backend · проверка</string>
-    <string name="dashboard_backend_connected">Backend · подключён</string>
-    <string name="dashboard_backend_offline">Backend · нет связи</string>
-    <string name="dashboard_backend_settings">Статус backend. Открыть настройки соединения.</string>
-    <string name="dashboard_backend_open_settings">%1$s. Открыть настройки backend.</string>
+    <string name="dashboard_backend_checking">Проверяем соединение</string>
+    <string name="dashboard_backend_connected">Подключено</string>
+    <string name="dashboard_backend_offline">Нет связи</string>
+    <string name="dashboard_backend_settings">Статус соединения. Открыть настройки.</string>
+    <string name="dashboard_backend_open_settings">%1$s. Открыть настройки соединения.</string>
 </resources>

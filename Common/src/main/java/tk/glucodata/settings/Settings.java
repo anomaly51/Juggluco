@@ -116,6 +116,7 @@ import tk.glucodata.CheckDirectionBox;
 import tk.glucodata.CheckDirectionRadio;
 import tk.glucodata.ClinicalUi;
 import tk.glucodata.Floating;
+import tk.glucodata.GlucoseAlertSettingsPage;
 import tk.glucodata.GlucoseCurve;
 import tk.glucodata.HealthConnection;
 import tk.glucodata.IntakeBackendSettings;
@@ -1004,226 +1005,23 @@ private static void clinicalSyncExpandable(boolean enabled,View... details) {
     }
 
 private static void clinicalAlarmSettings(MainActivity context,View parent) {
-    View[] lowAlarm=mkalarm(context,context.getString(R.string.lowglucosealarm),
-            Natives.hasalarmlow(),Natives.alarmlow(),0);
-    View[] highAlarm=mkalarm(context,context.getString(R.string.highglucosealarm),
-            Natives.hasalarmhigh(),Natives.alarmhigh(),1);
-    CheckDirectionBox lowToggle=(CheckDirectionBox)lowAlarm[0];
-    CheckDirectionBox highToggle=(CheckDirectionBox)highAlarm[0];
-    EditText lowValue=(EditText)lowAlarm[1];
-    EditText highValue=(EditText)highAlarm[1];
-    Button lowTone=(Button)lowAlarm[2];
-    Button highTone=(Button)highAlarm[2];
-    lowValue.setText(float2string(Natives.alarmlow()));
-    highValue.setText(float2string(Natives.alarmhigh()));
-    clinicalStyleAction(lowTone);
-    clinicalStyleAction(highTone);
-
-    CheckDirectionBox valueAvailable=new CheckDirectionBox(context);
-    boolean hasValue=Natives.hasvaluealarm();
-    valueAvailable.setChecked(hasValue);
-    valueAvailable.setText(R.string.valueavailablenotification);
-    Button valueTone=getbutton(context,R.string.ringtonename);
-    clinicalStyleAction(valueTone);
-
-    CheckDirectionBox signalLoss=new CheckDirectionBox(context);
-    boolean hasLoss=Natives.hasalarmloss();
-    signalLoss.setChecked(hasLoss);
-    signalLoss.setText(R.string.lossofsignalalarm);
-    EditText lossWait=new EditText(context);
-    lossWait.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);
-    lossWait.setImeOptions(editoptions);
-    lossWait.setText(String.valueOf(Natives.readalarmsuspension(4)));
-    clinicalStyleInput(lossWait);
-    TextView minutes=ClinicalUi.body(context,context.getString(R.string.minutes));
-    minutes.setGravity(Gravity.CENTER_VERTICAL);
-    minutes.setPaddingRelative(ClinicalUi.dp(context,8),0,ClinicalUi.dp(context,6),0);
-    LinearLayout waitRow=ClinicalUi.fieldRow(context,
-            context.getString(R.string.settings_signal_wait),lossWait,minutes);
-    Button lossTone=getbutton(context,R.string.ringtonename);
-    clinicalStyleAction(lossTone);
-
-    RadioGroup soundType=new RadioGroup(context);
-    int soundId=0;
-    soundType.addView(getradiobuttonId(context,R.string.alarm,soundId++));
-    soundType.addView(getradiobuttonId(context,R.string.notification,soundId++));
-    soundType.addView(getradiobuttonId(context,R.string.media,soundId));
-    soundType.check(getalarmSoundType());
-    soundType.setPaddingRelative(ClinicalUi.dp(context,10),ClinicalUi.dp(context,4),
-            ClinicalUi.dp(context,10),ClinicalUi.dp(context,4));
-    for(int index=0;index<soundType.getChildCount();index++) {
-        View child=soundType.getChildAt(index);
-        child.setMinimumHeight(ClinicalUi.dp(context,PHONE_SETTINGS_MIN_TOUCH_DP));
-        if(child instanceof TextView text) {
-            text.setTextColor(ClinicalUi.primaryText(context));
-            text.setTextSize(TypedValue.COMPLEX_UNIT_SP,15.0f);
-            }
-        }
-
-    Spinner profile=getProfileSpinner(context);
-    int profilePosition=Natives.getProfile();
-    profile.setSelection(profilePosition);
-    clinicalStyleSpinner(profile);
-
-    Button done=clinicalHeaderButton(context,R.string.closename);
-    Button advanced=getbutton(context,R.string.advanced);
-    Button alarmHelp=getbutton(context,R.string.helpname);
-    clinicalStyleAction(advanced);
-    clinicalStyleAction(alarmHelp);
-
-    LinearLayout content=clinicalScreenContent(context);
-    content.addView(ClinicalUi.header(context,
-            context.getString(R.string.settings_alarm_title),done));
-    TextView intro=ClinicalUi.body(context,context.getString(R.string.settings_alarm_intro));
-    intro.setPaddingRelative(ClinicalUi.dp(context,4),0,ClinicalUi.dp(context,4),
-            ClinicalUi.dp(context,6));
-    content.addView(intro);
-
-    LinearLayout predictiveCard=PredictiveAlertSettingsPage.entryCard(context);
-    predictiveCard.setOnClickListener(view->PredictiveAlertSettingsPage.show(context,
-            ()->PredictiveAlertSettingsPage.refreshEntryCard(predictiveCard,context)));
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_predictive_alerts_section)));
-    content.addView(predictiveCard);
-
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_profile_section)));
-    content.addView(ClinicalUi.card(context,
-            clinicalLabeledSpinner(context,R.string.profile,profile)));
-
-    LinearLayout lowThreshold=clinicalAlarmThresholdRow(context,lowValue);
-    LinearLayout highThreshold=clinicalAlarmThresholdRow(context,highValue);
-    LinearLayout lowCard=clinicalExpandableCard(context,
-            clinicalToggleRow(context,lowToggle,
-                    context.getString(R.string.settings_low_alarm_hint)),
-            lowThreshold,lowTone);
-    LinearLayout highCard=clinicalExpandableCard(context,
-            clinicalToggleRow(context,highToggle,
-                    context.getString(R.string.settings_high_alarm_hint)),
-            highThreshold,highTone);
-    LinearLayout.LayoutParams highParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
-    highParams.topMargin=ClinicalUi.dp(context,12);
-    highCard.setLayoutParams(highParams);
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_primary_alerts_section)));
-    content.addView(lowCard);
-    content.addView(highCard);
-
-    LinearLayout valueCard=clinicalExpandableCard(context,
-            clinicalToggleRow(context,valueAvailable,
-                    context.getString(R.string.settings_value_alarm_hint)),valueTone);
-    LinearLayout lossCard=clinicalExpandableCard(context,
-            clinicalToggleRow(context,signalLoss,
-                    context.getString(R.string.settings_signal_alarm_hint)),waitRow,lossTone);
-    LinearLayout.LayoutParams lossParams=new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT);
-    lossParams.topMargin=ClinicalUi.dp(context,12);
-    lossCard.setLayoutParams(lossParams);
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_signal_section)));
-    content.addView(valueCard);
-    content.addView(lossCard);
-
-    LinearLayout soundCard=new LinearLayout(context);
-    soundCard.setOrientation(LinearLayout.VERTICAL);
-    soundCard.setPadding(ClinicalUi.dp(context,14),ClinicalUi.dp(context,10),
-            ClinicalUi.dp(context,14),ClinicalUi.dp(context,10));
-    soundCard.setBackground(ClinicalUi.surface(context,false,false));
-    TextView soundLabel=ClinicalUi.body(context,
-            context.getString(R.string.settings_sound_mode));
-    soundLabel.setTextColor(ClinicalUi.primaryText(context));
-    soundLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP,15.0f);
-    soundCard.addView(soundLabel);
-    soundCard.addView(soundType,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_delivery_section)));
-    content.addView(soundCard);
-
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_more_alerts_section)));
-    content.addView(ClinicalUi.card(context,advanced,alarmHelp));
-
-    ScrollView screen=ClinicalUi.scrollScreen(context,content);
-    context.addMyContentView(screen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
-
-    Runnable syncLow=()->clinicalSyncExpandable(lowToggle.isChecked(),lowThreshold,lowTone);
-    Runnable syncHigh=()->clinicalSyncExpandable(highToggle.isChecked(),highThreshold,highTone);
-    Runnable syncValue=()->clinicalSyncExpandable(valueAvailable.isChecked(),valueTone);
-    Runnable syncLoss=()->clinicalSyncExpandable(signalLoss.isChecked(),waitRow,lossTone);
-    lowToggle.setOnCheckedChangeListener((button,isChecked)->syncLow.run());
-    highToggle.setOnCheckedChangeListener((button,isChecked)->syncHigh.run());
-    valueAvailable.setOnCheckedChangeListener((button,isChecked)->syncValue.run());
-    signalLoss.setOnCheckedChangeListener((button,isChecked)->syncLoss.run());
-    syncLow.run();
-    syncHigh.run();
-    syncValue.run();
-    syncLoss.run();
-
-    soundType.setOnCheckedChangeListener((group,id)->Natives.setalarmSoundType(id));
-    BooleanSupplier saver=()-> {
-        boolean lossEnabled=signalLoss.isChecked();
-        if(lossEnabled) {
-            String value=lossWait.getText().toString();
-            try {
-                short wait=Short.parseShort(value);
-                if(wait!=Natives.readalarmsuspension(4)) {
-                    Natives.writealarmsuspension(4,wait);
-                    SuperGattCallback.glucosealarms.setLossAlarm();
-                    }
-                }
-            catch(Throwable error) {
-                Log.stack(LOG_ID,"parseShort",error);
-                Applic.argToaster(context,context.getString(R.string.cantsetminutes)+value,
-                        Toast.LENGTH_SHORT);
-                return false;
-                }
-            }
-        Natives.setalarms(str2float(lowValue.getText().toString()),
-                str2float(highValue.getText().toString()),lowToggle.isChecked(),
-                highToggle.isChecked(),valueAvailable.isChecked(),lossEnabled);
-        return true;
-        };
-
-    done.setOnClickListener(view->{
-        if(!saver.getAsBoolean())
-            return;
-        context.poponback();
-        removeContentView(screen);
+    clinicalNormalizeUnifiedAlarms();
+    GlucoseAlertSettingsPage.show(context,()-> {
+        clinicalNormalizeUnifiedAlarms();
         parent.setVisibility(VISIBLE);
         tk.glucodata.help.hidekeyboard(context);
         });
-    context.setonback(()-> {
-        saver.getAsBoolean();
-        parent.setVisibility(VISIBLE);
-        tk.glucodata.help.hidekeyboard(context);
-        removeContentView(screen);
-        });
-    profile.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-        @Override public void onItemSelected(AdapterView<?> owner,View view,int position,long id) {
-            if(position!=profilePosition) {
-                saver.getAsBoolean();
-                removeContentView(screen);
-                MainActivity.poponback();
-                setProfile(context,position);
-                alarmsettings(context,parent);
-                }
-            }
-        @Override public void onNothingSelected(AdapterView<?> owner) {}
-        });
-    advanced.setOnClickListener(view->{
-        saver.getAsBoolean();
-        context.poponback();
-        removeContentView(screen);
-        advancedalarm(context,parent);
-        });
-    alarmHelp.setOnClickListener(view->help(R.string.alarmhelp,context));
-    lowTone.setOnClickListener(view->new tk.glucodata.RingTones(0).mkviews(
-            context,context.getString(R.string.lowglucosealarm),screen));
-    highTone.setOnClickListener(view->new tk.glucodata.RingTones(1).mkviews(
-            context,context.getString(R.string.highglucosealarm),screen));
-    valueTone.setOnClickListener(view->new tk.glucodata.RingTones(2).mkviews(
-            context,context.getString(R.string.valuenotification),screen));
-    lossTone.setOnClickListener(view->new tk.glucodata.RingTones(4).mkviews(
-            context,context.getString(R.string.lossofsignal),screen));
+    }
+
+/** Removes hidden legacy phone sources while preserving all thresholds and
+ * every current-glucose or signal-loss setting. */
+private static void clinicalNormalizeUnifiedAlarms() {
+    Natives.setalarms(Natives.alarmlow(),Natives.alarmhigh(),
+            Natives.hasalarmlow(),Natives.hasalarmhigh(),false,
+            Natives.hasalarmloss());
+    Natives.setAdvancedAlarms(Natives.alarmverylow(),Natives.alarmveryhigh(),
+            false,false,false,false,Natives.alarmprelow(),
+            Natives.alarmprehigh());
     }
 
 static private void alarmsettings(MainActivity context,View parview) {

@@ -16,17 +16,17 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import org.junit.Test;
 import org.w3c.dom.Document;
 
-/** Regression contract for the separate insulin form and confirmable meal chat. */
+/** Regression contract for the unified voice-first intake chat. */
 public class IntakeSeparatedFlowsContractTest {
     @Test
-    public void chooserRoutesToTwoIndependentScreens() throws Exception {
+    public void plusOpensTheUnifiedChatWithoutAChooser() throws Exception {
         String composer = mainJava("tk/glucodata/IntakeComposer.java");
-        Document chooser = layout("modern_intake_chooser.xml");
-
-        assertNotNull(chooser.getElementById("intake_choose_insulin"));
-        assertNotNull(chooser.getElementById("intake_choose_meal"));
-        assertTrue(composer.contains("showInsulin()"));
         assertTrue(composer.contains("showMeal()"));
+        int show = composer.indexOf("void show() {");
+        int chooser = composer.indexOf("private void showChooserInternal()");
+        String entry = composer.substring(show, chooser);
+        assertTrue(entry.contains("showMeal();"));
+        assertFalse(entry.contains("showChooserInternal();"));
         assertTrue(composer.contains("R.layout.modern_insulin_composer"));
         assertTrue(composer.contains("R.layout.modern_meal_chat"));
         assertFalse("The old combined form must not be mounted",
@@ -89,72 +89,28 @@ public class IntakeSeparatedFlowsContractTest {
     }
 
     @Test
-    public void readyMealTimeCanBeChangedAndBackendRemainsSourceOfTruth()
+    public void selectedTimeIsSentInsideTheAtomicUnifiedTurn()
             throws Exception {
         String composer = mainJava("tk/glucodata/IntakeComposer.java");
         String client = mainJava("tk/glucodata/IntakeApiClient.java");
-        String repository = mainJava("tk/glucodata/IntakeRepository.java");
         Document meal = layout("modern_meal_chat.xml");
-        String english = read(commonPath(Paths.get("src", "main", "res",
-                "values", "intake_v10_strings.xml")));
-        String russian = read(commonPath(Paths.get("src", "main", "res",
-                "values-ru", "intake_v10_strings.xml")));
 
         assertNotNull(meal.getElementById("meal_chat_proposal_time"));
+        assertTrue(composer.contains("mealOccurredAtMs = value;"));
         assertTrue(composer.contains(
-                "proposalTime.setOnClickListener(view -> mealTimeAction())"));
-        assertFalse("A created chat must not permanently lock event time",
-                composer.contains("mealTimeLocked"));
-        assertTrue(client.contains("MealChatSession updateMealChatTime"));
-        assertTrue(client.contains("requestJson(\"PUT\""));
-        assertTrue(client.contains("+ \"/time\""));
-        int resolver = repository.indexOf("void resolveMealChatTime(");
-        int firstPut = repository.indexOf(
-                "return api.updateMealChatTime(sessionId, occurredAtMs);",
-                resolver);
-        int retryPut = repository.indexOf(
-                "return api.updateMealChatTime(sessionId, occurredAtMs);",
-                firstPut + 1);
-        int reconcileGet = repository.indexOf(
-                "return api.getMealChatSession(sessionId);", retryPut);
-        assertTrue("Ambiguous PUT must retry once, then reconcile with GET",
-                resolver >= 0 && firstPut > resolver && retryPut > firstPut
-                        && reconcileGet > retryPut);
+                "clientTurnId, occurredAtMs, text, audio, photos"));
         assertTrue(composer.contains(
-                "repository.resolveMealChatTime(mealSessionId, value"));
-        assertTrue("The accepted backend timestamp must drive Add and UI",
-                composer.contains("mealOccurredAtMs = session.occurredAtMs;"));
-        assertFalse("A lost PUT response must never trigger a blind rollback",
-                composer.contains("mealOccurredAtMs = previous;"));
-        assertTrue("Unknown time state must block Add and expose retry",
-                composer.contains("&& !mealTimeSyncUnknown")
-                        && composer.contains("intake_time_selected_retry")
-                        && composer.contains("meal_chat_proposal_time_retry"));
-        assertTrue("Confirm cannot overtake an in-flight time update",
-                composer.indexOf("if (mealTimeUpdating)")
-                        < composer.indexOf("repository.confirmMealChat("));
-        assertTrue(english.contains("meal_chat_proposal_time_action"));
-        assertTrue(english.contains("meal_chat_time_sync_error"));
-        assertTrue(russian.contains("meal_chat_proposal_time_action"));
-        assertTrue(russian.contains("meal_chat_time_sync_error"));
+                "? System.currentTimeMillis() : mealOccurredAtMs"));
+        assertTrue(client.contains("\"occurred_at_ms\""));
     }
 
     @Test
-    public void unspecifiedMealPortionNeverRendersAsZeroGrams()
+    public void resultCardNeverInventsACarbValueWhenItIsAbsent()
             throws Exception {
         String composer = mainJava("tk/glucodata/IntakeComposer.java");
-        String english = read(commonPath(Paths.get("src", "main", "res",
-                "values", "intake_v10_strings.xml")));
-        String russian = read(commonPath(Paths.get("src", "main", "res",
-                "values-ru", "intake_v10_strings.xml")));
-
-        assertTrue(composer.contains("totalPortionGrams > 0.0f"));
-        assertTrue(composer.contains(
-                "R.string.meal_chat_proposal_meal_no_portion"));
-        assertTrue(english.contains("meal_chat_proposal_meal_no_portion")
-                && english.contains("portion not specified"));
-        assertTrue(russian.contains("meal_chat_proposal_meal_no_portion")
-                && russian.contains("порция не указана"));
+        assertTrue(composer.contains("event.hasCarbs()"));
+        assertTrue(composer.contains("R.string.intake_chat_action_meal"));
+        assertFalse(composer.contains("formatNumber(0.0f)"));
     }
 
     @Test
@@ -218,16 +174,21 @@ public class IntakeSeparatedFlowsContractTest {
     }
 
     @Test
-    public void voiceBecomesEditableTextBeforeItCanEnterTheChat()
+    public void voiceIsSentDirectlyInsideOneUnifiedTurn()
             throws Exception {
         String composer = mainJava("tk/glucodata/IntakeComposer.java");
         String client = mainJava("tk/glucodata/IntakeApiClient.java");
 
-        assertTrue(client.contains("\"/v1/transcriptions\""));
-        assertTrue(composer.contains("repository.transcribeAudio(audio"));
-        assertTrue(composer.contains("Editable editable = mealInput.getText()"));
-        assertTrue(composer.contains("editable.replace(start, end, insertion)"));
-        assertTrue(composer.contains("mealInput.requestFocus()"));
+        int stopStart = composer.indexOf(
+                "private void stopRecording(boolean keep)");
+        int stopEnd = composer.indexOf(
+                "private void transcribeRecording(File audio)", stopStart);
+        assertTrue(stopStart >= 0 && stopEnd > stopStart);
+        String stop = composer.substring(stopStart, stopEnd);
+        assertTrue(stop.contains("sendIntakeTurn(completed)"));
+        assertFalse(stop.contains("transcribeRecording("));
+        assertTrue(client.contains("\"audio\", audio"));
+        assertTrue(client.contains("/v1/intake-chat/sessions/"));
         assertFalse(composer.contains("pendingAudio"));
     }
 
@@ -263,23 +224,22 @@ public class IntakeSeparatedFlowsContractTest {
     }
 
     @Test
-    public void aCorrectionDismissesTheStaleReadyProposalBeforeSending()
+    public void correctionsReuseTheSessionAndRenderAtomicReplacement()
             throws Exception {
         String composer = mainJava("tk/glucodata/IntakeComposer.java");
         String layout = read(commonPath(Paths.get("src", "main", "res",
                 "layout", "modern_meal_chat.xml")));
 
-        int clear = composer.indexOf("clearProposalForRevision();");
-        int busy = composer.indexOf("setMealBusy(true);", clear);
-        assertTrue("The old proposal must disappear before a correction waits",
-                clear >= 0 && busy > clear);
-        assertTrue(composer.contains("mealProposal = turn.proposal;"));
-        assertTrue(composer.contains(
-                "mealReadyToConfirm = turn.readyToConfirm;"));
+        assertTrue(composer.contains("intakeSessionId"));
+        assertTrue(composer.contains("turn.deletedEventIds.isEmpty()"));
+        assertTrue(composer.contains("intake_chat_action_corrected"));
+        assertTrue(composer.contains("intake_chat_delete_control"));
+        assertTrue(composer.contains("CONTROL_DELETE"));
+        assertFalse(composer.contains("repository.undoIntakeChatAction"));
         assertTrue("The correction input stays outside the proposal card",
                 layout.indexOf("@+id/meal_chat_proposal")
                         < layout.indexOf("@+id/meal_chat_input"));
-        assertTrue(layout.contains("@string/meal_chat_keep_chatting"));
+        assertTrue(layout.contains("@string/intake_chat_correction_hint"));
     }
 
     @Test

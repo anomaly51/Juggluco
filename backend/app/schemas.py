@@ -335,6 +335,341 @@ class MealChatTurnResponse(BaseModel):
     ready_to_confirm: bool
 
 
+class IntakeChatSessionCreate(BaseModel):
+    """Idempotent identity supplied by one Android composer instance."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_session_id: UUID
+
+
+class IntakeChatSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    client_session_id: UUID
+    created_at_ms: int
+    updated_at_ms: int
+
+
+class IntakeChatModelResult(BaseModel):
+    """Strict provider output for the non-insulin part of a unified turn.
+
+    Insulin is excluded from this meal contract.  Deterministic parsing and the
+    separate evidence-only semantic contract are both independently validated
+    by the orchestrator; neither model may calculate or recommend a dose.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["create", "replace_last", "undo_last", "clarify"]
+    assistant_message: str = Field(min_length=1, max_length=4_000)
+    meal: MealChatProposal | None
+    meal_event_status: Literal[
+        "completed",
+        "planned",
+        "question",
+        "negated",
+        "uncertain",
+        "not_applicable",
+    ] = "not_applicable"
+    meal_actor: Literal["self", "other", "unknown"] = "unknown"
+    meal_action_evidence: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=160,
+    )
+    meal_food_evidence: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+    )
+    meal_semantic_confidence: float = Field(
+        default=0,
+        ge=0,
+        le=1,
+        allow_inf_nan=False,
+    )
+
+    @model_validator(mode="after")
+    def validate_intent_payload(self) -> "IntakeChatModelResult":
+        for field_name in ("meal_action_evidence", "meal_food_evidence"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            normalized = value.strip()
+            if not normalized or "\n" in normalized or "\r" in normalized:
+                raise ValueError("meal semantic evidence must be one nonempty line")
+            setattr(self, field_name, normalized)
+        if (self.meal_action_evidence is None) != (
+            self.meal_food_evidence is None
+        ):
+            raise ValueError("meal action and food evidence must be paired")
+        writes_meal = self.intent in ("create", "replace_last")
+        if writes_meal and self.meal is None:
+            raise ValueError("create and replace_last require a meal")
+        if not writes_meal and self.meal is not None:
+            raise ValueError("clarify and undo_last cannot include a meal")
+        return self
+
+
+class IntakeChatControlResult(BaseModel):
+    """Non-mutating classification for free-form conversation controls."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["revise_last", "none"]
+    assistant_message: str = Field(min_length=1, max_length=300)
+
+    @model_validator(mode="after")
+    def validate_revision_question(self) -> "IntakeChatControlResult":
+        message = self.assistant_message.strip()
+        if "\n" in message or "\r" in message:
+            raise ValueError("control assistant_message must be one line")
+        if self.intent == "revise_last" and (
+            not message.endswith("?") or message.count("?") != 1
+        ):
+            raise ValueError("revise_last requires exactly one short question")
+        self.assistant_message = message
+        return self
+
+
+class IntakeChatInsulinSemanticResult(BaseModel):
+    """Strict semantic extraction of a self-reported insulin fact.
+
+    This is evidence extraction, never dose advice.  Evidence fragments must be
+    copied verbatim from the current user turn and are independently checked by
+    the orchestrator before any mutation is authorized.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal[
+        "create",
+        "replace_last",
+        "revise_last",
+        "delete_last",
+        "none",
+    ]
+    event_status: Literal[
+        "completed",
+        "planned",
+        "question",
+        "negated",
+        "uncertain",
+        "not_applicable",
+    ]
+    actor: Literal["self", "other", "unknown"]
+    context_scope: Literal["none", "recent_single_insulin"]
+    insulin_name: Literal["NovoRapid", "Tresiba"] | None
+    insulin_type: Literal["rapid", "long"] | None
+    insulin_units: float | None = Field(
+        default=None,
+        gt=0,
+        le=500,
+        allow_inf_nan=False,
+    )
+    action_evidence: str | None = Field(default=None, min_length=1, max_length=120)
+    product_evidence: str | None = Field(default=None, min_length=1, max_length=80)
+    dose_evidence: str | None = Field(default=None, min_length=1, max_length=80)
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_semantic_payload(self) -> "IntakeChatInsulinSemanticResult":
+        for field_name in (
+            "action_evidence",
+            "product_evidence",
+            "dose_evidence",
+        ):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            normalized = value.strip()
+            if not normalized or "\n" in normalized or "\r" in normalized:
+                raise ValueError("semantic evidence must be one nonempty line")
+            setattr(self, field_name, normalized)
+
+        if self.intent == "none":
+            # Some schema-constrained providers harmlessly echo an evidence
+            # fragment while still choosing the non-mutating `none` intent.
+            # Canonicalize that result to the sole server meaning of `none`:
+            # no extracted payload and therefore no possible write authority.
+            self.insulin_name = None
+            self.insulin_type = None
+            self.insulin_units = None
+            self.action_evidence = None
+            self.product_evidence = None
+            self.dose_evidence = None
+            return self
+
+        if self.intent in ("revise_last", "delete_last"):
+            if (
+                self.event_status != "not_applicable"
+                or self.actor != "self"
+                or self.context_scope != "recent_single_insulin"
+                or self.action_evidence is None
+                or any(
+                    value is not None
+                    for value in (
+                        self.insulin_name,
+                        self.insulin_type,
+                        self.insulin_units,
+                        self.product_evidence,
+                        self.dose_evidence,
+                    )
+                )
+            ):
+                raise ValueError(
+                    "revision/deletion requires only recent-context evidence"
+                )
+            return self
+
+        if (
+            self.event_status != "completed"
+            or self.actor != "self"
+            or self.action_evidence is None
+            or self.insulin_units is None
+            or self.dose_evidence is None
+        ):
+            raise ValueError("create and replace_last require dose evidence")
+        product_values = (
+            self.insulin_name,
+            self.insulin_type,
+            self.product_evidence,
+        )
+        if self.intent == "create":
+            if (
+                self.context_scope != "none"
+                or any(value is None for value in product_values)
+            ):
+                raise ValueError("create requires explicit product evidence")
+        elif self.context_scope != "recent_single_insulin":
+            raise ValueError("replace_last requires recent single-insulin context")
+        if self.intent == "replace_last" and any(
+            value is None for value in product_values
+        ) != all(value is None for value in product_values):
+            raise ValueError("replacement product fields must be all present or all null")
+        if (
+            self.insulin_name == "NovoRapid" and self.insulin_type != "rapid"
+        ) or (
+            self.insulin_name == "Tresiba" and self.insulin_type != "long"
+        ):
+            raise ValueError("insulin product and type do not match")
+        return self
+
+
+class IntakeChatReservedPendingProduct(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    insulin_name: Literal["NovoRapid", "Tresiba"]
+    insulin_type: Literal["rapid", "long"]
+    cyrillic: bool
+
+
+class IntakeChatReservedRevisionContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pending_action_id: UUID
+    target_action_id: UUID | None
+    cyrillic: bool
+    expired: bool
+    single_insulin_name: Literal["NovoRapid", "Tresiba"] | None
+    single_insulin_type: Literal["rapid", "long"] | None
+
+
+class IntakeChatReservedInsulinContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_action_id: UUID
+    target_event_id: UUID
+    target_updated_at_ms: int = Field(gt=0)
+    insulin_name: Literal["NovoRapid", "Tresiba"]
+    insulin_type: Literal["rapid", "long"]
+    insulin_units: float = Field(gt=0, le=500, allow_inf_nan=False)
+    cyrillic: bool
+
+
+class IntakeChatReservedMealContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_action_id: UUID
+    target_event_id: UUID
+    target_updated_at_ms: int = Field(gt=0)
+    meal_text: str | None = Field(default=None, max_length=4_000)
+    portion_g: float | None = Field(default=None, ge=0, le=10_000)
+    carbs_g: float | None = Field(default=None, ge=0, le=1_000)
+    cyrillic: bool
+
+
+class IntakeChatReservedDeleteContext(IntakeChatReservedInsulinContext):
+    target_action_sequence: int = Field(gt=0)
+
+
+class IntakeChatReservedVisibleEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: UUID
+    updated_at_ms: int = Field(gt=0)
+
+
+class IntakeChatReservedVisibleAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_action_id: UUID
+    target_action_sequence: int = Field(gt=0)
+    events: list[IntakeChatReservedVisibleEvent] = Field(min_length=1, max_length=24)
+
+
+class IntakeChatReservedReplacementEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["meal", "rapid", "long"]
+    event_id: UUID
+    updated_at_ms: int = Field(gt=0)
+
+
+class IntakeChatTurnReservationSnapshot(BaseModel):
+    """Strict internal snapshot that prevents retry target rebinding."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1]
+    expected_session_updated_at: int = Field(gt=0)
+    expected_last_turn_sequence: int = Field(ge=0)
+    context_created_at_ms: int = Field(gt=0)
+    pending_product: IntakeChatReservedPendingProduct | None
+    pending_revision: IntakeChatReservedRevisionContext | None
+    implicit_insulin: IntakeChatReservedInsulinContext | None
+    implicit_meal: IntakeChatReservedMealContext | None = None
+    semantic_delete: IntakeChatReservedDeleteContext | None
+    visible_action: IntakeChatReservedVisibleAction | None
+    replacement_events: list[IntakeChatReservedReplacementEvent] = Field(
+        max_length=3
+    )
+
+
+class IntakeChatTurnResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: UUID
+    client_turn_id: UUID
+    assistant_message: str = Field(min_length=1, max_length=4_000)
+    transcript: str = Field(default="", max_length=8_000)
+    outcome: Literal["applied", "clarification", "undone", "no_change"]
+    action_id: UUID | None
+    events: list[IntakeEvent] = Field(max_length=24)
+    deleted_event_ids: list[UUID] = Field(max_length=24)
+
+
+class IntakeChatUndoResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action_id: UUID
+    outcome: Literal["undone", "already_undone"]
+    events: list[IntakeEvent] = Field(max_length=24)
+    deleted_event_ids: list[UUID] = Field(max_length=24)
+
+
 class HealthResponse(BaseModel):
     status: str
     api_version: str
@@ -1020,4 +1355,193 @@ MEAL_CHAT_JSON_SCHEMA = {
         "ready_to_confirm": {"type": "boolean"},
     },
     "required": ["assistant_message", "proposal", "ready_to_confirm"],
+}
+
+
+INTAKE_CHAT_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "intent": {
+            "type": "string",
+            "enum": ["create", "replace_last", "undo_last", "clarify"],
+        },
+        "assistant_message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+        },
+        "meal": {
+            "anyOf": [
+                _MEAL_CHAT_PROPOSAL_JSON_SCHEMA,
+                {"type": "null"},
+            ]
+        },
+        "meal_event_status": {
+            "type": "string",
+            "enum": [
+                "completed",
+                "planned",
+                "question",
+                "negated",
+                "uncertain",
+                "not_applicable",
+            ],
+        },
+        "meal_actor": {
+            "type": "string",
+            "enum": ["self", "other", "unknown"],
+        },
+        "meal_action_evidence": {
+            "anyOf": [
+                {"type": "string", "minLength": 1, "maxLength": 160},
+                {"type": "null"},
+            ]
+        },
+        "meal_food_evidence": {
+            "anyOf": [
+                {"type": "string", "minLength": 1, "maxLength": 500},
+                {"type": "null"},
+            ]
+        },
+        "meal_semantic_confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+        },
+    },
+    "required": [
+        "intent",
+        "assistant_message",
+        "meal",
+        "meal_event_status",
+        "meal_actor",
+        "meal_action_evidence",
+        "meal_food_evidence",
+        "meal_semantic_confidence",
+    ],
+}
+
+
+INTAKE_CHAT_CONTROL_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "intent": {
+            "type": "string",
+            "enum": ["revise_last", "none"],
+        },
+        "assistant_message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+        },
+    },
+    "required": ["intent", "assistant_message"],
+}
+
+
+INTAKE_CHAT_INSULIN_SEMANTIC_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "intent": {
+            "type": "string",
+            "description": (
+                "create/replace_last require a non-null numeric insulin_units; "
+                "revise_last is forbidden when an exact replacement quantity is present; "
+                "revise_last/delete_last carry action_evidence only; none carries no payload"
+            ),
+            "enum": [
+                "create",
+                "replace_last",
+                "revise_last",
+                "delete_last",
+                "none",
+            ],
+        },
+        "event_status": {
+            "type": "string",
+            "enum": [
+                "completed",
+                "planned",
+                "question",
+                "negated",
+                "uncertain",
+                "not_applicable",
+            ],
+        },
+        "actor": {
+            "type": "string",
+            "enum": ["self", "other", "unknown"],
+        },
+        "context_scope": {
+            "type": "string",
+            "enum": ["none", "recent_single_insulin"],
+        },
+        "insulin_name": {
+            "anyOf": [
+                {"type": "string", "enum": ["NovoRapid", "Tresiba"]},
+                {"type": "null"},
+            ]
+        },
+        "insulin_type": {
+            "anyOf": [
+                {"type": "string", "enum": ["rapid", "long"]},
+                {"type": "null"},
+            ]
+        },
+        "insulin_units": {
+            "description": (
+                "Required non-null number for create/replace_last; null for all other intents"
+            ),
+            "anyOf": [
+                {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 500,
+                },
+                {"type": "null"},
+            ]
+        },
+        "action_evidence": {
+            "anyOf": [
+                {"type": "string", "minLength": 1, "maxLength": 120},
+                {"type": "null"},
+            ]
+        },
+        "product_evidence": {
+            "anyOf": [
+                {"type": "string", "minLength": 1, "maxLength": 80},
+                {"type": "null"},
+            ]
+        },
+        "dose_evidence": {
+            "description": (
+                "Exact transcript dose required with non-null insulin_units for create/replace_last"
+            ),
+            "anyOf": [
+                {"type": "string", "minLength": 1, "maxLength": 80},
+                {"type": "null"},
+            ]
+        },
+        "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+        },
+    },
+    "required": [
+        "intent",
+        "event_status",
+        "actor",
+        "context_scope",
+        "insulin_name",
+        "insulin_type",
+        "insulin_units",
+        "action_evidence",
+        "product_evidence",
+        "dose_evidence",
+        "confidence",
+    ],
 }

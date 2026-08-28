@@ -209,19 +209,6 @@ final class CriticalGlucoseAlarmOverlay {
                             removeWindow();
                         }
                     }
-
-                    @Override
-                    public void snooze() {
-                        if (CriticalGlucoseAlarm.snooze(app, token,
-                                5L * 60_000L)) {
-                            removeWindow();
-                        }
-                    }
-
-                    @Override
-                    public void openGraph() {
-                        CriticalGlucoseAlarmOverlay.launchGraph(app, token);
-                    }
                 });
         if (surface.getParent() == null) {
             WindowManager manager = (WindowManager)

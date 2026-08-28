@@ -81,18 +81,27 @@ def test_openrouter_vision_uses_strict_schema_two_images_and_zdr(tmp_path):
 
 def test_openrouter_audio_is_transcribed_before_meal_analysis(tmp_path):
     models: list[str] = []
+    paths: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         models.append(payload["model"])
+        paths.append(request.url.path)
         if payload["model"] == "test/audio-model":
-            audio_part = payload["messages"][1]["content"][1]
-            assert audio_part["type"] == "input_audio"
-            assert audio_part["input_audio"]["format"] == "m4a"
+            assert request.url.path.endswith("/audio/transcriptions")
+            assert payload["input_audio"]["format"] == "m4a"
+            assert payload["temperature"] == 0.0
+            assert payload["response_format"] == "json"
+            assert payload["provider"] == {
+                "data_collection": "deny",
+                "zdr": True,
+            }
+            assert "messages" not in payload
             return httpx.Response(
                 200,
-                json={"choices": [{"message": {"content": "Two slices of bread"}}]},
+                json={"text": "Two slices of bread", "usage": {"seconds": 1.2}},
             )
+        assert request.url.path.endswith("/chat/completions")
         result = {
             "meal_name": "Bread",
             "meal_description": "Two slices of bread",
@@ -124,6 +133,127 @@ def test_openrouter_audio_is_transcribed_before_meal_analysis(tmp_path):
     assert transcript == "Two slices of bread"
     assert analysis.meal_name == "Bread"
     assert models == ["test/audio-model", "test/vision-model"]
+    assert paths == [
+        "/api/v1/audio/transcriptions",
+        "/api/v1/chat/completions",
+    ]
+
+
+def test_openrouter_russian_audio_uses_language_and_limited_groq_vocabulary(
+    tmp_path,
+):
+    captured: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json={"text": "5 единиц НовоРапида"})
+
+    settings = make_settings(
+        tmp_path,
+        openrouter_api_key="dummy-openrouter-key",
+        openrouter_audio_language="ru-RU",
+    )
+    client = httpx.AsyncClient(
+        base_url="https://openrouter.invalid/api/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+    analyzer = OpenRouterMealAnalyzer(settings, http_client=client)
+
+    transcript = asyncio.run(
+        analyzer.transcribe(PreparedAudio(b"audio", "m4a"))
+    )
+    asyncio.run(client.aclose())
+
+    assert transcript == "5 единиц НовоРапида"
+    assert settings.openrouter_audio_language == "ru"
+    assert len(captured) == 1
+    payload = captured[0]
+    assert payload["language"] == "ru"
+    assert payload["provider"]["data_collection"] == "deny"
+    assert payload["provider"]["zdr"] is True
+    prompt = payload["provider"]["options"]["groq"]["prompt"]
+    assert "NovoRapid" in prompt
+    assert "Tresiba" in prompt
+    assert "я уколол" in prompt
+    assert "быстрого инсулина" in prompt
+    assert "медленного инсулина" in prompt
+    assert "dose" not in prompt.lower()
+
+
+def test_request_language_can_override_russian_config_without_vocabulary_bias(
+    tmp_path,
+):
+    captured: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json={"text": "Five units NovoRapid"})
+
+    settings = make_settings(
+        tmp_path,
+        openrouter_api_key="dummy-openrouter-key",
+        openrouter_audio_language="ru",
+    )
+    client = httpx.AsyncClient(
+        base_url="https://openrouter.invalid/api/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+    analyzer = OpenRouterMealAnalyzer(settings, http_client=client)
+
+    transcript = asyncio.run(
+        analyzer.transcribe(
+            PreparedAudio(b"audio", "m4a"), language_hint="en-US"
+        )
+    )
+    asyncio.run(client.aclose())
+
+    assert transcript == "Five units NovoRapid"
+    assert captured[0]["language"] == "en"
+    assert captured[0]["provider"] == {
+        "data_collection": "deny",
+        "zdr": True,
+    }
+
+
+def test_audio_language_auto_and_invalid_values_fail_safely(tmp_path):
+    with pytest.raises(ValueError, match="OPENROUTER_AUDIO_LANGUAGE"):
+        make_settings(tmp_path, openrouter_audio_language="russian")
+
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"text": "unused"})
+
+    settings = make_settings(
+        tmp_path,
+        openrouter_api_key="dummy-openrouter-key",
+        openrouter_audio_language="ru",
+    )
+    client = httpx.AsyncClient(
+        base_url="https://openrouter.invalid/api/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+    analyzer = OpenRouterMealAnalyzer(settings, http_client=client)
+
+    with pytest.raises(AnalysisError) as invalid:
+        asyncio.run(
+            analyzer.transcribe(
+                PreparedAudio(b"audio", "m4a"), language_hint="not-a-locale"
+            )
+        )
+    assert invalid.value.status_code == 400
+    assert calls == 0
+
+    transcript = asyncio.run(
+        analyzer.transcribe(
+            PreparedAudio(b"audio", "m4a"), language_hint="auto"
+        )
+    )
+    asyncio.run(client.aclose())
+    assert transcript == "unused"
+    assert calls == 1
 
 
 def test_openrouter_meal_chat_uses_history_many_images_strict_schema_and_zdr(

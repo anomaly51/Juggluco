@@ -34,16 +34,11 @@ final class CriticalAlarmDiagnostics {
             "critical_predictive_low_v2";
     static final String PREDICTIVE_HIGH_CHANNEL_ID =
             "critical_predictive_high_v2";
-
-    private static final String[] ACTUAL_CHANNEL_IDS = {
-            ACTUAL_LOW_CHANNEL_ID, ACTUAL_HIGH_CHANNEL_ID
-    };
-    private static final String[] PREDICTIVE_CHANNEL_IDS = {
-            PREDICTIVE_LOW_CHANNEL_ID, PREDICTIVE_HIGH_CHANNEL_ID
-    };
+    static final String SIGNAL_LOSS_CHANNEL_ID = "critical_signal_loss_v2";
 
     interface TestHook {
-        boolean show(Context context, boolean low);
+        boolean show(Context context,
+                CriticalAlarmSoundCatalog.AlertType alertType);
     }
 
     private static volatile TestHook testHook;
@@ -78,14 +73,20 @@ final class CriticalAlarmDiagnostics {
         boolean exactAlarmAccess = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                 || (alarms != null && alarms.canScheduleExactAlarms());
 
+        // Read the channels that match the currently selected built-in tones.
+        // The legacy v2 constants remain in use for ordinary predictive HUNs;
+        // critical delivery has versioned per-tone channels because Android
+        // deliberately makes a channel's sound immutable after creation.
         ChannelReadiness actual = channelReadiness(notifications,
-                ACTUAL_CHANNEL_IDS);
+                CriticalGlucoseAlarm.selectedChannelIds(app, true));
         ChannelReadiness predictive = channelReadiness(notifications,
-                PREDICTIVE_CHANNEL_IDS);
+                CriticalGlucoseAlarm.selectedChannelIds(app, false));
+        ChannelReadiness signalLoss = channelReadiness(notifications,
+                CriticalGlucoseAlarm.selectedSignalLossChannelIds(app));
         return new Snapshot(postPermission, notificationsEnabled,
                 alarmVolume, maxAlarmVolume, policyAccess, fullScreenAccess,
                 overlayAccess, exactAlarmAccess, actual, predictive,
-                testHook != null);
+                signalLoss, testHook != null);
     }
 
     private static boolean fullScreenAccess(Context context,
@@ -149,10 +150,17 @@ final class CriticalAlarmDiagnostics {
     }
 
     static boolean showTest(Context context, boolean low) {
+        return showTest(context, low
+                ? CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_LOW
+                : CriticalAlarmSoundCatalog.AlertType.PREDICTIVE_HIGH);
+    }
+
+    static boolean showTest(Context context,
+            CriticalAlarmSoundCatalog.AlertType alertType) {
         TestHook hook = testHook;
-        if (context == null || hook == null) return false;
+        if (context == null || alertType == null || hook == null) return false;
         try {
-            return hook.show(context, low);
+            return hook.show(context, alertType);
         } catch (RuntimeException failure) {
             if (Log.doLog) Log.e("CriticalAlarmDiagnostics",
                     "Critical test failed: "
@@ -267,6 +275,7 @@ final class CriticalAlarmDiagnostics {
         final boolean exactAlarmAccess;
         final ChannelReadiness actualChannels;
         final ChannelReadiness predictiveChannels;
+        final ChannelReadiness signalLossChannels;
         final boolean testAvailable;
 
         Snapshot(boolean postPermission, boolean notificationsEnabled,
@@ -274,7 +283,9 @@ final class CriticalAlarmDiagnostics {
                 boolean fullScreenAccess, boolean overlayAccess,
                 boolean exactAlarmAccess,
                 ChannelReadiness actualChannels,
-                ChannelReadiness predictiveChannels, boolean testAvailable) {
+                ChannelReadiness predictiveChannels,
+                ChannelReadiness signalLossChannels,
+                boolean testAvailable) {
             this.postPermission = postPermission;
             this.notificationsEnabled = notificationsEnabled;
             this.alarmVolume = alarmVolume;
@@ -285,13 +296,27 @@ final class CriticalAlarmDiagnostics {
             this.exactAlarmAccess = exactAlarmAccess;
             this.actualChannels = actualChannels;
             this.predictiveChannels = predictiveChannels;
+            this.signalLossChannels = signalLossChannels;
             this.testAvailable = testAvailable;
+        }
+
+        Snapshot(boolean postPermission, boolean notificationsEnabled,
+                int alarmVolume, int maxAlarmVolume, boolean dndPolicyAccess,
+                boolean fullScreenAccess, boolean overlayAccess,
+                boolean exactAlarmAccess,
+                ChannelReadiness actualChannels,
+                ChannelReadiness predictiveChannels, boolean testAvailable) {
+            this(postPermission, notificationsEnabled, alarmVolume,
+                    maxAlarmVolume, dndPolicyAccess, fullScreenAccess,
+                    overlayAccess, exactAlarmAccess, actualChannels,
+                    predictiveChannels, actualChannels, testAvailable);
         }
 
         static Snapshot unavailable() {
             return new Snapshot(false, false, -1, -1, false, false, false,
                     false, ChannelReadiness.missing(),
-                    ChannelReadiness.missing(), false);
+                    ChannelReadiness.missing(), ChannelReadiness.missing(),
+                    false);
         }
 
         boolean notificationAccess() {
@@ -317,8 +342,14 @@ final class CriticalAlarmDiagnostics {
                     && predictiveChannels.bypassDnd;
         }
 
+        boolean signalLossConfigured() {
+            return commonConfigured() && signalLossChannels.ready()
+                    && signalLossChannels.bypassDnd;
+        }
+
         boolean maximallyConfigured() {
-            return actualConfigured() && predictiveConfigured();
+            return actualConfigured() && predictiveConfigured()
+                    && signalLossConfigured();
         }
 
         private boolean commonConfigured() {

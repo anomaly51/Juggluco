@@ -1416,11 +1416,31 @@ void JCurve::drawforecast(NVGcontext* avg,const uint32_t now,
 
     const auto &last=points.back();
     const NVGcolor endpoint=stateColor(last.medianMgDl);
+    const float endpointRadius=std::max(density*2.65f,2.1f);
+    const float endpointX=transx(last.time);
+    const float endpointY=yFor(last.medianMgDl);
+    // A hollow diamond is a non-colour cue for a predicted endpoint. Actual
+    // CGM samples remain solid/triangular/circular, so the two series cannot
+    // be confused even in monochrome or reduced-colour modes.
     nvgBeginPath(avg);
-    nvgCircle(avg,transx(last.time),yFor(last.medianMgDl),
-              std::max(density*2.2f,1.8f));
-    nvgFillColor(avg,alphaColor(endpoint,.72f+.24f*confidence));
+    nvgMoveTo(avg,endpointX,endpointY-endpointRadius*1.85f);
+    nvgLineTo(avg,endpointX+endpointRadius*1.85f,endpointY);
+    nvgLineTo(avg,endpointX,endpointY+endpointRadius*1.85f);
+    nvgLineTo(avg,endpointX-endpointRadius*1.85f,endpointY);
+    nvgClosePath(avg);
+    nvgFillColor(avg,alphaColor(endpoint,.10f+.12f*confidence));
     nvgFill(avg);
+    nvgBeginPath(avg);
+    nvgMoveTo(avg,endpointX,endpointY-endpointRadius);
+    nvgLineTo(avg,endpointX+endpointRadius,endpointY);
+    nvgLineTo(avg,endpointX,endpointY+endpointRadius);
+    nvgLineTo(avg,endpointX-endpointRadius,endpointY);
+    nvgClosePath(avg);
+    nvgFillColor(avg,modernGraphSurface);
+    nvgFill(avg);
+    nvgStrokeWidth(avg,std::max(density*1.15f,1.0f));
+    nvgStrokeColor(avg,alphaColor(endpoint,.72f+.24f*confidence));
+    nvgStroke(avg);
     nvgRestore(avg);
 }
 
@@ -2169,9 +2189,37 @@ static void drawModernGraphSample(NVGcontext* avg,const float x,const float y,
     nvgFillColor(avg,modernGraphSurface);
     nvgFill(avg);
     nvgBeginPath(avg);
-    nvgCircle(avg,x,y,radius*.68f);
+    const float core=radius*.72f;
+    switch(graphpoints::marker_shape(state)) {
+        case graphpoints::MarkerShape::down_triangle:
+            nvgMoveTo(avg,x-core,y-core*.58f);
+            nvgLineTo(avg,x+core,y-core*.58f);
+            nvgLineTo(avg,x,y+core);
+            nvgClosePath(avg);
+            break;
+        case graphpoints::MarkerShape::up_triangle:
+            nvgMoveTo(avg,x,y-core);
+            nvgLineTo(avg,x+core,y+core*.58f);
+            nvgLineTo(avg,x-core,y+core*.58f);
+            nvgClosePath(avg);
+            break;
+        case graphpoints::MarkerShape::circle:
+        default:
+            nvgCircle(avg,x,y,core);
+            break;
+        }
     nvgFillColor(avg,modernGraphStateColor(state));
     nvgFill(avg);
+}
+
+static void drawModernGraphCurrentSample(
+        NVGcontext* avg,const float x,const float y,const float pointRadius,
+        const graphpoints::RangeState state) {
+    nvgBeginPath(avg);
+    nvgCircle(avg,x,y,pointRadius*2.15f);
+    nvgFillColor(avg,modernGraphStateColor(state,true));
+    nvgFill(avg);
+    drawModernGraphSample(avg,x,y,pointRadius*1.16f,state);
 }
 
 template <class TX,class TY>   void  JCurve::showScan(NVGcontext* avg,const ScanData *low,const ScanData *high,  const TX &transx,  const TY &transy,const int colorindex) {
@@ -2492,18 +2540,8 @@ template <class TX,class TY> void JCurve::showlineScan(NVGcontext* avg,const Sca
 
         if(haslast&&lastx>=dleft&&lastx<=dleft+dwidth&&
            lasty>=dtop&&lasty<=dtop+dheight) {
-            nvgBeginPath(avg);
-            nvgCircle(avg,lastx,lasty,pointRadius*2.15f);
-            nvgFillColor(avg,statecolor(lastglu,true));
-            nvgFill(avg);
-            nvgBeginPath(avg);
-            nvgCircle(avg,lastx,lasty,pointRadius*1.02f);
-            nvgFillColor(avg,statecolor(lastglu,false));
-            nvgFill(avg);
-            nvgBeginPath(avg);
-            nvgCircle(avg,lastx,lasty,pointRadius*.38f);
-            nvgFillColor(avg,modernGraphSurface);
-            nvgFill(avg);
+            drawModernGraphCurrentSample(avg,lastx,lasty,pointRadius,
+                    graphpoints::range_state(lastglu,targetlow,targethigh));
             }
         nvgRestore(avg);
         return;
@@ -4075,18 +4113,8 @@ displaytime disp=getdisplaytime(nu,starttime2,endtime, transx);
             }
 
         const previewpoint &last=points[previewcount-1];
-        nvgBeginPath(avg);
-        nvgCircle(avg,last.x,last.y,pointRadius*2.15f);
-        nvgFillColor(avg,statecolor(last.value,true));
-        nvgFill(avg);
-        nvgBeginPath(avg);
-        nvgCircle(avg,last.x,last.y,pointRadius*1.05f);
-        nvgFillColor(avg,statecolor(last.value,false));
-        nvgFill(avg);
-        nvgBeginPath(avg);
-        nvgCircle(avg,last.x,last.y,pointRadius*.38f);
-        nvgFillColor(avg,modernGraphSurface);
-        nvgFill(avg);
+        drawModernGraphCurrentSample(avg,last.x,last.y,pointRadius,
+                graphpoints::range_state(last.value,low,high));
 
         char previewvalue[32];
         const char *previewunit=glunit==1?"mmol/L":"mg/dL";
