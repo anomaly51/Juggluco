@@ -13,7 +13,7 @@ GitHub Actions workflows.
 The image can also be built and published manually:
 
 ```bash
-docker build -t ghcr.io/anomaly51/juggluco-backend:latest backend
+docker build -f backend/Dockerfile -t ghcr.io/anomaly51/juggluco-backend:latest .
 docker push ghcr.io/anomaly51/juggluco-backend:latest
 ```
 
@@ -39,14 +39,28 @@ kubectl -n juggluco rollout status deployment/juggluco-backend
 accident.
 
 Use two different random credentials: `JUGGLUCO_API_TOKEN` for the Android
-writer/admin API and `JUGGLUCO_VIEWER_TOKEN` for the GET-only iOS viewer API.
-Both must contain at least 32 characters. Never copy the writer/admin token to
-an iPhone.
+writer/admin API and `JUGGLUCO_VIEWER_TOKEN` for the GET-only installed PWA.
+The viewer token must contain 32–512 URL-safe ASCII characters; the admin token
+must contain at least 32 characters. Never enter the writer/admin token in
+the PWA.
 
-For remote iOS access, place the service behind a valid HTTPS gateway or trusted
+If link-only access is deliberately preferred, set
+`JUGGLUCO_VIEWER_PUBLIC=true` in the Secret and omit the optional
+`JUGGLUCO_VIEWER_TOKEN`. It defaults to `false`. This makes current/historical
+glucose and a sanitized forecast readable by every client that can reach the
+viewer URL; meals, insulin, sensor identity, write, and admin APIs stay private.
+
+For remote PWA access, place the service behind a valid HTTPS gateway or trusted
 tunnel and add its public host name to `JUGGLUCO_ALLOWED_HOSTS` in
 `deployment.yaml`. The included `ClusterIP` service is intentionally not an
 Internet-facing endpoint.
+
+The application rejects non-loopback HTTP for `/viewer/*` and `/v1/viewer/*`.
+If the gateway terminates TLS, set `JUGGLUCO_VIEWER_TRUSTED_PROXY_CIDRS` to the
+gateway's exact source IP/CIDR (never `0.0.0.0/0` or `::/0`), and have the
+gateway overwrite the original `X-Forwarded-Proto` with `https` and rate-limit
+failed `POST /v1/viewer/session` attempts. Requests with that header from any
+unconfigured source remain rejected.
 
 For a private, temporary connection from the same computer:
 

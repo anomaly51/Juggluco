@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import time
 from uuid import uuid4
 
@@ -8,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.models import GlucoseReadingRecord
+from app.security import VIEWER_SESSION_COOKIE, issue_viewer_session
 from conftest import TEST_TOKEN, make_settings
 
 
@@ -27,7 +30,7 @@ def viewer_client(
         chat_analyzer=fake_chat_analyzer,
         transcriber=fake_transcriber,
     )
-    with TestClient(application) as client:
+    with TestClient(application, base_url="https://testserver") as client:
         yield client
 
 
@@ -163,6 +166,179 @@ def test_viewer_token_is_limited_to_viewer_get_routes(
     )
 
 
+def test_public_viewer_exposes_only_sanitized_glucose_and_never_grants_writes(
+    tmp_path,
+    fake_analyzer,
+    fake_chat_analyzer,
+    fake_transcriber,
+):
+    application = create_app(
+        make_settings(
+            tmp_path,
+            viewer_token=VIEWER_TOKEN,
+            viewer_public=True,
+        ),
+        analyzer=fake_analyzer,
+        chat_analyzer=fake_chat_analyzer,
+        transcriber=fake_transcriber,
+    )
+    admin = {"Authorization": f"Bearer {TEST_TOKEN}"}
+    viewer = {"Authorization": f"Bearer {VIEWER_TOKEN}"}
+    now = int(time.time() * 1_000)
+
+    with TestClient(application, base_url="https://testserver") as client:
+        _ingest(
+            client,
+            admin,
+            [
+                _reading("private-reading-id", now - 120_000, 112),
+                _reading("another-private-id", now - 30_000, 114),
+            ],
+        )
+        created = _meal(client, admin, now - 90_000)
+        rapid = _insulin(client, admin, now - 60_000, "NovoRapid")
+        long = _insulin(client, admin, now - 45_000, "Tresiba")
+
+        snapshot_response = client.get("/v1/viewer/snapshot")
+        assert snapshot_response.status_code == 200, snapshot_response.text
+        snapshot = snapshot_response.json()
+        assert snapshot["intake_events"] == []
+        assert snapshot["intake_events_truncated"] is False
+        assert snapshot["forecast"]["activities"] == []
+        assert snapshot["insulin_events_order"] == "oldest_first"
+        assert snapshot["insulin_events_truncated"] is False
+        assert snapshot["insulin_events"] == [
+            {
+                "occurred_at_ms": now - 60_000,
+                "insulin_units": 3.5,
+                "insulin_type": "rapid",
+                "insulin_name": "NovoRapid",
+            },
+            {
+                "occurred_at_ms": now - 45_000,
+                "insulin_units": 9.0,
+                "insulin_type": "long",
+                "insulin_name": "Tresiba",
+            },
+        ]
+        assert all(
+            set(item)
+            == {"occurred_at_ms", "insulin_units", "insulin_type", "insulin_name"}
+            for item in snapshot["insulin_events"]
+        )
+        serialized_snapshot = json.dumps(snapshot)
+        assert "Rice and vegetables" not in serialized_snapshot
+        assert created["id"] not in serialized_snapshot
+        assert rapid["id"] not in serialized_snapshot
+        assert long["id"] not in serialized_snapshot
+        assert len(snapshot["glucose_history"]) == 2
+        public_readings = snapshot["glucose_history"]
+        assert all(item["reading_id"].startswith("reading-") for item in public_readings)
+        assert {item["reading_id"] for item in public_readings}.isdisjoint(
+            {"private-reading-id", "another-private-id"}
+        )
+        assert all(item["sensor_id"] is None for item in public_readings)
+        assert all(item["sensor_generation"] is None for item in public_readings)
+        assert snapshot["current_glucose"]["reading_id"] == public_readings[-1]["reading_id"]
+        assert snapshot["current_glucose"]["sensor_id"] is None
+        assert snapshot["current_glucose"]["sensor_generation"] is None
+
+        glucose = client.get("/v1/viewer/glucose", params={"limit": 1})
+        assert glucose.status_code == 200, glucose.text
+        glucose_page = glucose.json()
+        assert glucose_page["items"][0]["reading_id"] == public_readings[-1]["reading_id"]
+        assert glucose_page["items"][0]["sensor_id"] is None
+        assert glucose_page["next_cursor"] is not None
+        encoded_payload = glucose_page["next_cursor"].split(".", 1)[0]
+        cursor_payload = json.loads(
+            base64.urlsafe_b64decode(
+                encoded_payload + "=" * (-len(encoded_payload) % 4)
+            )
+        )
+        assert cursor_payload["before_id"].startswith("reading-")
+        assert "private" not in cursor_payload["before_id"]
+        second_page = client.get(
+            "/v1/viewer/glucose",
+            params={"cursor": glucose_page["next_cursor"], "limit": 1},
+        )
+        assert second_page.status_code == 200, second_page.text
+        assert second_page.json()["items"][0]["reading_id"] == public_readings[0]["reading_id"]
+        for path in ("/v1/viewer/snapshot", "/v1/viewer/glucose"):
+            too_wide = client.get(
+                path,
+                params={
+                    "from_ms": now - 25 * 60 * 60_000,
+                    "to_ms": now,
+                },
+            )
+            assert too_wide.status_code == 422
+            assert too_wide.json()["detail"] == (
+                "public viewer windows cannot exceed 24 hours"
+            )
+        assert client.get("/v1/viewer/intakes").status_code == 403
+
+        # A valid old viewer cookie still carries no authority on the separate
+        # admin router when public link access is enabled.
+        old_cookie, _ = issue_viewer_session(application.state.settings)
+        client.cookies.set(VIEWER_SESSION_COOKIE, old_cookie)
+        reading_payload = {
+            "readings": [_reading("public-must-not-write", now, 110)]
+        }
+        denied_requests = [
+            client.post("/v1/glucose/readings", json=reading_payload),
+            client.post(
+                "/v1/meal-events",
+                json={
+                    "client_event_id": str(uuid4()),
+                    "occurred_at_ms": now,
+                    "meal_text": "Must not persist",
+                    "carbs_g": 10,
+                },
+            ),
+            client.post(
+                "/v1/insulin-events",
+                json={
+                    "client_event_id": str(uuid4()),
+                    "occurred_at_ms": now,
+                    "insulin_units": 1,
+                    "insulin_name": "NovoRapid",
+                },
+            ),
+            client.put(
+                f"/v1/intakes/{created['id']}/meal-portion",
+                json={"portion_g": 100},
+            ),
+            client.delete(f"/v1/intakes/{created['id']}"),
+            client.post(
+                "/v1/intake-chat/sessions",
+                json={"client_session_id": str(uuid4())},
+            ),
+            client.post(
+                "/v1/meal-chat/sessions",
+                json={
+                    "client_event_id": str(uuid4()),
+                    "occurred_at_ms": now,
+                },
+            ),
+            client.get("/v1/intakes"),
+        ]
+        assert [response.status_code for response in denied_requests] == [401] * len(
+            denied_requests
+        )
+        assert client.post(
+            "/v1/glucose/readings",
+            headers=viewer,
+            json=reading_payload,
+        ).status_code == 401
+
+        # Public mode does not interfere with the Android/admin credential.
+        assert client.post(
+            "/v1/glucose/readings",
+            headers=admin,
+            json=reading_payload,
+        ).status_code == 200
+
+
 def test_snapshot_is_bounded_ascending_and_marks_stale_current_glucose(
     viewer_client,
     viewer_headers,
@@ -216,6 +392,8 @@ def test_snapshot_is_bounded_ascending_and_marks_stale_current_glucose(
     assert current["glucose_mg_dl"] == 115
     assert current["trend_mg_dl_min"] == 0.7
     assert current["quality"] == 0.91
+    assert current["sensor_id"] == "sensor-private-id"
+    assert current["sensor_generation"] == "Libre"
     assert current["age_ms"] >= 16 * 60_000
     assert current["is_stale"] is True
 
@@ -228,6 +406,22 @@ def test_snapshot_is_bounded_ascending_and_marks_stale_current_glucose(
     assert {meal["id"], rapid["id"], long["id"]}.issuperset(
         item["id"] for item in payload["intake_events"]
     )
+    assert payload["insulin_events_order"] == "oldest_first"
+    assert payload["insulin_events_truncated"] is False
+    assert payload["insulin_events"] == [
+        {
+            "occurred_at_ms": now - 17 * 60_000,
+            "insulin_units": 3.5,
+            "insulin_type": "rapid",
+            "insulin_name": "NovoRapid",
+        },
+        {
+            "occurred_at_ms": now - 15 * 60_000,
+            "insulin_units": 9.0,
+            "insulin_type": "long",
+            "insulin_name": "Tresiba",
+        },
+    ]
     assert payload["forecast"]["status"] == "stale"
 
 
@@ -435,7 +629,7 @@ def test_viewer_rejects_unbounded_or_invalid_requests(
 
 
 def test_viewer_configuration_requires_a_distinct_strong_token(tmp_path):
-    with pytest.raises(ValueError, match="at least 32"):
+    with pytest.raises(ValueError, match="between 32 and 512"):
         make_settings(tmp_path, viewer_token="too-short")
     with pytest.raises(ValueError, match="must differ"):
         make_settings(tmp_path, viewer_token=TEST_TOKEN)
@@ -461,4 +655,4 @@ def test_viewer_health_data_is_never_cacheable(
         response = viewer_client.get(path, headers=viewer_headers)
         assert response.status_code == 200, response.text
         assert response.headers["cache-control"] == "no-store, private"
-        assert response.headers["vary"] == "Authorization"
+        assert response.headers["vary"] == "Authorization, Cookie"

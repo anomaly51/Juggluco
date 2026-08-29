@@ -8,8 +8,8 @@ This fork contains a redesigned Android experience, separate meal and insulin fl
 graph event overlays, and a local-first backend for AI-assisted meal analysis and
 personalized glucose forecasting. See [REDESIGN.md](REDESIGN.md) for the product/UI
 changes and [backend/README.md](backend/README.md) for the backend contract and safety
-model. A read-only remote SwiftUI companion is documented in
-[ios/README.md](ios/README.md). Container publishing and a persistent single-replica
+model. A read-only, installable React PWA companion is documented in
+[pwa/README.md](pwa/README.md). Container publishing and a persistent single-replica
 Kubernetes deployment are documented in
 [deploy/kubernetes/README.md](deploy/kubernetes/README.md).
 

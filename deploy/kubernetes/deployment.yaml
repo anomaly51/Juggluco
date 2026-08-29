@@ -39,6 +39,13 @@ spec:
                 secretKeyRef:
                   name: juggluco-backend-secrets
                   key: JUGGLUCO_VIEWER_TOKEN
+                  optional: true
+            - name: JUGGLUCO_VIEWER_PUBLIC
+              valueFrom:
+                secretKeyRef:
+                  name: juggluco-backend-secrets
+                  key: JUGGLUCO_VIEWER_PUBLIC
+                  optional: true
             - name: OPENROUTER_API_KEY
               valueFrom:
                 secretKeyRef:

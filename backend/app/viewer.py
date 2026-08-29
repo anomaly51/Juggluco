@@ -6,9 +6,11 @@ import hmac
 import json
 import time
 from collections.abc import Callable, Generator
+from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
@@ -20,12 +22,21 @@ from .schemas import (
     ViewerCurrentGlucose,
     ViewerGlucosePage,
     ViewerGlucoseReading,
+    ViewerInsulinEvent,
     ViewerIntakeEvent,
     ViewerIntakePage,
     ViewerSnapshot,
+    ViewerSessionCreate,
+    ViewerSessionResponse,
     ViewerTargetRange,
 )
-from .security import require_viewer_token
+from .security import (
+    VIEWER_SESSION_COOKIE,
+    issue_viewer_session,
+    require_viewer_token,
+    viewer_session_expiry_ms,
+    viewer_token_matches,
+)
 
 
 DEFAULT_SNAPSHOT_MS = 24 * 60 * 60_000
@@ -36,6 +47,143 @@ CURSOR_VERSION = 1
 
 SessionProvider = Callable[..., Generator[Session, None, None]]
 EventResponseFactory = Callable[[IntakeEventRecord, str | None], IntakeEvent]
+
+
+def _require_same_origin(request: Request) -> None:
+    """Reject cross-origin browser session mutations without enabling CORS."""
+
+    origin = request.headers.get("origin")
+    if origin is None:
+        return
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="cross-origin viewer sessions are not allowed",
+        ) from None
+    request_host = request.headers.get("host", "").casefold()
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or parsed.netloc.casefold() != request_host
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="cross-origin viewer sessions are not allowed",
+        )
+
+
+def _set_viewer_session_cookie(
+    response: Response,
+    encoded: str,
+    expires_at_ms: int,
+) -> None:
+    expires_at = datetime.fromtimestamp(expires_at_ms / 1_000, tz=UTC)
+    max_age = max(1, int(expires_at.timestamp() - time.time()))
+    response.set_cookie(
+        key=VIEWER_SESSION_COOKIE,
+        value=encoded,
+        max_age=max_age,
+        expires=expires_at,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+
+
+def create_viewer_session_router() -> APIRouter:
+    router = APIRouter(prefix="/v1/viewer", tags=["read-only viewer session"])
+
+    @router.post("/session", response_model=ViewerSessionResponse)
+    def create_session(
+        payload: ViewerSessionCreate,
+        request: Request,
+        response: Response,
+    ) -> ViewerSessionResponse:
+        _require_same_origin(request)
+        settings = request.app.state.settings
+        if settings.viewer_public:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="viewer public access is enabled; no session is required",
+            )
+        if not settings.viewer_auth_configured:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="backend viewer authentication is not configured",
+            )
+        supplied = payload.token.get_secret_value()
+        if not 32 <= len(supplied) <= 512 or not viewer_token_matches(
+            settings, supplied
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid viewer credentials",
+            )
+        encoded, expires_at_ms = issue_viewer_session(settings)
+        _set_viewer_session_cookie(response, encoded, expires_at_ms)
+        return ViewerSessionResponse(
+            access_mode="session",
+            expires_at_ms=expires_at_ms,
+        )
+
+    @router.get("/session", response_model=ViewerSessionResponse)
+    def session_status(request: Request, response: Response) -> ViewerSessionResponse:
+        settings = request.app.state.settings
+        if settings.viewer_public:
+            # Public mode has no browser session. Remove any cookie left by an
+            # earlier private deployment so switching modes cannot silently
+            # revive that old session later.
+            if VIEWER_SESSION_COOKIE in request.cookies:
+                response.delete_cookie(
+                    key=VIEWER_SESSION_COOKIE,
+                    path="/",
+                    secure=True,
+                    httponly=True,
+                    samesite="strict",
+                )
+            return ViewerSessionResponse(
+                access_mode="public",
+                expires_at_ms=None,
+            )
+        expires_at_ms = viewer_session_expiry_ms(
+            settings,
+            request.cookies.get(VIEWER_SESSION_COOKIE),
+        )
+        if expires_at_ms is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid viewer credentials",
+            )
+        # A successful foreground check rolls the session, so regularly used
+        # installed PWAs do not ask for the read-only token every month.
+        encoded, expires_at_ms = issue_viewer_session(settings)
+        _set_viewer_session_cookie(response, encoded, expires_at_ms)
+        return ViewerSessionResponse(
+            access_mode="session",
+            expires_at_ms=expires_at_ms,
+        )
+
+    @router.delete("/session", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_session(request: Request, response: Response) -> Response:
+        _require_same_origin(request)
+        response.delete_cookie(
+            key=VIEWER_SESSION_COOKIE,
+            path="/",
+            secure=True,
+            httponly=True,
+            samesite="strict",
+        )
+        response.status_code = status.HTTP_204_NO_CONTENT
+        return response
+
+    return router
 
 
 def _now_ms() -> int:
@@ -58,8 +206,24 @@ def _validate_window(from_ms: int, to_ms: int, now_ms: int) -> None:
         raise _http_422("viewer time windows cannot exceed 31 days")
 
 
+def _validate_public_window(request: Request, from_ms: int, to_ms: int) -> None:
+    if (
+        request.app.state.settings.viewer_public
+        and to_ms - from_ms > DEFAULT_SNAPSHOT_MS
+    ):
+        raise _http_422("public viewer windows cannot exceed 24 hours")
+
+
 def _cursor_key(request: Request) -> bytes:
     settings = request.app.state.settings
+    if settings.viewer_public:
+        # An internal process-local key keeps anonymous cursors tamper-resistant
+        # without introducing a user-visible login secret. Cursors are allowed
+        # to expire across a backend restart; clients can restart pagination.
+        return hashlib.sha256(
+            b"juggluco-viewer-public-cursor-v1\0"
+            + request.app.state.viewer_public_cursor_key
+        ).digest()
     secret = (
         settings.viewer_token
         if settings.viewer_auth_configured
@@ -99,6 +263,12 @@ def _encode_cursor(
     before_at_ms: int,
     before_id: str,
 ) -> str:
+    encoded_before_id = before_id
+    if request.app.state.settings.viewer_public and kind == "glucose":
+        encoded_before_id = _public_reading_id(
+            request.app.state.viewer_public_cursor_key,
+            before_id,
+        )
     payload = json.dumps(
         {
             "v": CURSOR_VERSION,
@@ -106,7 +276,7 @@ def _encode_cursor(
             "from_ms": from_ms,
             "to_ms": to_ms,
             "before_at_ms": before_at_ms,
-            "before_id": before_id,
+            "before_id": encoded_before_id,
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -177,23 +347,65 @@ def _page_window(
         before_id = decoded["before_id"]
     else:
         resolved_to = now_ms if to_ms is None else to_ms
+        default_page_ms = (
+            DEFAULT_SNAPSHOT_MS
+            if request.app.state.settings.viewer_public
+            else DEFAULT_PAGE_MS
+        )
         resolved_from = (
-            max(0, resolved_to - DEFAULT_PAGE_MS) if from_ms is None else from_ms
+            max(0, resolved_to - default_page_ms) if from_ms is None else from_ms
         )
         before_at_ms = None
         before_id = None
     _validate_window(resolved_from, resolved_to, now_ms)
+    _validate_public_window(request, resolved_from, resolved_to)
     return resolved_from, resolved_to, before_at_ms, before_id
 
 
-def _glucose_response(record: GlucoseReadingRecord) -> ViewerGlucoseReading:
+def _public_reading_id(key: bytes, reading_id: str) -> str:
+    digest = hmac.digest(key, reading_id.encode("utf-8"), "sha256").hex()
+    return f"reading-{digest[:24]}"
+
+
+def _private_reading_id_for_public_cursor(
+    session: Session,
+    *,
+    key: bytes,
+    measured_at_ms: int,
+    opaque_id: str,
+) -> str:
+    candidates = session.scalars(
+        select(GlucoseReadingRecord.reading_id).where(
+            GlucoseReadingRecord.measured_at_ms == measured_at_ms
+        )
+    )
+    matches = [
+        candidate
+        for candidate in candidates
+        if _public_reading_id(key, candidate) == opaque_id
+    ]
+    if len(matches) != 1:
+        raise _http_422("invalid or mismatched viewer cursor")
+    return matches[0]
+
+
+def _glucose_response(
+    record: GlucoseReadingRecord,
+    *,
+    public_key: bytes | None = None,
+) -> ViewerGlucoseReading:
+    is_public = public_key is not None
     return ViewerGlucoseReading(
-        reading_id=record.reading_id,
+        reading_id=(
+            _public_reading_id(public_key, record.reading_id)
+            if public_key is not None
+            else record.reading_id
+        ),
         measured_at_ms=record.measured_at_ms,
         glucose_mg_dl=record.glucose_mg_dl,
         trend_mg_dl_min=record.trend_mg_dl_min,
-        sensor_id=record.sensor_id,
-        sensor_generation=record.sensor_generation,
+        sensor_id=None if is_public else record.sensor_id,
+        sensor_generation=None if is_public else record.sensor_generation,
         quality=record.quality,
         utc_offset_minutes=record.utc_offset_minutes,
         received_at_ms=record.received_at_ms,
@@ -203,9 +415,11 @@ def _glucose_response(record: GlucoseReadingRecord) -> ViewerGlucoseReading:
 def _current_glucose_response(
     record: GlucoseReadingRecord,
     now_ms: int,
+    *,
+    public_key: bytes | None = None,
 ) -> ViewerCurrentGlucose:
     return ViewerCurrentGlucose(
-        **_glucose_response(record).model_dump(),
+        **_glucose_response(record, public_key=public_key).model_dump(),
         age_ms=max(0, now_ms - record.measured_at_ms),
         is_stale=now_ms - record.measured_at_ms > STALE_AFTER_MS,
     )
@@ -270,6 +484,24 @@ def _intake_response(
     )
 
 
+def _insulin_response(record: IntakeEventRecord) -> ViewerInsulinEvent:
+    insulin_type = record.insulin_type
+    insulin_units = record.insulin_units
+    if insulin_type not in {"rapid", "long"} or insulin_units is None:
+        # The query below excludes this state. Keep construction fail-closed in
+        # case a legacy or manually modified record reaches this projection.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="stored insulin event has an unsupported type",
+        )
+    return ViewerInsulinEvent(
+        occurred_at_ms=record.occurred_at_ms,
+        insulin_units=insulin_units,
+        insulin_type=insulin_type,
+        insulin_name=record.insulin_name,
+    )
+
+
 def _active_intake_filter():
     return and_(
         IntakeEventRecord.deleted_at_ms.is_(None),
@@ -278,6 +510,14 @@ def _active_intake_filter():
             IntakeEventRecord.carbs_g.is_not(None),
             IntakeEventRecord.insulin_type.in_(("rapid", "long")),
         ),
+    )
+
+
+def _active_insulin_filter():
+    return and_(
+        IntakeEventRecord.deleted_at_ms.is_(None),
+        IntakeEventRecord.insulin_type.in_(("rapid", "long")),
+        IntakeEventRecord.insulin_units.is_not(None),
     )
 
 
@@ -303,6 +543,10 @@ def create_viewer_router(
         event_limit: int = Query(default=100, ge=1, le=500),
     ) -> ViewerSnapshot:
         now = _now_ms()
+        is_public = request.app.state.settings.viewer_public
+        public_key = (
+            request.app.state.viewer_public_cursor_key if is_public else None
+        )
         resolved_to = now if to_ms is None else to_ms
         resolved_from = (
             max(0, resolved_to - DEFAULT_SNAPSHOT_MS)
@@ -310,6 +554,7 @@ def create_viewer_router(
             else from_ms
         )
         _validate_window(resolved_from, resolved_to, now)
+        _validate_public_window(request, resolved_from, resolved_to)
 
         current = session.scalar(
             select(GlucoseReadingRecord).order_by(
@@ -335,11 +580,11 @@ def create_viewer_router(
         glucose_rows = glucose_rows[:glucose_limit]
         glucose_rows.reverse()
 
-        intake_rows = list(
+        insulin_rows = list(
             session.scalars(
                 select(IntakeEventRecord)
                 .where(
-                    _active_intake_filter(),
+                    _active_insulin_filter(),
                     IntakeEventRecord.occurred_at_ms >= resolved_from,
                     IntakeEventRecord.occurred_at_ms <= resolved_to,
                 )
@@ -350,23 +595,57 @@ def create_viewer_router(
                 .limit(event_limit + 1)
             )
         )
-        intake_truncated = len(intake_rows) > event_limit
-        intake_rows = intake_rows[:event_limit]
-        intake_rows.reverse()
-        analysis_json = _analysis_json_by_id(session, intake_rows)
+        insulin_truncated = len(insulin_rows) > event_limit
+        insulin_rows = insulin_rows[:event_limit]
+        insulin_rows.reverse()
+
+        intake_rows: list[IntakeEventRecord] = []
+        intake_truncated = False
+        analysis_json: dict[str, str] = {}
+        if not is_public:
+            intake_rows = list(
+                session.scalars(
+                    select(IntakeEventRecord)
+                    .where(
+                        _active_intake_filter(),
+                        IntakeEventRecord.occurred_at_ms >= resolved_from,
+                        IntakeEventRecord.occurred_at_ms <= resolved_to,
+                    )
+                    .order_by(
+                        IntakeEventRecord.occurred_at_ms.desc(),
+                        IntakeEventRecord.id.desc(),
+                    )
+                    .limit(event_limit + 1)
+                )
+            )
+            intake_truncated = len(intake_rows) > event_limit
+            intake_rows = intake_rows[:event_limit]
+            intake_rows.reverse()
+            analysis_json = _analysis_json_by_id(session, intake_rows)
 
         forecast: ForecastCurrentResponse = (
             request.app.state.forecast_service.current(session, now_ms=now)
         )
+        if is_public and forecast.activities:
+            forecast = forecast.model_copy(update={"activities": []})
         return ViewerSnapshot(
             server_time_ms=now,
             from_ms=resolved_from,
             to_ms=resolved_to,
             target_range=ViewerTargetRange(),
             current_glucose=(
-                _current_glucose_response(current, now) if current is not None else None
+                _current_glucose_response(
+                    current,
+                    now,
+                    public_key=public_key,
+                )
+                if current is not None
+                else None
             ),
-            glucose_history=[_glucose_response(row) for row in glucose_rows],
+            glucose_history=[
+                _glucose_response(row, public_key=public_key)
+                for row in glucose_rows
+            ],
             glucose_history_truncated=glucose_truncated,
             intake_events=[
                 _intake_response(
@@ -377,6 +656,8 @@ def create_viewer_router(
                 for row in intake_rows
             ],
             intake_events_truncated=intake_truncated,
+            insulin_events=[_insulin_response(row) for row in insulin_rows],
+            insulin_events_truncated=insulin_truncated,
             forecast=forecast,
         )
 
@@ -390,6 +671,11 @@ def create_viewer_router(
         limit: int = Query(default=200, ge=1, le=500),
     ) -> ViewerGlucosePage:
         now = _now_ms()
+        public_key = (
+            request.app.state.viewer_public_cursor_key
+            if request.app.state.settings.viewer_public
+            else None
+        )
         resolved_from, resolved_to, before_at_ms, before_id = _page_window(
             request,
             kind="glucose",
@@ -398,6 +684,13 @@ def create_viewer_router(
             to_ms=to_ms,
             now_ms=now,
         )
+        if public_key is not None and before_at_ms is not None and before_id is not None:
+            before_id = _private_reading_id_for_public_cursor(
+                session,
+                key=public_key,
+                measured_at_ms=before_at_ms,
+                opaque_id=before_id,
+            )
         statement = select(GlucoseReadingRecord).where(
             GlucoseReadingRecord.measured_at_ms >= resolved_from,
             GlucoseReadingRecord.measured_at_ms <= resolved_to,
@@ -434,7 +727,10 @@ def create_viewer_router(
                 before_id=last.reading_id,
             )
         return ViewerGlucosePage(
-            items=[_glucose_response(row) for row in rows],
+            items=[
+                _glucose_response(row, public_key=public_key)
+                for row in rows
+            ],
             next_cursor=next_cursor,
             has_more=has_more,
         )

@@ -31,6 +31,28 @@ forecast-export-*/
 *.sqlite
 *.sqlite3
 
+# React PWA generated state
+pwa/node_modules/
+pwa/dist/
+pwa/coverage/
+pwa/.vite/
+pwa/test-results/
+
+# Local Android UI QA captures
+/qa-*.png
+/qa-*.xml
+/emulator-*.png
+/emulator-*.xml
+/phone-*.png
+/phone-*.xml
+/dashboard-*.png
+/dashboard-*.xml
+/current-*.png
+/current-*.xml
+/postfix-*.png
+/postfix-*.xml
+/backend/qa-*.xml
+
 # IDE and OS files
 .idea/
 *.iml

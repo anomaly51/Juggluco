@@ -4,7 +4,14 @@ import time
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 
 class AnalysisItem(BaseModel):
@@ -758,6 +765,22 @@ class GlucoseReadingsResponse(BaseModel):
     forecast_generated: bool
 
 
+class ViewerSessionCreate(BaseModel):
+    """One-time browser login payload; the secret is never serialized back."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: SecretStr
+
+
+class ViewerSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    authenticated: Literal[True] = True
+    access_mode: Literal["session", "public"]
+    expires_at_ms: int | None = Field(default=None, gt=0)
+
+
 class ViewerTargetRange(BaseModel):
     """The application's fixed display target in both supported units."""
 
@@ -817,6 +840,17 @@ class ViewerIntakeEvent(BaseModel):
     )
     absorption_confidence: float | None = Field(default=None, ge=0, le=1)
     updated_at_ms: int = Field(gt=0)
+
+
+class ViewerInsulinEvent(BaseModel):
+    """Identifier-free insulin projection safe for a shared viewer link."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    occurred_at_ms: int = Field(gt=0)
+    insulin_units: float = Field(gt=0, le=500, allow_inf_nan=False)
+    insulin_type: Literal["rapid", "long"]
+    insulin_name: str | None = Field(default=None, max_length=120)
 
 
 class ViewerGlucosePage(BaseModel):
@@ -1005,6 +1039,9 @@ class ViewerSnapshot(BaseModel):
     intake_events: list[ViewerIntakeEvent]
     intake_events_order: Literal["oldest_first"] = "oldest_first"
     intake_events_truncated: bool
+    insulin_events: list[ViewerInsulinEvent]
+    insulin_events_order: Literal["oldest_first"] = "oldest_first"
+    insulin_events_truncated: bool
     forecast: ForecastCurrentResponse
 
 

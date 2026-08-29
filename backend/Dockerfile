@@ -1,13 +1,29 @@
+FROM node:22-alpine AS pwa-build
+
+WORKDIR /source/pwa
+
+RUN corepack enable && corepack prepare pnpm@11.19.0 --activate
+
+COPY pwa/package.json pwa/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY pwa/ ./
+RUN pnpm build
+
+
 FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    JUGGLUCO_DATABASE_PATH=/data/juggluco.db \
+    JUGGLUCO_PWA_DIST_PATH=/app/pwa/dist
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
-COPY app ./app
+COPY backend/pyproject.toml backend/README.md ./
+COPY backend/app ./app
+COPY --from=pwa-build /source/pwa/dist ./pwa/dist
 
 RUN python -m pip install --no-cache-dir . \
     && groupadd --gid 10001 juggluco \

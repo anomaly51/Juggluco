@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import math
 import re
+import secrets
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -23,7 +25,10 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
@@ -98,6 +103,8 @@ from .openrouter import (
     OpenRouterMealAnalyzer,
     OpenRouterMealChatAnalyzer,
 )
+from .pwa import mount_viewer_pwa
+from .request_limits import ViewerSessionBodyLimitMiddleware
 from .schemas import (
     AnalysisResponse,
     ForecastCurrentResponse,
@@ -128,10 +135,36 @@ from .schemas import (
     TranscriptionResponse,
 )
 from .security import require_api_token
-from .viewer import create_viewer_router
+from .viewer import create_viewer_router, create_viewer_session_router
 
 
 logger = logging.getLogger(__name__)
+
+
+def _is_secure_browser_request(request: Request) -> bool:
+    if request.url.scheme == "https":
+        return True
+    settings: Settings = request.app.state.settings
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    peer: ipaddress.IPv4Address | ipaddress.IPv6Address | None = None
+    if request.client is not None:
+        try:
+            peer = ipaddress.ip_address(request.client.host)
+        except ValueError:
+            pass
+    if forwarded_proto == "https" and peer is not None:
+        try:
+            if any(
+                peer in ipaddress.ip_network(configured)
+                for configured in settings.viewer_trusted_proxy_cidrs
+            ):
+                return True
+        except ValueError:
+            pass
+    # The Host header is controlled by the caller and cannot prove that an HTTP
+    # request stayed on this machine.  Permit the development exception only
+    # for a connection whose actual network peer is loopback.
+    return bool(peer is not None and peer.is_loopback)
 
 
 _PENDING_INSULIN_FOLLOWUP_WINDOW_MS = 2 * 60 * 1_000
@@ -2483,6 +2516,9 @@ def create_app(
         lifespan=lifespan,
     )
     application.state.settings = settings
+    # Public viewer pagination still gets tamper-resistant, process-local
+    # cursors without requiring a user-visible viewer credential.
+    application.state.viewer_public_cursor_key = secrets.token_bytes(32)
     application.state.database = database
     application.state.analyzer = analyzer
     application.state.chat_analyzer = chat_analyzer
@@ -2493,19 +2529,74 @@ def create_app(
         TrustedHostMiddleware,
         allowed_hosts=list(settings.allowed_hosts),
     )
+    application.add_middleware(ViewerSessionBodyLimitMiddleware)
+
+    @application.exception_handler(RequestValidationError)
+    async def redact_viewer_session_validation(
+        request: Request,
+        error: RequestValidationError,
+    ):
+        if request.url.path == "/v1/viewer/session":
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                content={"detail": "invalid viewer session request"},
+            )
+        return await request_validation_exception_handler(request, error)
 
     @application.middleware("http")
     async def security_headers(request: Request, call_next):
-        response = await call_next(request)
+        viewer_browser_path = (
+            request.url.path == "/viewer"
+            or request.url.path.startswith("/viewer/")
+            or request.url.path.startswith("/v1/viewer/")
+        )
+        secure_browser_request = _is_secure_browser_request(request)
+        if viewer_browser_path and not secure_browser_request:
+            response = JSONResponse(
+                status_code=status.HTTP_426_UPGRADE_REQUIRED,
+                content={"detail": "the viewer requires HTTPS"},
+                headers={"Upgrade": "TLS/1.2, HTTP/1.1"},
+            )
+        else:
+            response = await call_next(request)
         if request.url.path.startswith("/v1/viewer/"):
             # Viewer responses contain health data and may traverse a remote
             # reverse proxy.  Explicitly forbid both shared and private caches
             # and keep credential-dependent representations separated.
             response.headers["Cache-Control"] = "no-store, private"
-            response.headers["Vary"] = "Authorization"
+            response.headers["Vary"] = "Authorization, Cookie"
+        elif request.url.path.startswith("/viewer/assets/"):
+            if response.status_code in {status.HTTP_200_OK, status.HTTP_304_NOT_MODIFIED}:
+                response.headers["Cache-Control"] = (
+                    "public, max-age=31536000, immutable"
+                )
+            else:
+                response.headers["Cache-Control"] = "no-store"
+        elif request.url.path == "/viewer" or request.url.path.startswith("/viewer/"):
+            # The service worker owns versioning of the application shell.  HTML,
+            # the manifest, and the worker themselves must always revalidate.
+            response.headers["Cache-Control"] = "no-cache"
+            if request.url.path == "/viewer/sw.js":
+                response.headers["Service-Worker-Allowed"] = "/viewer/"
         else:
             response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Frame-Options"] = "DENY"
+        if viewer_browser_path:
+            response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        )
+        if request.url.path == "/viewer" or request.url.path.startswith("/viewer/"):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; base-uri 'none'; connect-src 'self'; "
+                "font-src 'self'; form-action 'self'; frame-ancestors 'none'; "
+                "img-src 'self' data:; manifest-src 'self'; object-src 'none'; "
+                "script-src 'self'; style-src 'self'; worker-src 'self'"
+            )
+        if viewer_browser_path and secure_browser_request:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
         response.headers["X-Request-ID"] = request.headers.get(
             "X-Request-ID", str(uuid4())
         )[:128]
@@ -5751,7 +5842,9 @@ def create_app(
         )
 
     application.include_router(router)
+    application.include_router(create_viewer_session_router())
     application.include_router(create_viewer_router(get_session, _event_response))
+    mount_viewer_pwa(application, settings.pwa_dist_path)
     return application
 
 

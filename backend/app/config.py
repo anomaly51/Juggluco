@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import secrets
@@ -10,11 +11,14 @@ from dotenv import load_dotenv
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = BACKEND_ROOT.parent
+DEFAULT_PWA_DIST_PATH = (REPOSITORY_ROOT / "pwa" / "dist").resolve()
 
 
 _AUDIO_LANGUAGE_TAG = re.compile(
     r"^[A-Za-z]{2}(?:[-_][A-Za-z0-9]{2,8})*$"
 )
+_VIEWER_TOKEN = re.compile(r"^[A-Za-z0-9._~-]{32,512}$")
 
 
 def normalize_audio_language(value: str | None) -> str | None:
@@ -62,6 +66,20 @@ def _positive_float(name: str, default: float) -> float:
     return value
 
 
+def _boolean(name: str, default: bool = False) -> bool:
+    """Parse an explicit boolean environment flag without truthy surprises."""
+
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    normalized = raw.strip().casefold()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise ValueError(f"{name} must be true or false")
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     database_path: Path
@@ -83,6 +101,12 @@ class Settings:
     # it separate from ``api_token`` means a companion device never needs the
     # Android/admin credential that can create or edit health records.
     viewer_token: str | None = None
+    # Deliberate opt-in for link-only, anonymous GET access to health data.
+    # It never changes authentication on the admin/write router.
+    viewer_public: bool = False
+    viewer_session_days: int = 30
+    pwa_dist_path: Path = DEFAULT_PWA_DIST_PATH
+    viewer_trusted_proxy_cidrs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         try:
@@ -96,16 +120,41 @@ class Settings:
         object.__setattr__(
             self, "openrouter_audio_language", normalized_audio_language
         )
-        if self.viewer_token is not None and len(self.viewer_token) < 32:
-            raise ValueError("JUGGLUCO_VIEWER_TOKEN must be at least 32 characters")
+        if (
+            self.viewer_token is not None
+            and _VIEWER_TOKEN.fullmatch(self.viewer_token) is None
+        ):
+            raise ValueError(
+                "JUGGLUCO_VIEWER_TOKEN must contain between 32 and 512 "
+                "URL-safe ASCII characters"
+            )
         if (
             self.viewer_token is not None
             and self.api_token is not None
-            and secrets.compare_digest(self.viewer_token, self.api_token)
+            and secrets.compare_digest(
+                self.viewer_token.encode("utf-8"), self.api_token.encode("utf-8")
+            )
         ):
             raise ValueError(
                 "JUGGLUCO_VIEWER_TOKEN must differ from JUGGLUCO_API_TOKEN"
             )
+        if not 1 <= self.viewer_session_days <= 365:
+            raise ValueError("JUGGLUCO_VIEWER_SESSION_DAYS must be between 1 and 365")
+        normalized_proxy_cidrs: list[str] = []
+        for configured_cidr in self.viewer_trusted_proxy_cidrs:
+            try:
+                network = ipaddress.ip_network(configured_cidr, strict=False)
+            except ValueError as error:
+                raise ValueError(
+                    "JUGGLUCO_VIEWER_TRUSTED_PROXY_CIDRS must contain only IP networks"
+                ) from error
+            normalized_proxy_cidrs.append(str(network))
+        object.__setattr__(
+            self,
+            "viewer_trusted_proxy_cidrs",
+            tuple(normalized_proxy_cidrs),
+        )
+        object.__setattr__(self, "pwa_dist_path", self.pwa_dist_path.expanduser().resolve())
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -126,6 +175,12 @@ class Settings:
         )
         if not hosts:
             raise ValueError("JUGGLUCO_ALLOWED_HOSTS must contain at least one host")
+
+        configured_pwa_dist = Path(
+            os.getenv("JUGGLUCO_PWA_DIST_PATH", str(DEFAULT_PWA_DIST_PATH))
+        ).expanduser()
+        if not configured_pwa_dist.is_absolute():
+            configured_pwa_dist = (REPOSITORY_ROOT / configured_pwa_dist).resolve()
 
         return cls(
             database_path=database_path,
@@ -165,6 +220,16 @@ class Settings:
                 "JUGGLUCO_MEAL_CHAT_MAX_HISTORY_MESSAGES", 40
             ),
             viewer_token=os.getenv("JUGGLUCO_VIEWER_TOKEN") or None,
+            viewer_public=_boolean("JUGGLUCO_VIEWER_PUBLIC"),
+            viewer_session_days=_positive_int("JUGGLUCO_VIEWER_SESSION_DAYS", 30),
+            pwa_dist_path=configured_pwa_dist,
+            viewer_trusted_proxy_cidrs=tuple(
+                value.strip()
+                for value in os.getenv(
+                    "JUGGLUCO_VIEWER_TRUSTED_PROXY_CIDRS", ""
+                ).split(",")
+                if value.strip()
+            ),
         )
 
     @property
@@ -178,3 +243,7 @@ class Settings:
     @property
     def viewer_auth_configured(self) -> bool:
         return self.viewer_token is not None and len(self.viewer_token) >= 32
+
+    @property
+    def viewer_access_configured(self) -> bool:
+        return self.viewer_public or self.viewer_auth_configured or self.auth_configured

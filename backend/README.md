@@ -49,6 +49,19 @@ Put the generated random value in `JUGGLUCO_API_TOKEN` in `.env`, then put a new
 created OpenRouter key in `OPENROUTER_API_KEY`. Keep `.env` local; it is ignored by Git.
 The selected model IDs are configuration, not Android constants.
 
+Build the installable React PWA once before starting the backend. It is then
+served from the same origin at `/viewer/`:
+
+```powershell
+cd C:\path\to\Juggluco\pwa
+pnpm install --frozen-lockfile
+pnpm build
+cd ..\backend
+```
+
+The production bundle, manifest, service worker, and icons are generated in
+`pwa/dist`; Node.js is not needed by the running Python process.
+
 Meal chat defaults to the economical vision-capable
 [`qwen/qwen3-vl-8b-instruct`](https://openrouter.ai/qwen/qwen3-vl-8b-instruct),
 selected from OpenRouter's official model catalog with image input, structured-output,
@@ -101,28 +114,66 @@ review.
 
 ## API contract
 
-### Read-only iOS/viewer API
+### Read-only PWA/viewer API
 
-Generate a second, unrelated credential for companion viewer devices:
+The viewer is private by default. Generate a second, unrelated credential for
+companion viewer devices:
 
 ```powershell
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Put it in `JUGGLUCO_VIEWER_TOKEN`. It must be at least 32 characters and must
-not equal `JUGGLUCO_API_TOKEN`. Send it as `Authorization: Bearer <token>` only
-to `GET /v1/viewer/*`. The viewer credential is deliberately rejected by all
-existing Android/admin routes, including glucose ingestion and meal/insulin
-create, edit, and delete operations. The admin token remains accepted on the
-viewer routes for backwards-compatible diagnostics, but it should never be
-copied to an iPhone. Store the viewer token in Keychain, not source code or
-`UserDefaults`.
+Put it in `JUGGLUCO_VIEWER_TOKEN`. It must contain 32–512 URL-safe ASCII
+characters and must
+not equal `JUGGLUCO_API_TOKEN`. Open the same-origin PWA at `/viewer/` and enter
+this viewer token once. `POST /v1/viewer/session` exchanges it for a signed
+`Secure`, `HttpOnly`, `SameSite=Strict` cookie and never returns or stores the
+token in React, IndexedDB, Cache Storage, a URL, or source code. The default
+session lifetime is 30 days (`JUGGLUCO_VIEWER_SESSION_DAYS`); a foreground
+session check renews it, while rotating the viewer token revokes every old
+browser session immediately. “Выйти и удалить данные” removes the cookie from
+that browser and clears its local PWA data; rotate `JUGGLUCO_VIEWER_TOKEN` if a
+copied session must be revoked before its expiry.
 
-Remote access must use HTTPS with a valid certificate. The local LAN launcher
-is for a trusted private Wi-Fi network only; do not port-forward it. A public
+For an intentional link-only deployment, set `JUGGLUCO_VIEWER_PUBLIC=true`.
+This is an explicit opt-in and defaults to `false`; any value other than exactly
+`true` or `false` prevents startup. In public mode anyone who can reach the URL
+can read current and historical glucose plus a sanitized forecast. Public
+responses replace reading IDs with process-local opaque IDs, omit sensor identity,
+forecast activity metadata and meals. It exposes only a separate minimized
+insulin projection (time, units, rapid/long type, and display name) requested
+for the graph; event IDs, client IDs, edit metadata, and meal fields remain
+private. `/v1/viewer/intakes` returns 403.
+`GET /v1/viewer/session` returns
+`{"authenticated":true,"access_mode":"public","expires_at_ms":null}` without
+creating a cookie, and the snapshot/glucose endpoints accept anonymous requests.
+`POST /v1/viewer/session` returns HTTP 409 because no login is required;
+`DELETE /v1/viewer/session` remains an idempotent same-origin operation that clears
+an old cookie. Setting public mode never relaxes the separate admin Bearer check:
+all ingestion, chat, create, edit, and delete routes still require
+`JUGGLUCO_API_TOKEN`.
+
+The viewer credential, session, and anonymous public access are deliberately
+rejected by all existing
+Android/admin routes, including glucose ingestion and meal/insulin create,
+edit, and delete operations. Bearer viewer/admin credentials remain accepted
+on the GET-only viewer routes for backwards-compatible diagnostics, but the
+admin token must never be entered in the PWA.
+
+Remote viewer access must use HTTPS with a valid certificate: `/viewer/*` and
+`/v1/viewer/*` fail closed on plain HTTP except on `localhost`/loopback for
+development. When TLS terminates at a reverse proxy, set
+`JUGGLUCO_VIEWER_TRUSTED_PROXY_CIDRS` to that proxy's exact source IP/CIDR so
+the application may accept its `X-Forwarded-Proto: https`; never configure a
+public catch-all network. The local LAN launcher is for the Android writer on a trusted
+private Wi-Fi network only; it does not make a LAN-hosted PWA installable. A public
 deployment additionally needs per-device credential rotation, an allowlisted
 host name, edge rate limiting, backups, and the privacy/compliance controls
 appropriate for health data.
+
+The unauthenticated session-exchange body is capped at 2 KiB (including
+chunked requests), validation errors redact their input, and production TLS
+gateways should additionally rate-limit failed session exchanges.
 
 `GET /v1/viewer/snapshot` is the bounded dashboard bootstrap. Query parameters:
 
@@ -166,6 +217,16 @@ The response has stable, explicit fields:
   "intake_events": [],
   "intake_events_order": "oldest_first",
   "intake_events_truncated": false,
+  "insulin_events": [
+    {
+      "occurred_at_ms": 1787212200000,
+      "insulin_units": 5.0,
+      "insulin_type": "rapid",
+      "insulin_name": "NovoRapid"
+    }
+  ],
+  "insulin_events_order": "oldest_first",
+  "insulin_events_truncated": false,
   "forecast": {"status": "no_data", "points": []}
 }
 ```
@@ -182,10 +243,20 @@ identifiers are not returned. The nested forecast uses the existing
 `ForecastCurrentResponse` contract and remains a conditional visualization,
 never a dose recommendation.
 
+That full projection describes authenticated private mode. Public mode keeps
+the same shape for PWA compatibility but returns an empty intake timeline,
+removes forecast activities and sensor identity, replaces source reading IDs
+with process-local opaque IDs, and retains only the minimized `insulin_events`
+projection described above. Anyone with the public link can therefore see
+those insulin doses and times.
+
 Older history is available from:
 
 - `GET /v1/viewer/glucose?cursor=&limit=&from_ms=&to_ms=`;
 - `GET /v1/viewer/intakes?cursor=&limit=&from_ms=&to_ms=`.
+
+The intake page endpoint is available only in authenticated private mode and
+returns 403 while public mode is enabled.
 
 Both return `items`, nullable `next_cursor`, `has_more`, and
 `order="newest_first"`. `limit` is 1-500. The first request defaults to a
@@ -197,9 +268,11 @@ the other endpoint, or supplying different window parameters returns `422`.
 
 These are browsing cursors, not durable synchronization revisions. A corrected
 CGM row keeps its source ID/time, and the active-only intake view omits
-tombstones. An iOS viewer that caches data should periodically replace its
-bounded rolling window with a fresh snapshot rather than treating page cursors
-as change cursors. Android incremental synchronization continues to use
+tombstones. The PWA stores one explicitly labelled last-good offline snapshot
+in IndexedDB and periodically replaces its bounded rolling window with a fresh
+snapshot rather than treating page cursors as change cursors. The service
+worker caches only the application shell, never `/v1/*` responses. Android
+incremental synchronization continues to use
 `GET /v1/intakes?after_sync_version=...` unchanged.
 
 ### Health
