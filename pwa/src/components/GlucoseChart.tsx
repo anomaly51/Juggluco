@@ -8,6 +8,8 @@ const DEFAULT_SIZE = { width: 820, height: 330 }
 const GAP_MS = 10 * 60_000
 const RANGE_OPTIONS = [3, 6, 8, 12, 24] as RangeHours[]
 
+type GlucoseZone = 'low' | 'target' | 'high'
+
 interface ChartProps {
   snapshot: ViewerSnapshot
   savedAt: number | null
@@ -25,6 +27,7 @@ interface InspectablePoint {
   insulinName?: string | null
   insulinUnits?: number
   chartY?: number
+  glucoseZone?: GlucoseZone
 }
 
 interface InsulinAnnotation {
@@ -37,6 +40,16 @@ interface InsulinAnnotation {
   markerY: number
   labelX: number
   labelAnchor: 'start' | 'end'
+}
+
+interface GlucoseLinePoint {
+  atMs: number
+  valueMgDl: number
+}
+
+interface ZonedGlucoseLine {
+  zone: GlucoseZone
+  points: GlucoseLinePoint[]
 }
 
 function splitAtGaps(points: GlucoseReading[]): GlucoseReading[][] {
@@ -61,6 +74,73 @@ function insulinUnits(units: number): string {
   return units.toLocaleString('ru-RU', { maximumFractionDigits: 1 })
 }
 
+function glucoseZone(valueMgDl: number, lowMgDl: number, highMgDl: number): GlucoseZone {
+  if (valueMgDl < lowMgDl) return 'low'
+  if (valueMgDl > highMgDl) return 'high'
+  return 'target'
+}
+
+function glucoseZoneLabel(zone: GlucoseZone): string {
+  if (zone === 'low') return 'ниже цели'
+  if (zone === 'high') return 'выше цели'
+  return 'в цели'
+}
+
+function glucoseZoneSentence(zone: GlucoseZone): string {
+  if (zone === 'low') return 'Ниже целевого диапазона.'
+  if (zone === 'high') return 'Выше целевого диапазона.'
+  return 'В целевом диапазоне.'
+}
+
+function splitGlucoseLine(
+  points: GlucoseLinePoint[],
+  lowMgDl: number,
+  highMgDl: number,
+): ZonedGlucoseLine[] {
+  const result: ZonedGlucoseLine[] = []
+  const thresholds = [lowMgDl, highMgDl]
+
+  const interpolate = (left: GlucoseLinePoint, right: GlucoseLinePoint, ratio: number): GlucoseLinePoint => ({
+    atMs: left.atMs + (right.atMs - left.atMs) * ratio,
+    valueMgDl: left.valueMgDl + (right.valueMgDl - left.valueMgDl) * ratio,
+  })
+
+  for (let index = 1; index < points.length; index += 1) {
+    const left = points[index - 1]
+    const right = points[index]
+    const ratios = [0, 1]
+    const delta = right.valueMgDl - left.valueMgDl
+    if (delta !== 0) {
+      for (const threshold of thresholds) {
+        const ratio = (threshold - left.valueMgDl) / delta
+        if (ratio > 0 && ratio < 1) ratios.push(ratio)
+      }
+    }
+    ratios.sort((a, b) => a - b)
+
+    for (let ratioIndex = 1; ratioIndex < ratios.length; ratioIndex += 1) {
+      const segmentStart = interpolate(left, right, ratios[ratioIndex - 1])
+      const segmentEnd = interpolate(left, right, ratios[ratioIndex])
+      const midpoint = (segmentStart.valueMgDl + segmentEnd.valueMgDl) / 2
+      const zone = glucoseZone(midpoint, lowMgDl, highMgDl)
+      const previous = result.at(-1)
+      const previousEnd = previous?.points.at(-1)
+
+      if (
+        previous?.zone === zone
+        && previousEnd?.atMs === segmentStart.atMs
+        && previousEnd.valueMgDl === segmentStart.valueMgDl
+      ) {
+        previous.points.push(segmentEnd)
+      } else {
+        result.push({ zone, points: [segmentStart, segmentEnd] })
+      }
+    }
+  }
+
+  return result
+}
+
 function insulinDescription(point: Pick<InspectablePoint, 'atMs' | 'kind' | 'insulinName' | 'insulinUnits'>): string {
   const rapid = point.kind === 'insulin-rapid'
   const name = point.insulinName?.trim() || (rapid ? 'Быстрый инсулин' : 'Длительный инсулин')
@@ -69,10 +149,11 @@ function insulinDescription(point: Pick<InspectablePoint, 'atMs' | 'kind' | 'ins
 
 function inspectionText(point: InspectablePoint): string {
   if (point.kind === 'insulin-rapid' || point.kind === 'insulin-long') return insulinDescription(point)
+  const zone = point.glucoseZone ? ` ${glucoseZoneSentence(point.glucoseZone)}` : ''
   if (point.kind === 'forecast') {
-    return `Прогноз на ${time(point.atMs)}: ${mmol(point.valueMgDl!)} ммоль/л, диапазон ${mmol(point.lowMgDl!)}–${mmol(point.highMgDl!)}.`
+    return `Прогноз на ${time(point.atMs)}: ${mmol(point.valueMgDl!)} ммоль/л, диапазон ${mmol(point.lowMgDl!)}–${mmol(point.highMgDl!)}.${zone}`
   }
-  return `Измерение в ${time(point.atMs)}: ${mmol(point.valueMgDl!)} ммоль/л.`
+  return `Измерение в ${time(point.atMs)}: ${mmol(point.valueMgDl!)} ммоль/л.${zone}`
 }
 
 export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartProps) {
@@ -80,6 +161,7 @@ export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartP
   const descriptionId = useId()
   const helpId = useId()
   const liveId = useId()
+  const zoneClipPrefix = `glucose-zone-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const viewportRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState(DEFAULT_SIZE)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
@@ -155,6 +237,9 @@ export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartP
   const plotHeight = Math.max(1, chartHeight - margin.top - margin.bottom)
   const x = (atMs: number) => margin.left + ((atMs - start) / Math.max(1, end - start)) * plotWidth
   const y = (mgDl: number) => margin.top + ((yHigh - mgDl) / (yHigh - yLow)) * plotHeight
+  const plotBottom = margin.top + plotHeight
+  const targetTop = y(snapshot.targetRange.highMgDl)
+  const targetBottom = y(snapshot.targetRange.lowMgDl)
   const linePath = <T,>(points: T[], at: (point: T) => number, value: (point: T) => number) =>
     points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${x(at(point)).toFixed(1)} ${y(value(point)).toFixed(1)}`).join(' ')
   const uncertainty = forecast.length
@@ -164,6 +249,34 @@ export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartP
       ].join(' ')
     : ''
   const actualSegments = splitAtGaps(actual)
+  const actualZoneSegments = actualSegments.flatMap((segment, gapIndex) =>
+    splitGlucoseLine(
+      segment.map((point) => ({ atMs: point.measuredAtMs, valueMgDl: point.glucoseMgDl })),
+      snapshot.targetRange.lowMgDl,
+      snapshot.targetRange.highMgDl,
+    ).map((zoned, zoneIndex) => ({
+      ...zoned,
+      key: `${segment[0].readingId}-${gapIndex}-${zoneIndex}`,
+    })),
+  )
+  const forecastZoneSegments = splitGlucoseLine(
+    forecast.map((point) => ({ atMs: point.atMs, valueMgDl: point.medianMgDl })),
+    snapshot.targetRange.lowMgDl,
+    snapshot.targetRange.highMgDl,
+  )
+  let cumulativeForecastDistance = 0
+  const forecastRenderSegments = forecastZoneSegments.map((segment) => {
+    const dashOffset = -cumulativeForecastDistance
+    for (let index = 1; index < segment.points.length; index += 1) {
+      const left = segment.points[index - 1]
+      const right = segment.points[index]
+      cumulativeForecastDistance += Math.hypot(
+        x(right.atMs) - x(left.atMs),
+        y(right.valueMgDl) - y(left.valueMgDl),
+      )
+    }
+    return { ...segment, dashOffset }
+  })
   const insulinAnnotations = (() => {
     const maxLanes = plotHeight < 175 ? 2 : plotHeight < 235 ? 3 : 4
     const lastXByLane = Array.from({ length: maxLanes }, () => Number.NEGATIVE_INFINITY)
@@ -209,6 +322,7 @@ export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartP
       atMs: point.measuredAtMs,
       valueMgDl: point.glucoseMgDl,
       chartY: y(point.glucoseMgDl),
+      glucoseZone: glucoseZone(point.glucoseMgDl, snapshot.targetRange.lowMgDl, snapshot.targetRange.highMgDl),
       kind: 'actual' as const,
     })),
     ...forecast.map((point) => ({
@@ -218,6 +332,7 @@ export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartP
       lowMgDl: point.lowMgDl,
       highMgDl: point.highMgDl,
       chartY: y(point.medianMgDl),
+      glucoseZone: glucoseZone(point.medianMgDl, snapshot.targetRange.lowMgDl, snapshot.targetRange.highMgDl),
       kind: 'forecast' as const,
     })),
     ...insulinAnnotations.map((annotation) => ({
@@ -238,8 +353,11 @@ export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartP
       }).join('; ')}.`
     : ''
   const forecastConfidence = Math.round(Math.max(0, Math.min(1, snapshot.forecast.confidence)) * 100)
+  const latestActualZone = latestActual
+    ? glucoseZone(latestActual.glucoseMgDl, snapshot.targetRange.lowMgDl, snapshot.targetRange.highMgDl)
+    : null
   const narrative = latestActual
-    ? `Последнее значение ${mmol(latestActual.glucoseMgDl)} ммоль/л в ${time(latestActual.measuredAtMs)}. ${
+    ? `Последнее значение ${mmol(latestActual.glucoseMgDl)} ммоль/л в ${time(latestActual.measuredAtMs)}. ${glucoseZoneSentence(latestActualZone!)} ${
         latestForecast
           ? `${direction(forecast)} К ${time(latestForecast.atMs)} медиана составляет ${mmol(latestForecast.medianMgDl)} ммоль/л, возможный диапазон ${mmol(latestForecast.lowMgDl)}–${mmol(latestForecast.highMgDl)}. Уверенность прогноза ${forecastConfidence}%.`
           : 'Доступного прогноза сейчас нет.'
@@ -382,12 +500,40 @@ export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartP
         >
           <title id={titleId}>Сахар за {range} часов и прогноз</title>
           <desc id={descriptionId}>{narrative}</desc>
+          <defs aria-hidden="true">
+            <clipPath id={`${zoneClipPrefix}-high`}>
+              <rect x={margin.left} y={margin.top} width={plotWidth} height={targetTop - margin.top} />
+            </clipPath>
+            <clipPath id={`${zoneClipPrefix}-target`}>
+              <rect x={margin.left} y={targetTop} width={plotWidth} height={targetBottom - targetTop} />
+            </clipPath>
+            <clipPath id={`${zoneClipPrefix}-low`}>
+              <rect x={margin.left} y={targetBottom} width={plotWidth} height={plotBottom - targetBottom} />
+            </clipPath>
+          </defs>
           <rect
-            className="target-band"
+            className="glucose-zone-band high-zone-band"
+            data-glucose-zone="high"
             x={margin.left}
-            y={y(snapshot.targetRange.highMgDl)}
+            y={margin.top}
             width={plotWidth}
-            height={y(snapshot.targetRange.lowMgDl) - y(snapshot.targetRange.highMgDl)}
+            height={targetTop - margin.top}
+          />
+          <rect
+            className="glucose-zone-band target-band target-zone-band"
+            data-glucose-zone="target"
+            x={margin.left}
+            y={targetTop}
+            width={plotWidth}
+            height={targetBottom - targetTop}
+          />
+          <rect
+            className="glucose-zone-band low-zone-band"
+            data-glucose-zone="low"
+            x={margin.left}
+            y={targetBottom}
+            width={plotWidth}
+            height={plotBottom - targetBottom}
           />
           {gridTicks.map((tick) => (
             <g key={tick}>
@@ -409,36 +555,50 @@ export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartP
             </text>
           ))}
           {end > now && <line className="now-line" x1={x(now)} x2={x(now)} y1={margin.top} y2={chartHeight - margin.bottom} />}
-          {uncertainty && <polygon className="forecast-band" points={uncertainty} />}
-          {actualSegments.map((segment, index) =>
-            segment.length > 1 ? (
+          {uncertainty && (['high', 'target', 'low'] as const).map((zone) => (
+            <polygon
+              className={`forecast-band glucose-${zone}`}
+              clipPath={`url(#${zoneClipPrefix}-${zone})`}
+              data-glucose-zone={zone}
+              key={`forecast-band-${zone}`}
+              points={uncertainty}
+            />
+          ))}
+          {actualZoneSegments.map((segment) => (
               <path
-                className="actual-line"
+                className={`actual-line glucose-${segment.zone}`}
                 data-series="actual"
                 data-line-style="solid"
-                d={linePath(segment, (point) => point.measuredAtMs, (point) => point.glucoseMgDl)}
-                key={`${segment[0].readingId}-${index}`}
+                data-glucose-zone={segment.zone}
+                d={linePath(segment.points, (point) => point.atMs, (point) => point.valueMgDl)}
+                key={segment.key}
               />
-            ) : (
+          ))}
+          {actualSegments.map((segment, index) =>
+            segment.length === 1 ? (
               <circle
-                className="actual-dot"
+                className={`actual-dot glucose-${glucoseZone(segment[0].glucoseMgDl, snapshot.targetRange.lowMgDl, snapshot.targetRange.highMgDl)}`}
                 key={`${segment[0].readingId}-${index}`}
                 cx={x(segment[0].measuredAtMs)}
                 cy={y(segment[0].glucoseMgDl)}
                 data-glucose-mg-dl={segment[0].glucoseMgDl}
+                data-glucose-zone={glucoseZone(segment[0].glucoseMgDl, snapshot.targetRange.lowMgDl, snapshot.targetRange.highMgDl)}
                 r="3.5"
               />
-            ),
+            ) : null,
           )}
-          {forecast.length > 0 && (
+          {forecastRenderSegments.map((segment, index) => (
             <path
-              className="forecast-line"
+              className={`forecast-line glucose-${segment.zone}`}
               data-series="forecast"
               data-line-style="dashed"
+              data-glucose-zone={segment.zone}
               strokeDasharray="8 7"
-              d={linePath(forecast, (point) => point.atMs, (point) => point.medianMgDl)}
+              strokeDashoffset={segment.dashOffset.toFixed(1)}
+              d={linePath(segment.points, (point) => point.atMs, (point) => point.valueMgDl)}
+              key={`forecast-${segment.zone}-${index}`}
             />
-          )}
+          ))}
           {insulinAnnotations.map((annotation) => {
             const point: InspectablePoint = {
               key: annotation.key,
@@ -494,7 +654,15 @@ export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartP
               </g>
             )
           })}
-          {latestActual && <circle className="latest-dot" cx={x(latestActual.measuredAtMs)} cy={y(latestActual.glucoseMgDl)} r="5" />}
+          {latestActual && (
+            <circle
+              className={`latest-dot glucose-${latestActualZone}`}
+              data-glucose-zone={latestActualZone!}
+              cx={x(latestActual.measuredAtMs)}
+              cy={y(latestActual.glucoseMgDl)}
+              r="5"
+            />
+          )}
           {end > now && (
             <text className="now-label" x={x(now) + 5} y={margin.top + 11}>
               сейчас
@@ -536,7 +704,12 @@ export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartP
               {!selectedIsInsulin && (
                 <line className="inspection-line horizontal" x1={margin.left} x2={chartWidth - margin.right} y1={selectedY} y2={selectedY} />
               )}
-              <circle className="inspection-dot" cx={selectedX} cy={selectedY} r="5" />
+              <circle
+                className={`inspection-dot${selectedPoint.glucoseZone ? ` glucose-${selectedPoint.glucoseZone}` : ''}`}
+                cx={selectedX}
+                cy={selectedY}
+                r="5"
+              />
               <g className="inspection-tooltip" transform={`translate(${tooltipX} ${tooltipY})`}>
                 <rect width={tooltipWidth} height={tooltipHeight} rx="10" />
                 <text className="inspection-value" x="10" y="19">
@@ -552,8 +725,8 @@ export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartP
                         ? 'быстрый инсулин'
                         : selectedPoint.kind === 'insulin-long'
                           ? 'длительный инсулин'
-                          : 'измерение'
-                  }
+                          : 'замер'
+                  }{selectedPoint.glucoseZone ? ` · ${glucoseZoneLabel(selectedPoint.glucoseZone)}` : ''}
                 </text>
                 {selectedPoint.kind === 'forecast' && (
                   <text className="inspection-range" x="10" y="53">

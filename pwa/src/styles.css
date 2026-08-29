@@ -25,6 +25,9 @@
   --red: #ff8b84;
   --red-strong: #ed5d57;
   --red-dim: #44201f;
+  --glucose-low: #f06b65;
+  --glucose-target: #4ecb83;
+  --glucose-high: #f2a93b;
   --focus: #a9f6c4;
   --shadow: 0 16px 52px rgba(0, 0, 0, 0.22);
   --radius-xl: 24px;
@@ -56,6 +59,9 @@
   --red: #a82c28;
   --red-strong: #b82d28;
   --red-dim: #fee2e0;
+  --glucose-low: #b82d28;
+  --glucose-target: #08783c;
+  --glucose-high: #98510b;
   --focus: #08783c;
   --shadow: 0 15px 45px rgba(34, 54, 42, 0.09);
 }
@@ -1866,11 +1872,23 @@ body,
   outline-offset: -3px;
 }
 
-.chart-panel .target-band {
-  fill: color-mix(in srgb, var(--green) 9%, transparent);
-  stroke: color-mix(in srgb, var(--green) 48%, transparent);
+.chart-panel .glucose-zone-band {
+  pointer-events: none;
+}
+
+.chart-panel .target-zone-band {
+  fill: color-mix(in srgb, var(--glucose-target) 9%, transparent);
+  stroke: color-mix(in srgb, var(--glucose-target) 48%, transparent);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
+}
+
+.chart-panel .low-zone-band {
+  fill: color-mix(in srgb, var(--glucose-low) 6%, transparent);
+}
+
+.chart-panel .high-zone-band {
+  fill: color-mix(in srgb, var(--glucose-high) 6%, transparent);
 }
 
 .chart-panel .chart-grid {
@@ -1904,26 +1922,62 @@ body,
 }
 
 .chart-panel .actual-line {
-  stroke: var(--green-strong);
   stroke-width: 3.25;
 }
 
 .chart-panel .forecast-line {
-  stroke: var(--blue);
   stroke-width: 2.5;
   stroke-dasharray: 8 7;
 }
 
+.chart-panel .actual-line.glucose-low,
+.chart-panel .forecast-line.glucose-low {
+  stroke: var(--glucose-low);
+}
+
+.chart-panel .actual-line.glucose-target,
+.chart-panel .forecast-line.glucose-target {
+  stroke: var(--glucose-target);
+}
+
+.chart-panel .actual-line.glucose-high,
+.chart-panel .forecast-line.glucose-high {
+  stroke: var(--glucose-high);
+}
+
 .chart-panel .forecast-band {
-  fill: color-mix(in srgb, var(--blue) 16%, transparent);
-  stroke: color-mix(in srgb, var(--blue) 26%, transparent);
   stroke-width: 0.75;
   vector-effect: non-scaling-stroke;
 }
 
+.chart-panel .forecast-band.glucose-low {
+  fill: color-mix(in srgb, var(--glucose-low) 14%, transparent);
+  stroke: color-mix(in srgb, var(--glucose-low) 26%, transparent);
+}
+
+.chart-panel .forecast-band.glucose-target {
+  fill: color-mix(in srgb, var(--glucose-target) 14%, transparent);
+  stroke: color-mix(in srgb, var(--glucose-target) 26%, transparent);
+}
+
+.chart-panel .forecast-band.glucose-high {
+  fill: color-mix(in srgb, var(--glucose-high) 14%, transparent);
+  stroke: color-mix(in srgb, var(--glucose-high) 26%, transparent);
+}
+
 .chart-panel .actual-dot,
 .chart-panel .latest-dot {
-  fill: var(--green-strong);
+  fill: var(--glucose-target);
+}
+
+.chart-panel .actual-dot.glucose-low,
+.chart-panel .latest-dot.glucose-low {
+  fill: var(--glucose-low);
+}
+
+.chart-panel .actual-dot.glucose-high,
+.chart-panel .latest-dot.glucose-high {
+  fill: var(--glucose-high);
 }
 
 .chart-panel .series-label {
@@ -2011,6 +2065,18 @@ body,
   stroke: var(--green);
   stroke-width: 3;
   vector-effect: non-scaling-stroke;
+}
+
+.inspection-dot.glucose-low {
+  stroke: var(--glucose-low);
+}
+
+.inspection-dot.glucose-target {
+  stroke: var(--glucose-target);
+}
+
+.inspection-dot.glucose-high {
+  stroke: var(--glucose-high);
 }
 
 .inspection-tooltip rect {

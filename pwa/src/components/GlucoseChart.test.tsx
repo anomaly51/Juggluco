@@ -24,6 +24,72 @@ describe('GlucoseChart', () => {
     expect(onRangeChange).toHaveBeenCalledWith(12)
   })
 
+  it('matches Android glucose zones and splits actual and forecast lines at exact target crossings', () => {
+    const crossingSnapshot = normalizeSnapshot({
+      ...rawSnapshot,
+      current_glucose: { ...rawSnapshot.current_glucose, measured_at_ms: 1_400_000, glucose_mg_dl: 180 },
+      glucose_history: [
+        { ...rawSnapshot.glucose_history[0], reading_id: 'low', measured_at_ms: 1_300_000, glucose_mg_dl: 60 },
+        { ...rawSnapshot.glucose_history[0], reading_id: 'target', measured_at_ms: 1_350_000, glucose_mg_dl: 100 },
+        { ...rawSnapshot.glucose_history[0], reading_id: 'high', measured_at_ms: 1_400_000, glucose_mg_dl: 180 },
+      ],
+      forecast: {
+        ...rawSnapshot.forecast,
+        points: [
+          { at_ms: 2_100_000, median_mg_dl: 60, low_mg_dl: 50, high_mg_dl: 70 },
+          { at_ms: 2_200_000, median_mg_dl: 100, low_mg_dl: 85, high_mg_dl: 120 },
+          { at_ms: 2_300_000, median_mg_dl: 180, low_mg_dl: 150, high_mg_dl: 210 },
+        ],
+      },
+    })
+    render(<GlucoseChart snapshot={crossingSnapshot} savedAt={Date.now()} range={6} onRangeChange={vi.fn()} />)
+
+    const chart = screen.getByRole('img', { name: /^Сахар за 6 часов и прогноз/ })
+    expect(Array.from(chart.querySelectorAll('.glucose-zone-band')).map((band) => band.getAttribute('data-glucose-zone')))
+      .toEqual(['high', 'target', 'low'])
+    expect(Array.from(chart.querySelectorAll('.actual-line')).map((line) => line.getAttribute('data-glucose-zone')))
+      .toEqual(['low', 'target', 'high'])
+    expect(Array.from(chart.querySelectorAll('.forecast-line')).map((line) => line.getAttribute('data-glucose-zone')))
+      .toEqual(['low', 'target', 'high'])
+    expect(Array.from(chart.querySelectorAll('.forecast-band')).map((band) => band.getAttribute('data-glucose-zone')))
+      .toEqual(['high', 'target', 'low'])
+    for (const line of chart.querySelectorAll('.forecast-line')) {
+      expect(line).toHaveAttribute('data-line-style', 'dashed')
+      expect(line).toHaveAttribute('stroke-dasharray', '8 7')
+    }
+    const forecastDashOffsets = Array.from(chart.querySelectorAll('.forecast-line'))
+      .map((line) => Number(line.getAttribute('stroke-dashoffset')))
+    expect(forecastDashOffsets[0]).toBe(0)
+    expect(forecastDashOffsets[1]).toBeLessThan(0)
+    expect(forecastDashOffsets[2]).toBeLessThan(forecastDashOffsets[1])
+
+    const targetBand = chart.querySelector('.target-zone-band')!
+    const targetTop = Number(targetBand.getAttribute('y'))
+    const targetBottom = targetTop + Number(targetBand.getAttribute('height'))
+    const lowPathNumbers = chart.querySelector('.actual-line.glucose-low')!.getAttribute('d')!.match(/-?\d+(?:\.\d+)?/g)!.map(Number)
+    const highPathNumbers = chart.querySelector('.actual-line.glucose-high')!.getAttribute('d')!.match(/-?\d+(?:\.\d+)?/g)!.map(Number)
+    expect(lowPathNumbers.at(-1)).toBeCloseTo(targetBottom, 1)
+    expect(highPathNumbers[1]).toBeCloseTo(targetTop, 1)
+  })
+
+  it('keeps exact 4.2 and 9.0 mmol/L boundaries inside the target zone', () => {
+    const boundarySnapshot = normalizeSnapshot({
+      ...rawSnapshot,
+      current_glucose: { ...rawSnapshot.current_glucose, glucose_mg_dl: 162 },
+      glucose_history: [
+        { ...rawSnapshot.glucose_history[1], glucose_mg_dl: 75.6 },
+        { ...rawSnapshot.glucose_history[0], glucose_mg_dl: 162 },
+      ],
+    })
+    render(<GlucoseChart snapshot={boundarySnapshot} savedAt={Date.now()} range={6} onRangeChange={vi.fn()} />)
+
+    const chart = screen.getByRole('img', { name: /^Сахар за 6 часов и прогноз/ })
+    const boundaryDots = chart.querySelectorAll('.actual-dot')
+    expect(boundaryDots).toHaveLength(2)
+    for (const dot of boundaryDots) expect(dot).toHaveAttribute('data-glucose-zone', 'target')
+    expect(chart.querySelector('.latest-dot')).toHaveAttribute('data-glucose-zone', 'target')
+  })
+
   it('renders rapid and long insulin as distinct, collision-aware annotations without changing the glucose scale', () => {
     const baseline = normalizeSnapshot(rawSnapshot)
     const snapshot = {
@@ -179,5 +245,8 @@ describe('GlucoseChart', () => {
       expect(y).toBeGreaterThanOrEqual(18)
       expect(y).toBeLessThanOrEqual(298)
     }
+    expect(chart.querySelector('[data-glucose-mg-dl="20"]')).toHaveAttribute('data-glucose-zone', 'low')
+    expect(chart.querySelector('[data-glucose-mg-dl="600"]')).toHaveAttribute('data-glucose-zone', 'high')
+    expect(chart.querySelector('.latest-dot')).toHaveAttribute('data-glucose-zone', 'high')
   })
 })
