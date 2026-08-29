@@ -1,7 +1,7 @@
 replicas: 1
 image:
   repository: harbor.internal.api-api-api.com/applications/juggluco
-  tag: sha-f1d61e504498
+  tag: sha-2f1d8cae58d9
   pullPolicy: IfNotPresent
 registry:
   server: harbor.internal.api-api-api.com
@@ -20,6 +20,24 @@ route:
 persistence:
   storageClassName: local-path
   size: 2Gi
+# One idempotent PostSync attempt per GitOps sync. A rejected/skipped candidate
+# leaves the safe active model pinned and fails the hook so GitOps cannot claim
+# the requested model activated. The version defaults to "display-<image.tag>";
+# a new source-revision suffix is used after a prior terminal decision.
+forecastBootstrap:
+  enabled: true
+  candidateVersion: ""
+  sourceChangeRetries: 2
+  retryDelaySeconds: 2
+  backoffLimit: 1
+  activeDeadlineSeconds: 1800
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
 config:
   databasePath: /data/juggluco.db
   # Anyone with the PWA link can view glucose. Write/admin routes still require
