@@ -46,7 +46,8 @@ chat or shell history before adding a replacement to Vault.
 
 Fresh Android installs default to `https://juggluco-general1.api-api-api.com`. Enter
 the `JUGGLUCO_API_TOKEN` in the app settings; it is deliberately not compiled into
-the APK. Enter the viewer token only in the PWA.
+the APK. The production PWA is intentionally link-public and read-only; opening its
+URL does not require a viewer token. Write and admin routes remain authenticated.
 
 ## Local or standalone cluster
 

@@ -28,7 +28,9 @@ persistence:
 
 config:
   databasePath: /data/juggluco.db
-  viewerPublic: false
+  # Anyone with the PWA link can view glucose. Write/admin routes still require
+  # the Android bearer token and are never covered by the public viewer policy.
+  viewerPublic: true
   trustedProxyCidrs: 10.42.0.0/16
   openrouterAudioLanguage: ru
 
