@@ -502,6 +502,160 @@ def test_semantic_create_accepts_product_evidence_overlapping_its_dose(
         assert len(active_intakes(client)) == 1
 
 
+@pytest.mark.parametrize(
+    "product_evidence",
+    ["НовоРапида", "быстрого НовоРапида"],
+)
+def test_semantic_noisy_product_modifier_keeps_exact_spoken_dose(
+    tmp_path,
+    product_evidence,
+):
+    settings = make_settings(tmp_path)
+    text = "я уколол пятого быстрого НовоРапида"
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.semantic_results.append(
+        IntakeChatInsulinSemanticResult(
+            intent="create",
+            event_status="completed",
+            actor="self",
+            context_scope="none",
+            insulin_name="NovoRapid",
+            insulin_type="rapid",
+            insulin_units=5,
+            action_evidence="уколол",
+            product_evidence=product_evidence,
+            dose_evidence="пятого",
+            confidence=0.95,
+        )
+    )
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(client, chat["id"], text=text)
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["outcome"] == "applied"
+        assert "NovoRapid" in payload["assistant_message"]
+        assert "5" in payload["assistant_message"]
+        assert payload["events"][0]["insulin_name"] == "NovoRapid"
+        assert payload["events"][0]["insulin_units"] == 5
+        assert intake_analyzer.semantic_calls == [(text, False)]
+
+
+def test_semantic_create_cannot_override_conflicting_product_class(tmp_path):
+    settings = make_settings(tmp_path)
+    text = "я уколол 5 медленного НовоРапида"
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.semantic_results.append(
+        IntakeChatInsulinSemanticResult(
+            intent="create",
+            event_status="completed",
+            actor="self",
+            context_scope="none",
+            insulin_name="NovoRapid",
+            insulin_type="rapid",
+            insulin_units=5,
+            action_evidence="я уколол",
+            product_evidence="НовоРапида",
+            dose_evidence="5",
+            confidence=1.0,
+        )
+    )
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(client, chat["id"], text=text)
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["outcome"] == "clarification"
+        assert active_intakes(client) == []
+        assert intake_analyzer.semantic_calls == [(text, False)]
+
+
+def test_llm_is_primary_for_exact_terse_noisy_insulin_report(tmp_path):
+    settings = make_settings(tmp_path)
+    text = "5 быстрого нового рапида."
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.semantic_results.append(
+        IntakeChatInsulinSemanticResult(
+            intent="create",
+            event_status="completed",
+            actor="self",
+            context_scope="none",
+            insulin_name="NovoRapid",
+            insulin_type="rapid",
+            insulin_units=5,
+            action_evidence="5 быстрого нового рапида",
+            product_evidence="быстрого нового рапида",
+            dose_evidence="5",
+            confidence=1.0,
+        )
+    )
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(client, chat["id"], text=text)
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["outcome"] == "applied"
+        assert payload["assistant_message"].startswith("Записано: 5 ед. NovoRapid")
+        assert payload["events"][0]["insulin_name"] == "NovoRapid"
+        assert payload["events"][0]["insulin_units"] == 5
+        assert intake_analyzer.semantic_calls == [(text, False)]
+
+
+def test_llm_is_primary_for_noisy_voice_transcript(tmp_path):
+    settings = make_settings(tmp_path)
+    transcript = "5 быстрого нового рапида."
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.semantic_results.append(
+        IntakeChatInsulinSemanticResult(
+            intent="create",
+            event_status="completed",
+            actor="self",
+            context_scope="none",
+            insulin_name="NovoRapid",
+            insulin_type="rapid",
+            insulin_units=5,
+            action_evidence="5 быстрого нового рапида",
+            product_evidence="быстрого нового рапида",
+            dose_evidence="5",
+            confidence=1.0,
+        )
+    )
+
+    with TestClient(
+        build_app(
+            settings,
+            intake_analyzer,
+            CountingTranscriber(transcript),
+        )
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(
+            client,
+            chat["id"],
+            audio=valid_wav_bytes(),
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["transcript"] == transcript
+        assert payload["outcome"] == "applied"
+        assert payload["events"][0]["insulin_name"] == "NovoRapid"
+        assert payload["events"][0]["insulin_units"] == 5
+        assert intake_analyzer.semantic_calls == [(transcript, False)]
+
+
 def test_semantic_path_has_no_local_product_or_action_vocabulary_gate(tmp_path):
     settings = make_settings(tmp_path)
     text = "я вкатил пять наваперда"

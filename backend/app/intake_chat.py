@@ -23,14 +23,58 @@ _SLOW_INSULIN_ALIAS = (
     rf"{_RU_SLOW_WORD}\s+{_RU_INSULIN_WORD}|"
     rf"{_RU_INSULIN_WORD}\s+{_RU_SLOW_WORD})"
 )
+# Speech recognition can render a Russian case ending on a Latin product name
+# (``Rapida`` / ``NovoRapida``), or split a descriptive product phrase into
+# several individually correct words (``быстрого нового Rapida``). The
+# semantic evidence verifier resolves those shapes by product class after the
+# LLM has interpreted the turn. Only class-compatible modifiers are admitted
+# into the product span; an unrelated or conflicting adjective remains outside
+# it and cannot authorize a write.
+_RU_NOVO_WORD = r"нов(?:о|а|ого|ому|ым|ом|ой|ую|ые|ых|ыми)"
+_RAPID_NAME = (
+    r"(?:nov[oa][\s-]?rapid(?:a|om|u)?|rapid(?:a|om|u)?|"
+    r"нов[оа][\s-]?рапид(?:а|ом|у)?|"
+    r"новорапид(?:а|ом|у)?|рапид(?:а|ом|у)?)"
+)
+_TRESIBA_NAME = (
+    r"(?:tresib(?:a|y|u|oy|e|om)|тресиб(?:а|ы|у|ой|е|ом)?)"
+)
+_RAPID_PRODUCT_MODIFIER = (
+    rf"(?:{_RU_FAST_WORD}(?:\s+{_RU_INSULIN_WORD})?|"
+    rf"fast(?:-acting)?(?:\s+insulin)?|rapid-acting(?:\s+insulin)?|"
+    rf"{_RU_NOVO_WORD}|new)"
+)
+_LONG_PRODUCT_MODIFIER = (
+    rf"(?:{_RU_SLOW_WORD}(?:\s+{_RU_INSULIN_WORD})?|"
+    r"slow(?:-acting)?(?:\s+insulin)?|long-acting(?:\s+insulin)?)"
+)
+_QUALIFIED_RAPID_NAME = (
+    rf"(?:(?:{_RAPID_PRODUCT_MODIFIER})\s+){{0,2}}{_RAPID_NAME}"
+    rf"(?:\s+(?:{_RAPID_PRODUCT_MODIFIER}))?"
+)
+_QUALIFIED_TRESIBA_NAME = (
+    rf"(?:(?:{_LONG_PRODUCT_MODIFIER})\s+)?{_TRESIBA_NAME}"
+    rf"(?:\s+(?:{_LONG_PRODUCT_MODIFIER}))?"
+)
 _RAPID = (
+    rf"(?:{_QUALIFIED_RAPID_NAME}|{_FAST_INSULIN_ALIAS})"
+)
+_TRESIBA = rf"(?:{_QUALIFIED_TRESIBA_NAME}|{_SLOW_INSULIN_ALIAS})"
+_PRODUCT_BODY = rf"(?:{_RAPID}|{_TRESIBA})"
+# Keep the deterministic command grammar deliberately narrow. Natural,
+# redundant, mixed-script product phrases belong to the OpenRouter semantic
+# engine; the broader product grammar above exists to corroborate the model's
+# verbatim evidence after it has interpreted the user's intent.
+_EXPLICIT_RAPID = (
     rf"(?:{_FAST_INSULIN_ALIAS}|nov[oa][\s-]?rapid|novorapid|rapid|"
     r"нов[оа][\s-]?рапид(?:а|ом|у)?|"
     r"новорапид(?:а|ом|у)?|рапид(?:а|ом|у)?)"
 )
-_TRESIBA = rf"(?:{_SLOW_INSULIN_ALIAS}|tresiba|тресиб(?:а|ы|у|ой)?)"
-_PRODUCT_BODY = rf"(?:{_RAPID}|{_TRESIBA})"
-_PRODUCT = rf"(?<![\w])(?P<product>{_PRODUCT_BODY})(?![\w])"
+_EXPLICIT_TRESIBA = (
+    rf"(?:{_SLOW_INSULIN_ALIAS}|tresiba|тресиб(?:а|ы|у|ой)?)"
+)
+_EXPLICIT_PRODUCT_BODY = rf"(?:{_EXPLICIT_RAPID}|{_EXPLICIT_TRESIBA})"
+_PRODUCT = rf"(?<![\w])(?P<product>{_EXPLICIT_PRODUCT_BODY})(?![\w])"
 _BOUNDED_NUMBER = rf"(?<![\d.,\w])(?P<units>{_NUMBER})(?![\d.,eE\w])"
 
 
@@ -193,11 +237,11 @@ _RU_SPOKEN_WITH_UNIT = re.compile(
 )
 _RU_SPOKEN_BEFORE_PRODUCT = re.compile(
     rf"(?<![\w])(?P<number>{_RU_SPOKEN_NUMBER})(?P<gap>\s+)"
-    rf"(?P<product>{_PRODUCT_BODY})(?![\w])",
+    rf"(?P<product>{_EXPLICIT_PRODUCT_BODY})(?![\w])",
     re.IGNORECASE,
 )
 _RU_PRODUCT_BEFORE_SPOKEN = re.compile(
-    rf"(?<![\w])(?P<product>{_PRODUCT_BODY})(?P<gap>\s+)"
+    rf"(?<![\w])(?P<product>{_EXPLICIT_PRODUCT_BODY})(?P<gap>\s+)"
     rf"(?P<number>{_RU_SPOKEN_NUMBER})(?![\w])",
     re.IGNORECASE,
 )
@@ -2215,10 +2259,36 @@ def semantic_product_evidence_span(
         return None
 
     evidence_start = evidence_matches[0].start()
-    return (
+    selected = (
         evidence_start + relative_span[0],
         evidence_start + relative_span[1],
     )
+
+    # The provider may quote only the canonical name from a longer compatible
+    # phrase such as ``быстрого НовоРапида``. Expand that exact subspan through
+    # the bounded semantic evidence resolver so the intervening class
+    # descriptor is product evidence, not an unexplained word between the dose
+    # and product. Conflicting modifiers are never part of a matching product
+    # and therefore cannot be absorbed here.
+    expected_pair = (insulin_name, insulin_type)
+    containing = [
+        match.span()
+        for match in _KNOWN_PRODUCT.finditer(clean_source)
+        if match.start() <= selected[0]
+        and match.end() >= selected[1]
+        and _canonical_product(match.group()) == expected_pair
+    ]
+    if containing:
+        widest_length = max(end - start for start, end in containing)
+        widest = [
+            span
+            for span in containing
+            if span[1] - span[0] == widest_length
+        ]
+        if len(widest) != 1:
+            return None
+        return widest[0]
+    return selected
 
 
 def _normalize_supported_insulin_action_asr(text: str) -> str:

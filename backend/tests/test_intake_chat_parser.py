@@ -353,6 +353,50 @@ def test_overlapping_product_quote_still_binds_to_its_dose(text, evidence):
 
 
 @pytest.mark.parametrize(
+    "evidence",
+    ["НовоРапида", "быстрого НовоРапида"],
+)
+def test_semantic_product_span_absorbs_compatible_class_modifier(evidence):
+    text = "я уколол пятого быстрого НовоРапида"
+    product_span = semantic_product_evidence_span(
+        text,
+        evidence,
+        "NovoRapid",
+        "rapid",
+    )
+    dose_start = text.index("пятого")
+
+    assert product_span is not None
+    assert text[slice(*product_span)] == "быстрого НовоРапида"
+    assert semantic_product_dose_evidence_is_bound(
+        text,
+        product_span=product_span,
+        dose_span=(dose_start, dose_start + len("пятого")),
+    )
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Я уколол 5 быстрого НовоРапида",
+        "Я уколол 5 быстрого инсулина НовоРапида",
+        "пять быстрого НовоРапида",
+        "Я уколол 5 быстрого нового Rapida",
+        "I injected 5 NovoRapida",
+        "Я ввёл 6 медленного Tresiby",
+        "Я ввёл 6 медленного инсулина Tresiby",
+        "I injected 5 rapid-acting insulin NovoRapid",
+    ],
+)
+def test_noisy_product_phrases_route_to_semantic_engine(utterance):
+    result = parse_explicit_insulin(utterance)
+
+    assert result.commands == ()
+    assert result.ambiguous is True
+    assert result.meal_evidence == ""
+
+
+@pytest.mark.parametrize(
     ("text", "intent", "expected"),
     [
         ("я укололся пятого рапида", "create", True),
@@ -1387,6 +1431,10 @@ def test_ambiguous_meal_time_reference_fails_consumption_gate(utterance):
         "Рапид 5 или 6 единиц",
         "ноль единиц Рапида",
         "сто одна единица Рапида",
+        "я уколол 5 медленного НовоРапида",
+        "я уколол 5 быстрого Тресибы",
+        "я уколол 5 случайного НовоРапида",
+        "I injected 5 rapid-acting mystery insulin",
     ],
 )
 def test_unsafe_or_incomplete_insulin_is_always_ambiguous(utterance):

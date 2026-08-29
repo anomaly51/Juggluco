@@ -502,6 +502,10 @@ def test_insulin_semantic_extractor_uses_raw_transcript_strict_schema_and_zdr(
     assert '"slow insulin"' in semantic_contract
     assert "медленного инсулина" in semantic_contract
     assert "complete descriptive phrase exactly" in semantic_contract
+    assert "mixed-script" in semantic_contract
+    assert "whole nearest compatible product phrase" in semantic_contract
+    assert "Never ask for dose precision" in " ".join(semantic_contract.split())
+    assert "Do not lower confidence merely" in " ".join(semantic_contract.split())
 
 
 def test_insulin_semantic_replacement_can_omit_product_but_requires_context(tmp_path):
@@ -667,6 +671,50 @@ def test_insulin_semantic_invalid_first_result_gets_one_bounded_repair(tmp_path)
     assert captured[1]["response_format"] == captured[0]["response_format"]
     assert captured[1]["provider"] == captured[0]["provider"]
     assert "revision_pending=true" in captured[1]["messages"][2]["content"]
+
+
+def test_insulin_semantic_noisy_first_create_gets_one_bounded_repair(tmp_path):
+    transcript = "Я уколол 5 быстрого NovoRapida"
+    none_result = {
+        "intent": "none",
+        "event_status": "not_applicable",
+        "actor": "unknown",
+        "context_scope": "none",
+        "insulin_name": None,
+        "insulin_type": None,
+        "insulin_units": None,
+        "action_evidence": None,
+        "product_evidence": None,
+        "dose_evidence": None,
+        "confidence": 0.6,
+    }
+    create_result = {
+        "intent": "create",
+        "event_status": "completed",
+        "actor": "self",
+        "context_scope": "none",
+        "insulin_name": "NovoRapid",
+        "insulin_type": "rapid",
+        "insulin_units": 5,
+        "action_evidence": "Я уколол",
+        "product_evidence": "быстрого NovoRapida",
+        "dose_evidence": "5",
+        "confidence": 0.98,
+    }
+
+    result, captured = _run_semantic(
+        tmp_path,
+        [none_result, create_result],
+        text=transcript,
+        has_recent_insulin=False,
+    )
+
+    assert result.intent == "create"
+    assert result.insulin_units == 5
+    assert len(captured) == 2
+    assert "failed\nstrict cross-field schema validation" in captured[1][
+        "messages"
+    ][1]["content"]
 
 
 def test_insulin_semantic_revision_cannot_discard_spoken_replacement_quantity(

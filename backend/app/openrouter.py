@@ -310,6 +310,16 @@ when completed self-administration is clear. This permitted transcription repair
 guessing. Do not choose none merely because grammar or transcription is imperfect, and do
 not require a memorized command phrase.
 
+When one completed self-report contains an exact dose and one uniquely resolvable configured
+product, return the corresponding create/replace intent instead of none even when the product
+wording is redundant, inflected, mixed-script, or split by compatible class descriptors. For
+example, a rapid descriptor may appear between the exact dose and a NovoRapid/Rapida form.
+Quote the whole nearest compatible product phrase in product_evidence. Never ask for dose
+precision when dose_evidence itself is exact. Conflicting rapid/long descriptors remain none;
+this rule must never invent or approximate a quantity. Do not lower confidence merely for
+surface spelling, inflection, or script noise when the exact dose, unique product class,
+completed action, and self actor are otherwise unambiguous.
+
 This diary has two user-configured descriptive product aliases. A complete phrase meaning
 "fast insulin" (including Russian inflections such as "быстрого инсулина") maps to
 NovoRapid/rapid. A complete phrase meaning "slow insulin" (including Russian inflections
@@ -1072,14 +1082,18 @@ class OpenRouterIntakeChatAnalyzer(OpenRouterMealAnalyzer):
                     raise ValueError(
                         "revise_last cannot discard an exact replacement quantity"
                     )
+                ambiguous_first_report = bool(
+                    not has_recent_insulin
+                    and parse_explicit_insulin(clean).ambiguous
+                )
                 if (
                     attempt == 0
                     and result.intent == "none"
-                    and has_recent_insulin
                     and semantic_text_has_bounded_dose_evidence(clean)
+                    and (has_recent_insulin or ambiguous_first_report)
                 ):
                     raise ValueError(
-                        "recheck whether bounded recent-context evidence is a correction"
+                        "recheck bounded insulin evidence before returning none"
                     )
                 return result
             except (json.JSONDecodeError, ValidationError, ValueError) as error:
