@@ -175,6 +175,30 @@ def meal_proposal(
     )
 
 
+def completed_semantic_meal_result(
+    *,
+    name: str,
+    portion_g: float,
+    carbs_g: float,
+    action_evidence: str,
+    food_evidence: str,
+) -> IntakeChatModelResult:
+    return IntakeChatModelResult(
+        intent="create",
+        assistant_message=f"Recorded {portion_g:g} g {name.lower()}.",
+        meal=meal_proposal(
+            name=name,
+            portion_g=portion_g,
+            carbs_g=carbs_g,
+        ),
+        meal_event_status="completed",
+        meal_actor="self",
+        meal_action_evidence=action_evidence,
+        meal_food_evidence=food_evidence,
+        meal_semantic_confidence=0.99,
+    )
+
+
 def valid_wav_bytes() -> bytes:
     output = BytesIO()
     with wave.open(output, "wb") as recording:
@@ -791,6 +815,18 @@ def test_semantic_fuzzy_insulin_and_meal_are_applied_atomically(
             confidence=0.96,
         )
     )
+    if "100" in expected_meal_evidence:
+        intake_analyzer.results.append(
+            IntakeChatModelResult(
+                intent="create",
+                assistant_message="Recorded 100 g apple.",
+                meal=meal_proposal(
+                    name="Apple",
+                    portion_g=100,
+                    carbs_g=14,
+                ),
+            )
+        )
     with TestClient(
         build_app(settings, intake_analyzer, CountingTranscriber(""))
     ) as client:
@@ -853,6 +889,539 @@ def test_explicit_known_insulin_comma_meal_is_atomic_and_idempotent(
         assert replay.json() == result
         assert replay.json()["client_turn_id"] == str(turn_id)
         assert len(active_intakes(client)) == 2
+
+
+@pytest.mark.parametrize("use_voice", [False, True], ids=["text", "voice"])
+def test_noisy_first_turn_meal_uses_llm_semantics_and_records_exact_portion(
+    tmp_path,
+    use_voice,
+):
+    report = "ну я это, бургер грамм 200 навернул"
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results.append(
+        completed_semantic_meal_result(
+            name="Burger",
+            portion_g=200,
+            carbs_g=48,
+            action_evidence="навернул",
+            food_evidence="бургер грамм 200",
+        )
+    )
+    transcriber = CountingTranscriber(report if use_voice else "")
+
+    with TestClient(build_app(settings, intake_analyzer, transcriber)) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(
+            client,
+            chat["id"],
+            text="" if use_voice else report,
+            audio=valid_wav_bytes() if use_voice else None,
+        )
+
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["outcome"] == "applied"
+        assert len(result["events"]) == 1
+        assert result["events"][0]["portion_g"] == 200
+        assert len(intake_analyzer.calls) == 1
+        assert intake_analyzer.calls[0][1] == report
+        assert len(transcriber.calls) == int(use_voice)
+        assert len(active_intakes(client)) == 1
+
+
+@pytest.mark.parametrize(
+    ("report", "action_evidence", "food_evidence", "name", "portion_g"),
+    [
+        (
+            "пиццу 150 грамм только что схомячил",
+            "схомячил",
+            "пиццу 150 грамм",
+            "Pizza",
+            150,
+        ),
+        (
+            "I polished off 180 g of pasta",
+            "polished off",
+            "180 g of pasta",
+            "Pasta",
+            180,
+        ),
+        (
+            "после тренировки умял тарелку гречки 250 грамм",
+            "умял",
+            "тарелку гречки 250 грамм",
+            "Buckwheat",
+            250,
+        ),
+    ],
+)
+def test_open_vocabulary_meal_reports_do_not_depend_on_one_local_verb(
+    tmp_path,
+    report,
+    action_evidence,
+    food_evidence,
+    name,
+    portion_g,
+):
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results.append(
+        completed_semantic_meal_result(
+            name=name,
+            portion_g=portion_g,
+            carbs_g=40,
+            action_evidence=action_evidence,
+            food_evidence=food_evidence,
+        )
+    )
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(client, chat["id"], text=report)
+
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["outcome"] == "applied"
+        assert result["events"][0]["portion_g"] == portion_g
+        assert intake_analyzer.calls[0][1] == report
+
+
+@pytest.mark.parametrize(
+    ("report", "action_evidence", "food_evidence", "portion_g", "carbs_g"),
+    [
+        (
+            "ну я это, бургер грамм 200 навернул",
+            "навернул",
+            "бургер грамм 200",
+            20,
+            48,
+        ),
+        (
+            "я навернул бургер, 60 грамм углеводов",
+            "навернул",
+            "бургер, 60 грамм углеводов",
+            200,
+            6,
+        ),
+    ],
+)
+def test_semantic_meal_rejects_provider_quantity_drift(
+    tmp_path,
+    report,
+    action_evidence,
+    food_evidence,
+    portion_g,
+    carbs_g,
+):
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results.append(
+        completed_semantic_meal_result(
+            name="Burger",
+            portion_g=portion_g,
+            carbs_g=carbs_g,
+            action_evidence=action_evidence,
+            food_evidence=food_evidence,
+        )
+    )
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(client, chat["id"], text=report)
+
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["outcome"] == "clarification"
+        assert result["events"] == []
+        assert result["deleted_event_ids"] == []
+        assert active_intakes(client) == []
+
+
+def test_open_vocabulary_meal_caption_with_photo_uses_same_semantic_gate(
+    tmp_path,
+    jpeg_bytes,
+):
+    report = "бургер 200 грамм навернул"
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results.append(
+        completed_semantic_meal_result(
+            name="Burger",
+            portion_g=200,
+            carbs_g=48,
+            action_evidence="навернул",
+            food_evidence="бургер 200 грамм",
+        )
+    )
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(
+            client,
+            chat["id"],
+            text=report,
+            photos=[jpeg_bytes],
+        )
+
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["outcome"] == "applied"
+        assert result["events"][0]["portion_g"] == 200
+        assert intake_analyzer.calls[0][1] == report
+        assert len(intake_analyzer.calls[0][2]) == 1
+
+
+def test_semantic_natural_meal_correction_replaces_recent_frozen_meal(
+    tmp_path,
+):
+    settings = make_settings(tmp_path)
+    original_time = int(time.time() * 1_000) - 120_000
+    correction_text = "по факту вместо пасты умял риса 200 грамм"
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results.extend(
+        [
+            completed_semantic_meal_result(
+                name="Pasta",
+                portion_g=180,
+                carbs_g=50,
+                action_evidence="съел",
+                food_evidence="180 грамм пасты",
+            ),
+            IntakeChatModelResult(
+                intent="replace_last",
+                assistant_message="Исправлено: 200 г риса.",
+                meal=meal_proposal(
+                    name="Rice",
+                    portion_g=200,
+                    carbs_g=56,
+                ),
+                meal_event_status="completed",
+                meal_actor="self",
+                meal_action_evidence="умял",
+                meal_food_evidence="риса 200 грамм",
+                meal_semantic_confidence=0.99,
+            ),
+        ]
+    )
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        original, _, _ = post_turn(
+            client,
+            chat["id"],
+            text="я съел 180 грамм пасты",
+            occurred_at_ms=original_time,
+        )
+        old_meal = original.json()["events"][0]
+
+        corrected, _, _ = post_turn(
+            client,
+            chat["id"],
+            text=correction_text,
+        )
+
+        assert corrected.status_code == 200, corrected.text
+        result = corrected.json()
+        assert result["outcome"] == "applied"
+        assert result["deleted_event_ids"] == [old_meal["id"]]
+        assert result["events"][0]["meal_text"] == "200 g rice"
+        assert result["events"][0]["portion_g"] == 200
+        assert result["events"][0]["occurred_at_ms"] == original_time
+        assert intake_analyzer.calls[-1][1] == correction_text
+        context = intake_analyzer.meal_revision_contexts[-1]
+        assert context is not None
+        assert context.scope == "recent_single_meal"
+
+
+@pytest.mark.parametrize(
+    ("followup", "provider_carbs", "expected_outcome"),
+    [
+        ("углеводов 30 грамм", 30, "applied"),
+        ("carbs 30", 30, "applied"),
+        ("carbs 30", 300, "clarification"),
+    ],
+)
+def test_terse_meal_carbs_are_grounded_during_frozen_revision(
+    tmp_path,
+    followup,
+    provider_carbs,
+    expected_outcome,
+):
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results.extend(
+        [
+            IntakeChatModelResult(
+                intent="create",
+                assistant_message="Recorded pizza.",
+                meal=meal_proposal(
+                    name="Pizza",
+                    portion_g=200,
+                    carbs_g=54,
+                ),
+                meal_event_status="completed",
+                meal_actor="self",
+                meal_action_evidence="съел",
+                meal_food_evidence="пиццу",
+                meal_semantic_confidence=0.99,
+            ),
+            IntakeChatModelResult(
+                intent="replace_last",
+                assistant_message="Updated carbohydrates.",
+                meal=meal_proposal(
+                    name="Pizza",
+                    portion_g=200,
+                    carbs_g=provider_carbs,
+                ),
+            ),
+        ]
+    )
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        original, _, _ = post_turn(
+            client,
+            chat["id"],
+            text="я съел пиццу",
+        )
+        old_event = original.json()["events"][0]
+
+        response, _, _ = post_turn(client, chat["id"], text=followup)
+
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["outcome"] == expected_outcome
+        if expected_outcome == "applied":
+            assert result["events"][0]["carbs_g"] == 30
+            assert result["deleted_event_ids"] == [old_event["id"]]
+        else:
+            assert result["events"] == []
+            assert result["deleted_event_ids"] == []
+            assert [event["id"] for event in active_intakes(client)] == [
+                old_event["id"]
+            ]
+
+
+def test_consecutive_complete_meal_reports_create_two_active_events(tmp_path):
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results.extend(
+        [
+            completed_semantic_meal_result(
+                name="Pizza",
+                portion_g=100,
+                carbs_g=27,
+                action_evidence="съел",
+                food_evidence="пиццу 100 грамм",
+            ),
+            completed_semantic_meal_result(
+                name="Burger",
+                portion_g=200,
+                carbs_g=48,
+                action_evidence="схомячил",
+                food_evidence="бургер 200 грамм",
+            ),
+        ]
+    )
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        first, _, _ = post_turn(
+            client,
+            chat["id"],
+            text="я съел пиццу 100 грамм",
+        )
+        second, _, _ = post_turn(
+            client,
+            chat["id"],
+            text="я схомячил бургер 200 грамм",
+        )
+
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        result = second.json()
+        assert result["outcome"] == "applied"
+        assert result["deleted_event_ids"] == []
+        assert result["events"][0]["meal_text"] == "200 g burger"
+        assert len(active_intakes(client)) == 2
+        context = intake_analyzer.meal_revision_contexts[-1]
+        assert context is not None
+        assert context.scope == "recent_single_meal"
+
+
+def test_exact_insulin_and_noisy_semantic_meal_are_applied_atomically(tmp_path):
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results.append(
+        completed_semantic_meal_result(
+            name="Burger",
+            portion_g=200,
+            carbs_g=48,
+            action_evidence="навернул",
+            food_evidence="бургер грамм 200",
+        )
+    )
+    report = "Я ввёл 5 НовоРапида и ну я это, бургер грамм 200 навернул"
+    meal_evidence = "ну я это, бургер грамм 200 навернул"
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(client, chat["id"], text=report)
+
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["outcome"] == "applied"
+        assert len(result["events"]) == 2
+        insulin = next(
+            event for event in result["events"] if event["insulin_name"]
+        )
+        meal = next(
+            event for event in result["events"] if event["meal_text"]
+        )
+        assert insulin["insulin_name"] == "NovoRapid"
+        assert insulin["insulin_units"] == 5
+        assert meal["portion_g"] == 200
+        assert len(intake_analyzer.calls) == 1
+        assert intake_analyzer.calls[0][1] == meal_evidence
+        assert len(active_intakes(client)) == 2
+
+
+def test_two_word_open_vocabulary_meal_residual_never_saves_only_insulin(
+    tmp_path,
+):
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.semantic_results.append(
+        IntakeChatInsulinSemanticResult(
+            intent="create",
+            event_status="completed",
+            actor="self",
+            context_scope="none",
+            insulin_name="NovoRapid",
+            insulin_type="rapid",
+            insulin_units=5,
+            action_evidence="я вкатил",
+            product_evidence="наваперда",
+            dose_evidence="пять",
+            confidence=0.96,
+        )
+    )
+    intake_analyzer.results.append(
+        completed_semantic_meal_result(
+            name="Burger",
+            portion_g=200,
+            carbs_g=48,
+            action_evidence="навернул",
+            food_evidence="бургер",
+        )
+    )
+    report = "я вкатил пять наваперда и бургер навернул"
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(client, chat["id"], text=report)
+
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["outcome"] == "applied"
+        assert len(result["events"]) == 2
+        assert {event["insulin_name"] for event in result["events"]} == {
+            None,
+            "NovoRapid",
+        }
+        assert intake_analyzer.calls[0][1] == "бургер навернул"
+        assert len(active_intakes(client)) == 2
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        "я вкатил пять наваперда и бургер",
+        "я вкатил пять наваперда и сколько там углеводов",
+    ],
+)
+def test_unsupported_semantic_residual_never_saves_only_insulin(
+    tmp_path,
+    report,
+):
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.semantic_results.append(
+        IntakeChatInsulinSemanticResult(
+            intent="create",
+            event_status="completed",
+            actor="self",
+            context_scope="none",
+            insulin_name="NovoRapid",
+            insulin_type="rapid",
+            insulin_units=5,
+            action_evidence="я вкатил",
+            product_evidence="наваперда",
+            dose_evidence="пять",
+            confidence=0.96,
+        )
+    )
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(client, chat["id"], text=report)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["outcome"] == "clarification"
+        assert response.json()["events"] == []
+        assert response.json()["deleted_event_ids"] == []
+        assert active_intakes(client) == []
+        assert intake_analyzer.calls == []
+
+
+def test_clarified_noisy_meal_prevents_partial_exact_insulin_write(tmp_path):
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results.append(
+        IntakeChatModelResult(
+            intent="clarify",
+            assistant_message="Please clarify the meal.",
+            meal=None,
+        )
+    )
+    report = "Я ввёл 5 НовоРапида и ну я это, бургер грамм 200 навернул"
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(client, chat["id"], text=report)
+
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["outcome"] == "clarification"
+        assert result["events"] == []
+        assert result["deleted_event_ids"] == []
+        assert len(intake_analyzer.calls) == 1
+        assert active_intakes(client) == []
+        with sqlite3.connect(settings.database_path) as connection:
+            assert connection.execute(
+                "SELECT count(*) FROM intake_events"
+            ).fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("meal_intent", ["clarify", "undo_last", "replace_last"])
@@ -2683,7 +3252,22 @@ def test_text_meal_gate_rejects_questions_future_and_prompt_injection(tmp_path):
             assert response.json()["events"] == []
             assert response.json()["deleted_event_ids"] == []
 
-        assert intake_analyzer.calls == []
+        # The open-vocabulary flow deliberately lets safe, food-shaped text
+        # reach the semantic model even without a memorized meal verb.  The
+        # assertions above are the security boundary: ambiguous/questions do
+        # not create records.  Obvious prompt-injection payloads are still
+        # rejected before they can be sent to the provider.
+        routed_texts = [call[1] for call in intake_analyzer.calls]
+        assert "No sugar yogurt" in routed_texts
+        assert not any(
+            re.search(
+                r"ignore instructions|bypass safeguards|"
+                r"act as a developer|output cake|record cake",
+                routed,
+                flags=re.IGNORECASE,
+            )
+            for routed in routed_texts
+        )
         assert active_intakes(client) == []
 
 
@@ -2863,11 +3447,13 @@ def test_meal_create_photo_and_anchored_model_confirmed_correction(
             text="I ate rice instead of pasta",
         )
         assert broad_phrase.status_code == 200, broad_phrase.text
-        assert broad_phrase.json()["outcome"] == "clarification"
-        assert broad_phrase.json()["events"] == []
-        assert broad_phrase.json()["deleted_event_ids"] == []
+        broad_result = broad_phrase.json()
+        assert broad_result["outcome"] == "applied"
+        assert broad_result["deleted_event_ids"] == [old_meal["id"]]
+        assert broad_result["events"][0]["meal_text"] == "200 g rice"
+        corrected_meal = broad_result["events"][0]
         assert [event["id"] for event in active_intakes(client)] == [
-            old_meal["id"]
+            corrected_meal["id"]
         ]
 
         corrected, _, _ = post_turn(
@@ -2879,7 +3465,7 @@ def test_meal_create_photo_and_anchored_model_confirmed_correction(
         assert corrected.status_code == 200, corrected.text
         correction = corrected.json()
         assert correction["outcome"] == "applied"
-        assert correction["deleted_event_ids"] == [old_meal["id"]]
+        assert correction["deleted_event_ids"] == [corrected_meal["id"]]
         assert correction["events"][0]["portion_g"] == 100
         assert correction["events"][0]["occurred_at_ms"] == original_time
         assert correction["events"][0]["occurred_at_ms"] != correction_time
@@ -2895,6 +3481,142 @@ def test_meal_create_photo_and_anchored_model_confirmed_correction(
         assert intake_analyzer.calls[-1][1] == ""
         assert len(intake_analyzer.calls[-1][2]) == 1
         assert len(active_intakes(client)) == 2
+
+
+@pytest.mark.parametrize(
+    ("correction_text", "action_evidence", "food_evidence", "meal_name"),
+    [
+        ("I ate rice, not pasta", "ate", "rice", "Rice"),
+        ("I ate not pasta but rice", "ate", "rice", "Rice"),
+        ("я съел рис, а не пасту", "съел", "рис", "Рис"),
+        ("я съел не пасту, а рис", "съел", "рис", "Рис"),
+    ],
+)
+def test_natural_food_contrast_replaces_recent_meal_through_semantic_model(
+    tmp_path,
+    correction_text,
+    action_evidence,
+    food_evidence,
+    meal_name,
+):
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results = [
+        IntakeChatModelResult(
+            intent="create",
+            assistant_message="Recorded pasta.",
+            meal=meal_proposal(name="Pasta", portion_g=180, carbs_g=52),
+        ),
+        completed_semantic_meal_result(
+            name=meal_name,
+            portion_g=200,
+            carbs_g=56,
+            action_evidence=action_evidence,
+            food_evidence=food_evidence,
+        ).model_copy(update={"intent": "replace_last"}),
+    ]
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        original, _, _ = post_turn(
+            client,
+            chat["id"],
+            text="I ate pasta",
+        )
+        old_event = original.json()["events"][0]
+
+        corrected, _, _ = post_turn(
+            client,
+            chat["id"],
+            text=correction_text,
+        )
+
+        assert corrected.status_code == 200, corrected.text
+        result = corrected.json()
+        assert result["outcome"] == "applied"
+        assert result["deleted_event_ids"] == [old_event["id"]]
+        assert result["events"][0]["meal_text"] == f"200 g {meal_name.lower()}"
+        assert len(intake_analyzer.calls) == 2
+        assert [event["id"] for event in active_intakes(client)] == [
+            result["events"][0]["id"]
+        ]
+
+
+@pytest.mark.parametrize(
+    ("text", "action_evidence", "food_evidence"),
+    [
+        ("I did not eat pasta but rice", "eat", "rice"),
+        ("я не съел пасту, а рис", "съел", "рис"),
+    ],
+)
+def test_negated_meal_action_cannot_become_completed_write(
+    tmp_path,
+    text,
+    action_evidence,
+    food_evidence,
+):
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results = [
+        completed_semantic_meal_result(
+            name="Rice",
+            portion_g=200,
+            carbs_g=56,
+            action_evidence=action_evidence,
+            food_evidence=food_evidence,
+        )
+    ]
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(client, chat["id"], text=text)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["outcome"] == "clarification"
+        assert response.json()["events"] == []
+        assert active_intakes(client) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I ate pizza, how many carbs was that",
+        "I ate pizza and how many carbs was that",
+        "I ate pizza, I felt fine",
+        "Я съел пиццу, сколько там углеводов",
+    ],
+)
+def test_trailing_question_or_extra_clause_cannot_reach_overeager_meal_model(
+    tmp_path,
+    text,
+):
+    settings = make_settings(tmp_path)
+    intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results = [
+        completed_semantic_meal_result(
+            name="Pizza",
+            portion_g=180,
+            carbs_g=48,
+            action_evidence=("съел" if "съел" in text else "ate"),
+            food_evidence=("пиццу" if "пиццу" in text else "pizza"),
+        )
+    ]
+
+    with TestClient(
+        build_app(settings, intake_analyzer, CountingTranscriber(""))
+    ) as client:
+        chat, _ = create_session(client)
+        response, _, _ = post_turn(client, chat["id"], text=text)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["outcome"] == "clarification"
+        assert response.json()["events"] == []
+        assert active_intakes(client) == []
+        assert intake_analyzer.calls == []
 
 
 def test_contextual_meal_quantity_correction_compares_old_and_new_portions(
@@ -4651,6 +5373,17 @@ def test_meal_semantic_actor_contract_rejects_another_person(
 def test_meal_semantic_actor_contract_keeps_multiword_food_fluent(tmp_path, text):
     settings = make_settings(tmp_path)
     intake_analyzer = FakeIntakeChatAnalyzer()
+    intake_analyzer.results.append(
+        IntakeChatModelResult(
+            intent="create",
+            assistant_message="Recorded 100 g meal.",
+            meal=meal_proposal(
+                name="Meal",
+                portion_g=100,
+                carbs_g=20,
+            ),
+        )
+    )
     with TestClient(
         build_app(settings, intake_analyzer, CountingTranscriber(""))
     ) as client:
@@ -4738,6 +5471,7 @@ def test_pending_meal_rejects_ambiguous_portion_even_if_model_returns_create(
     ("open_pending", "followup"),
     [
         (False, "Нет, не 50 грамм, 100 грамм."),
+        (False, "нет, 100 грамм"),
         (True, "пицца 100 грамм, 100"),
     ],
 )

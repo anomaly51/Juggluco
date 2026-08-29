@@ -94,7 +94,7 @@ class Settings:
     max_audio_bytes: int
     app_version: str = "dev"
     openrouter_audio_language: str | None = None
-    openrouter_meal_chat_model: str = "qwen/qwen3-vl-8b-instruct"
+    openrouter_meal_chat_model: str = "google/gemini-3.1-flash-lite"
     meal_chat_max_photos: int = 24
     meal_chat_max_aggregate_image_bytes: int = 32 * 1024 * 1024
     meal_chat_max_history_messages: int = 40
@@ -209,7 +209,7 @@ class Settings:
                 "OPENROUTER_AUDIO_LANGUAGE"
             ),
             openrouter_meal_chat_model=os.getenv(
-                "OPENROUTER_MEAL_CHAT_MODEL", "qwen/qwen3-vl-8b-instruct"
+                "OPENROUTER_MEAL_CHAT_MODEL", "google/gemini-3.1-flash-lite"
             ),
             meal_chat_max_photos=_positive_int(
                 "JUGGLUCO_MEAL_CHAT_MAX_PHOTOS", 24

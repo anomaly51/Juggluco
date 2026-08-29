@@ -62,12 +62,12 @@ cd ..\backend
 The production bundle, manifest, service worker, and icons are generated in
 `pwa/dist`; Node.js is not needed by the running Python process.
 
-Meal chat defaults to the economical vision-capable
-[`qwen/qwen3-vl-8b-instruct`](https://openrouter.ai/qwen/qwen3-vl-8b-instruct),
+Unified intake chat defaults to the low-latency multimodal
+[`google/gemini-3.1-flash-lite`](https://openrouter.ai/google/gemini-3.1-flash-lite),
 selected from OpenRouter's official model catalog with image input, structured-output,
 and ZDR routing requirements. It remains configurable with
-`OPENROUTER_MEAL_CHAT_MODEL`; `google/gemini-2.5-flash-lite` is a reasonable manual
-fallback. There is no silent fallback that could weaken privacy/provider constraints.
+`OPENROUTER_MEAL_CHAT_MODEL`. There is no silent fallback that could weaken
+privacy/provider constraints.
 Voice transcription defaults to the latency-oriented
 `openai/whisper-large-v3-turbo` model through OpenRouter's dedicated speech-to-text
 endpoint. Set `OPENROUTER_AUDIO_LANGUAGE=ru` (or another ISO-639-1/BCP-47 tag)

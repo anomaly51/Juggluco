@@ -8,6 +8,7 @@ from app.intake_chat import (
     has_contextual_insulin_time_correction_cue,
     has_explicit_meal_consumption,
     has_safe_meal_consumption_candidate,
+    has_semantic_meal_candidate,
     has_semantic_meal_consumption_cue,
     has_safe_photo_meal_context,
     is_explicit_delete_current,
@@ -33,6 +34,8 @@ from app.intake_chat import (
     semantic_dose_values_are_consistent,
     semantic_action_evidence_matches_anchored_clause,
     semantic_meal_residual,
+    semantic_noninsulin_residual,
+    semantic_meal_proposal_matches_explicit_quantities,
     semantic_product_dose_evidence_is_bound,
     semantic_product_evidence_matches,
     semantic_product_evidence_span,
@@ -553,6 +556,26 @@ def test_semantic_meal_residual_uses_anchored_clause_boundaries(
     assert has_semantic_meal_consumption_cue(text)
 
 
+@pytest.mark.parametrize(
+    ("text", "expected_residual"),
+    [
+        ("I injected five novawarp and burger", "and burger"),
+        (
+            "I injected five novawarp and how many carbs was that",
+            "and how many carbs was that",
+        ),
+    ],
+)
+def test_semantic_noninsulin_residual_preserves_unsupported_atomicity_veto(
+    text,
+    expected_residual,
+):
+    anchor = (text.index("five"), text.index("novawarp") + len("novawarp"))
+
+    assert semantic_meal_residual(text, anchor) == ""
+    assert semantic_noninsulin_residual(text, anchor) == expected_residual
+
+
 def test_semantic_product_and_dose_cannot_be_borrowed_across_clauses():
     text = "я съел пять яблок и уколол наваперда"
     anchor = (text.index("пять"), text.index("наваперда") + len("наваперда"))
@@ -895,6 +918,94 @@ def test_semantic_meal_write_requires_self_completed_exact_evidence(
 
 
 @pytest.mark.parametrize(
+    ("text", "portion_g", "carbs_g", "expected"),
+    [
+        ("бургер грамм 200 навернул", 200, 48, True),
+        ("бургер грамм 200 навернул", 20, 48, False),
+        ("I polished off 180 g of pasta", 180, 52, True),
+        ("I polished off 180 g of pasta", 200, 52, False),
+        ("я съел йогурт, 30 грамм углеводов", 200, 30, True),
+        ("я съел йогурт, 30 грамм углеводов", 200, 3, False),
+        ("carbs 45 g, выпил сок", 0, 45, True),
+        ("Correction: I ate 100 g pizza, not 180 g", 100, 27, True),
+        ("Actually I ate not 180 g but 100 g pizza", 100, 27, True),
+        ("I ate either 100 g or 200 g pizza", 100, 27, False),
+    ],
+)
+def test_semantic_meal_proposal_preserves_explicit_portion_and_carbs(
+    text,
+    portion_g,
+    carbs_g,
+    expected,
+):
+    assert semantic_meal_proposal_matches_explicit_quantities(
+        text,
+        portion_g=portion_g,
+        carbs_g=carbs_g,
+    ) is expected
+
+
+def test_semantic_meal_quantities_support_corrections_and_multiple_items():
+    assert semantic_meal_proposal_matches_explicit_quantities(
+        "instead of 180 g pasta I ate 200 g rice",
+        portion_g=200,
+        carbs_g=56,
+        action_evidence="ate",
+        food_evidence="200 g rice",
+        item_portions_g=(200,),
+        item_carbs_g=(56,),
+    )
+    assert semantic_meal_proposal_matches_explicit_quantities(
+        "I ate 200 g rice instead of 180 g pasta",
+        portion_g=200,
+        carbs_g=56,
+        action_evidence="ate",
+        food_evidence="200 g rice",
+        item_portions_g=(200,),
+        item_carbs_g=(56,),
+    )
+    assert semantic_meal_proposal_matches_explicit_quantities(
+        "I ate 100 g rice and 50 g chicken",
+        portion_g=150,
+        carbs_g=35,
+        action_evidence="ate",
+        food_evidence="100 g rice and 50 g chicken",
+        item_portions_g=(100, 50),
+        item_carbs_g=(28, 7),
+    )
+    assert semantic_meal_proposal_matches_explicit_quantities(
+        "я съел йогурт, углеводов грамм 60",
+        portion_g=200,
+        carbs_g=60,
+        action_evidence="съел",
+        food_evidence="йогурт, углеводов грамм 60",
+        item_portions_g=(200,),
+        item_carbs_g=(60,),
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "portion_g", "items"),
+    [
+        ("I ate 80-100 g pizza", 100, (100,)),
+        ("I ate either 100 g or 200 g pizza", 300, (100, 200)),
+        ("I ate 100 g or 200 g pizza", 300, (100, 200)),
+    ],
+)
+def test_semantic_meal_quantities_reject_ranges_and_alternatives(
+    text,
+    portion_g,
+    items,
+):
+    assert not semantic_meal_proposal_matches_explicit_quantities(
+        text,
+        portion_g=portion_g,
+        carbs_g=30,
+        item_portions_g=items,
+    )
+
+
+@pytest.mark.parametrize(
     "utterance",
     [
         "No sugar yogurt",
@@ -976,6 +1087,70 @@ def test_meal_correction_requires_anchored_consumption_grammar(utterance):
 )
 def test_broad_replace_words_do_not_authorize_meal_correction(utterance):
     assert is_explicit_meal_correction(utterance) is False
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "I ate rice, not pasta",
+        "I ate not pasta but rice",
+        "я съел рис, а не пасту",
+        "я съел не пасту, а рис",
+    ],
+)
+def test_semantic_meal_gate_routes_natural_food_contrasts(utterance):
+    assert has_semantic_meal_candidate(utterance) is True
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "I ate pizza, how many carbs was that",
+        "I ate pizza and how many carbs was that",
+        "I ate pizza, I felt fine",
+        "Я съел пиццу, сколько там углеводов",
+    ],
+)
+def test_semantic_meal_gate_rejects_trailing_questions_or_extra_reports(
+    utterance,
+):
+    assert has_semantic_meal_candidate(utterance) is False
+    assert (
+        is_safe_semantic_meal_write(
+            utterance,
+            event_status="completed",
+            actor="self",
+            action_evidence=("съел" if "съел" in utterance else "ate"),
+            food_evidence=("пиццу" if "пиццу" in utterance else "pizza"),
+            confidence=0.99,
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    ("utterance", "action", "food"),
+    [
+        ("I did not eat pasta but rice", "eat", "rice"),
+        ("я не съел пасту, а рис", "съел", "рис"),
+    ],
+)
+def test_semantic_meal_write_rejects_negated_action_in_food_contrast(
+    utterance,
+    action,
+    food,
+):
+    assert (
+        is_safe_semantic_meal_write(
+            utterance,
+            event_status="completed",
+            actor="self",
+            action_evidence=action,
+            food_evidence=food,
+            confidence=0.99,
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(

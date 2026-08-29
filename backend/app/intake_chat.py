@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 
@@ -563,6 +565,33 @@ _TERSE_MEAL_CARB_MASS = re.compile(
     rf"{_GRAM_UNIT}\s*(?:of\s+)?(?:carbs?|carbohydrates?|углевод\w*)(?![\w])",
     re.IGNORECASE,
 )
+_MEAL_CARB_WORD = r"(?:carbs?|carbohydrates?|углевод\w*)"
+_EXPLICIT_MEAL_MASS = re.compile(
+    rf"(?<![\d.,\w])(?P<before>{_PORTION_NUMBER}|{_RU_SPOKEN_NUMBER})"
+    rf"\s*(?P<unit_after>{_GRAM_UNIT})(?![\w])|"
+    rf"(?<![\w])(?P<unit_before>{_GRAM_UNIT})(?![\w])\s*"
+    rf"(?P<after>{_PORTION_NUMBER}|{_RU_SPOKEN_NUMBER})(?![\d\w]|[.,]\d)",
+    re.IGNORECASE,
+)
+_EXPLICIT_MEAL_CARB_QUANTITY = (
+    re.compile(
+        rf"(?<![\d.,\w])(?P<value>{_PORTION_NUMBER}|{_RU_SPOKEN_NUMBER})"
+        rf"\s*(?:{_GRAM_UNIT}\s*)?(?:of\s+)?{_MEAL_CARB_WORD}(?![\w])",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"(?<![\w]){_MEAL_CARB_WORD}(?![\w])\s*"
+        rf"(?:(?:was|were|is|total(?:led)?|был(?:о|и)?|всего|там)\s*)?"
+        rf"(?:{_GRAM_UNIT}\s*)?"
+        rf"(?P<value>{_PORTION_NUMBER}|{_RU_SPOKEN_NUMBER})"
+        rf"\s*(?:{_GRAM_UNIT})?(?![\w])",
+        re.IGNORECASE,
+    ),
+)
+_MEAL_REPLACED_QUANTITY_MARKER = re.compile(
+    r"\b(?:not|не|instead\s+of|вместо)\b",
+    re.IGNORECASE,
+)
 _TERSE_MEAL_SIGNED_PORTION = re.compile(
     rf"(?<![\d\w])[+\-−]\s*(?:{_PORTION_NUMBER}|{_RU_SPOKEN_NUMBER})",
     re.IGNORECASE,
@@ -834,6 +863,20 @@ _RUSSIAN_MEAL_CORRECTION = re.compile(
     r"(?:(?:я|мы)\s+)?(?:съел\w*|поел\w*|выпил\w*|съела|поела|"
     r"выпила|съели|поели|выпили)\b.+",
     re.IGNORECASE | re.DOTALL,
+)
+_CONTRASTIVE_MEAL_NEGATION = re.compile(
+    r"(?:"
+    r"\bnot\s+[^,;.!?]{1,120}?\s+but\s+[^,;.!?]{1,120}|"
+    r",\s*not\s+[^,;.!?]{1,120}\s*[.!]*$|"
+    r"\bне\s+[^,;.!?]{1,120}?\s*,?\s+а\s+[^,;.!?]{1,120}|"
+    r",\s*а\s+не\s+[^,;.!?]{1,120}\s*[.!]*$"
+    r")",
+    re.IGNORECASE,
+)
+_NEGATION_IMMEDIATELY_BEFORE_ACTION = re.compile(
+    r"\b(?:not|never|didn['’]?t|don['’]?t|doesn['’]?t|"
+    r"не|никогда)\s+(?:(?:just|really|actually|точно|действительно)\s+){0,2}$",
+    re.IGNORECASE,
 )
 _ADDITIONAL_MEAL_MARKER = re.compile(
     r"\b(?:another|additional|one\s+more|again|also|"
@@ -1201,7 +1244,20 @@ def _meal_only_residual(text: str) -> str:
         "",
         text,
     )
-    cleaned = _INJECTION_WRAPPER.sub(" ", candidate)
+    # Remove the insulin action without globally deleting self pronouns from a
+    # following meal clause (``I injected ... and I grabbed a burger``).  The
+    # old broad wrapper erased both instances of ``I/я`` and weakened the exact
+    # actor evidence sent to the semantic meal parser.
+    cleaned = _COMPLETED_INSULIN_ACTION.sub(" ", candidate)
+    cleaned = re.sub(
+        r"^\s*(?:i|we|я|мы)\s*[,\s]*"
+        r"(?:and|but|plus|then|и|но|плюс|затем|потом|"
+        r"а(?:\s+также)?)\b\s*",
+        "",
+        cleaned,
+        count=1,
+        flags=re.IGNORECASE,
+    )
     cleaned = re.sub(
         r"^\s*\b(?:and|but|plus|then|и|но|плюс|затем|потом|"
         r"а(?:\s+также)?)\b|"
@@ -1213,7 +1269,45 @@ def _meal_only_residual(text: str) -> str:
     )
     cleaned = re.sub(r"^[\s,;:+\-–—]+|[\s,;:+\-–—]+$", "", cleaned)
     cleaned = " ".join(cleaned.split())
-    return cleaned if _MEAL_REPORT.search(cleaned) else ""
+    meal_after_self = re.sub(
+        r"^(?:i|we|я|мы)\s*[,;:+\-–—]+\s*",
+        "",
+        cleaned,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    if _MEAL_REPORT.match(meal_after_self):
+        cleaned = meal_after_self
+    if _MEAL_REPORT.match(cleaned):
+        cleaned = re.sub(
+            r"^(?:i|we|я|мы)\s+",
+            "",
+            cleaned,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    if re.fullmatch(
+        r"(?:(?:i|we|я|мы|just|now|только|что|сейчас|уже)\s*)+",
+        cleaned,
+        flags=re.IGNORECASE,
+    ):
+        return ""
+    if _MEAL_REPORT.search(cleaned):
+        return cleaned
+    # Do not require a memorized meal verb for a substantial safe residual.
+    # Short dose/control leftovers stay ambiguous instead of being relabelled
+    # as food. OpenRouter interprets the residue, and exact semantic evidence
+    # remains mandatory before either half of a mixed turn can be persisted.
+    return (
+        cleaned
+        if len(_plain_words(cleaned)) >= 2
+        and has_semantic_meal_candidate(cleaned)
+        and _INSULIN_LIKE_TOKEN.search(cleaned) is None
+        and _GENERIC_INSULIN.search(cleaned) is None
+        and _UNATTACHED_DOSE.search(cleaned) is None
+        and _RANGE_OR_ALTERNATIVE.search(cleaned) is None
+        else ""
+    )
 
 
 def _semantic_insulin_clause_bounds(
@@ -1349,6 +1443,26 @@ def semantic_meal_residual(
     )
 
 
+def semantic_noninsulin_residual(
+    text: str,
+    insulin_span: tuple[int, int],
+) -> str:
+    """Return every token outside a grounded semantic insulin clause.
+
+    Unlike :func:`semantic_meal_residual`, this deliberately does not discard
+    short, unsafe, or non-meal text. Callers use it only as an atomicity veto,
+    so an unresolved ``and burger`` or trailing question can never disappear
+    and leave an insulin-only partial write.
+    """
+
+    resolved = _semantic_insulin_clause_bounds(text, insulin_span)
+    if resolved is None:
+        return ""
+    clean, clause_start, clause_end = resolved
+    residual = _without_spans(clean, [(clause_start, clause_end)])
+    return " ".join(residual.strip().split())
+
+
 def _semantic_insulin_clause(
     text: str,
     insulin_span: tuple[int, int] | None,
@@ -1441,6 +1555,82 @@ def has_safe_meal_consumption_candidate(text: str) -> bool:
     return True
 
 
+def has_semantic_meal_candidate(text: str) -> bool:
+    """Route safe single-clause natural food language to the meal LLM.
+
+    Unlike :func:`has_safe_meal_consumption_candidate`, this is deliberately
+    not a positive verb allowlist.  It never authorizes a write; it only says
+    that an otherwise safe, food-shaped conversational turn is worth semantic
+    interpretation.  Exact model evidence and the deny-only write gate below
+    remain mandatory before anything is persisted.
+    """
+
+    raw = text or ""
+    clean = " ".join(raw.strip().split())
+    words = _plain_words(clean)
+    if (
+        not clean
+        or len(clean) > 8_000
+        or re.search(r"[A-Za-zА-Яа-яЁё]", clean) is None
+        or "\n" in raw
+        or "\r" in raw
+        or ";" in clean
+        or ":" in clean
+        or re.search(r"\s(?:--|[–—])\s", clean)
+        or re.search(r"(?<!\d)[.!](?!\d)\s*\S", clean)
+        or _QUESTION.search(clean)
+        or _INFO_REQUEST.search(clean)
+        or _FUTURE_OR_PLAN.search(clean)
+        or _CONDITIONAL.search(clean)
+        or _UNCERTAINTY.search(clean)
+        or _TRAILING_INTERROGATIVE_OR_REQUEST.search(clean)
+        or (
+            _NEGATION.search(clean)
+            and _CONTRASTIVE_MEAL_NEGATION.search(clean) is None
+        )
+        or _QUOTED_OR_LABEL.search(clean)
+        or _PROMPT_INJECTION.search(clean)
+        or _OTHER_PERSON_MEAL_REPORT.search(clean)
+        or _NON_SELF_ACTOR_CUE.search(clean)
+        or _POSTPOSED_NAMED_MEAL_ACTOR.search(clean)
+        or _POSTPOSED_COMMON_MEAL_ACTOR.search(clean)
+        or has_ambiguous_meal_time_reference(clean)
+        or (
+            words
+            and all(
+                word.casefold()
+                in (
+                    _SEMANTIC_ACTOR_SELF_WORDS
+                    | _SEMANTIC_ACTOR_FILLER_WORDS
+                )
+                for word in words
+            )
+        )
+    ):
+        return False
+    return True
+
+
+def has_substantive_noninsulin_residual(text: str) -> bool:
+    """Return true for any residue beyond harmless conversational filler.
+
+    This is an atomicity veto, not meal-write authority. Unknown food wording,
+    questions, and hostile text are all substantive and therefore prevent an
+    insulin-only partial write; only filler such as ``more precisely`` may be
+    ignored after an independently grounded insulin correction.
+    """
+
+    words = _plain_words(text or "")
+    return bool(
+        words
+        and not all(
+            word.casefold()
+            in (_SEMANTIC_ACTOR_SELF_WORDS | _SEMANTIC_ACTOR_FILLER_WORDS)
+            for word in words
+        )
+    )
+
+
 def has_explicit_meal_consumption(text: str) -> bool:
     """Accept a candidate unless a deterministic non-self actor is visible."""
 
@@ -1481,21 +1671,32 @@ def is_safe_semantic_meal_write(
     food_evidence: str | None,
     confidence: float,
 ) -> bool:
-    """Require self/completed semantics and exact clause-bound meal evidence."""
+    """Require self/completed semantics and exact clause-bound meal evidence.
+
+    The established strict grammar remains a fast corroborator for canonical
+    reports.  For colloquial or speech-to-text wording, the provider may name
+    an open-vocabulary consumption action, but it must quote that action and
+    the food as two unique, non-overlapping fragments from the same safe turn.
+    No local list of meal verbs is allowed to become positive authority.
+    """
 
     clean = " ".join((text or "").strip().split())
     if (
         event_status != "completed"
         or actor != "self"
         or confidence < 0.90
-        or not has_safe_meal_consumption_candidate(clean)
+        or not (
+            has_safe_meal_consumption_candidate(clean)
+            or has_semantic_meal_candidate(clean)
+        )
     ):
         return False
 
     # Keep deterministic actor vetoes as defense in depth for pronouns, roles,
     # and clearly formatted names. Open-vocabulary actor resolution comes from
     # the explicit semantic field above, not from a finite local name list.
-    if not has_explicit_meal_consumption(clean):
+    strict_report = has_safe_meal_consumption_candidate(clean)
+    if strict_report and not has_explicit_meal_consumption(clean):
         return False
 
     action_spans = _whole_semantic_fragment_spans(clean, action_evidence)
@@ -1503,33 +1704,211 @@ def is_safe_semantic_meal_write(
     if len(action_spans) != 1 or len(food_spans) != 1:
         return False
 
-    report_scope_start = 0
-    if (
-        _ENGLISH_MEAL_CORRECTION.fullmatch(clean)
-        or _RUSSIAN_MEAL_CORRECTION.fullmatch(clean)
-    ):
-        prefix = re.match(
-            r"^\s*(?:correction|corrected|actually|исправление|поправка|"
-            r"на\s+самом\s+деле)\s*[:,\-–—]?\s*",
-            clean,
-            flags=re.IGNORECASE,
-        )
-        report_scope_start = prefix.end() if prefix is not None else 0
-    report = _MEAL_REPORT.match(clean[report_scope_start:])
-    if report is None:
-        return False
-    report_start = report_scope_start + report.start()
-    report_end = report_scope_start + report.end()
     action_start, action_end = action_spans[0]
     food_start, food_end = food_spans[0]
     action_fragment = clean[action_start:action_end]
+    food_fragment = clean[food_start:food_end]
+    action_prefix = clean[max(0, action_start - 48) : action_start]
+    if (
+        _NEGATION.search(action_fragment)
+        or _NEGATION_IMMEDIATELY_BEFORE_ACTION.search(action_prefix)
+    ):
+        # Contrastive food corrections are routable ("rice, not pasta"), but
+        # a provider may never turn a negated action ("did not eat") into a
+        # completed record, including for an open-vocabulary action verb.
+        return False
+    if strict_report:
+        report_scope_start = 0
+        if (
+            _ENGLISH_MEAL_CORRECTION.fullmatch(clean)
+            or _RUSSIAN_MEAL_CORRECTION.fullmatch(clean)
+        ):
+            prefix = re.match(
+                r"^\s*(?:correction|corrected|actually|исправление|поправка|"
+                r"на\s+самом\s+деле)\s*[:,\-–—]?\s*",
+                clean,
+                flags=re.IGNORECASE,
+            )
+            report_scope_start = prefix.end() if prefix is not None else 0
+        report = _MEAL_REPORT.match(clean[report_scope_start:])
+        if report is None:
+            return False
+        report_start = report_scope_start + report.start()
+        report_end = report_scope_start + report.end()
+        return bool(
+            action_start >= report_start
+            and action_end <= report_end
+            and _SEMANTIC_MEAL_CONSUMPTION_CUE.search(action_fragment)
+            and food_start >= report_end
+            and food_end <= len(clean)
+            and re.search(r"[A-Za-zА-Яа-яЁё]", food_fragment)
+        )
+
+    action_words = _plain_words(action_fragment)
+    food_words = _plain_words(food_fragment)
+    action_is_only_filler = bool(action_words) and all(
+        word.casefold()
+        in (_SEMANTIC_ACTOR_SELF_WORDS | _SEMANTIC_ACTOR_FILLER_WORDS)
+        for word in action_words
+    )
+    spans_overlap = action_start < food_end and food_start < action_end
     return bool(
-        action_start >= report_start
-        and action_end <= report_end
-        and _SEMANTIC_MEAL_CONSUMPTION_CUE.search(action_fragment)
-        and food_start >= report_end
-        and food_end <= len(clean)
-        and re.search(r"[A-Za-zА-Яа-яЁё]", clean[food_start:food_end])
+        1 <= len(action_words) <= 12
+        and not action_is_only_filler
+        and food_words
+        and not spans_overlap
+    )
+
+
+def semantic_meal_proposal_matches_explicit_quantities(
+    text: str,
+    *,
+    portion_g: float,
+    carbs_g: float,
+    action_evidence: str | None = None,
+    food_evidence: str | None = None,
+    item_portions_g: Sequence[float] = (),
+    item_carbs_g: Sequence[float] = (),
+) -> bool:
+    """Ground explicitly spoken meal masses in the provider proposal.
+
+    The model may estimate omitted nutrition, but it may never silently turn a
+    stated 200 g portion into 20 g or change a stated carbohydrate mass. Both
+    ordinary ``200 grams`` and noisy ASR order such as ``grams 200`` are
+    recognized. Multiple explicit item masses must add up to the proposal and
+    remain grounded in its items. A correction may retain one old value after
+    ``not``/``instead of`` (or their Russian equivalents); only the new food
+    evidence controls the replacement proposal.
+    """
+
+    clean = " ".join((text or "").strip().split())
+    if not clean:
+        return True
+    if (
+        _RANGE_OR_ALTERNATIVE.search(clean)
+        or _TERSE_MEAL_PORTION_RANGE.search(clean)
+    ):
+        return False
+
+    def parsed_value(raw: str) -> float | None:
+        value = _RU_SPOKEN_NUMBERS.get(raw.casefold())
+        if value is not None:
+            return value
+        try:
+            return _parse_units(raw)
+        except ValueError:
+            return None
+
+    # role, value, full-span, numeric-start
+    quantities: list[tuple[str, float, tuple[int, int], int]] = []
+    carb_spans: list[tuple[int, int]] = []
+    for pattern in _EXPLICIT_MEAL_CARB_QUANTITY:
+        for match in pattern.finditer(clean):
+            if any(match.span() == existing for existing in carb_spans):
+                continue
+            value = parsed_value(match.group("value"))
+            if value is None or not 0 <= value <= 1_000:
+                return False
+            carb_spans.append(match.span())
+            quantities.append(
+                ("carbs", value, match.span(), match.start("value"))
+            )
+
+    for match in _EXPLICIT_MEAL_MASS.finditer(clean):
+        if any(_overlaps(match.span(), span) for span in carb_spans):
+            continue
+        raw_value = match.group("before") or match.group("after")
+        value = parsed_value(raw_value)
+        if value is None or not 0 <= value <= 10_000:
+            return False
+        value_start = (
+            match.start("before")
+            if match.group("before") is not None
+            else match.start("after")
+        )
+        quantities.append(("portion", value, match.span(), value_start))
+
+    quantities.sort(key=lambda item: item[2])
+    action_spans = _whole_semantic_fragment_spans(clean, action_evidence)
+    replaced_quantity_spans: set[tuple[int, int]] = set()
+    for marker in _MEAL_REPLACED_QUANTITY_MARKER.finditer(clean):
+        candidates = [
+            item
+            for item in quantities
+            if item[2][0] >= marker.end()
+            and item[2][0] - marker.end() <= 96
+            and not any(
+                marker.end() <= action_start < item[2][0]
+                for action_start, _action_end in action_spans
+            )
+        ]
+        if candidates:
+            replaced_quantity_spans.add(candidates[0][2])
+
+    asserted = [
+        item for item in quantities if item[2] not in replaced_quantity_spans
+    ]
+    if food_evidence is not None:
+        food_spans = _whole_semantic_fragment_spans(clean, food_evidence)
+        if len(food_spans) != 1:
+            return False
+        food_start, food_end = food_spans[0]
+        if any(
+            span_start < food_start or span_end > food_end
+            for _role, _value, (span_start, span_end), _value_start in asserted
+        ):
+            return False
+
+    def grounded_role(
+        role: str,
+        proposal_value: float,
+        item_values: Sequence[float],
+    ) -> bool:
+        values = [value for item_role, value, _span, _start in asserted if item_role == role]
+        if not values:
+            return True
+        if len(values) == 1:
+            return math.isclose(
+                proposal_value,
+                values[0],
+                rel_tol=1e-9,
+                abs_tol=1e-6,
+            )
+        if not math.isclose(
+            proposal_value,
+            sum(values),
+            rel_tol=1e-9,
+            abs_tol=1e-6,
+        ):
+            return False
+        remaining = list(item_values)
+        for value in values:
+            match_index = next(
+                (
+                    index
+                    for index, item_value in enumerate(remaining)
+                    if math.isclose(
+                        value,
+                        item_value,
+                        rel_tol=1e-9,
+                        abs_tol=1e-6,
+                    )
+                ),
+                None,
+            )
+            if match_index is None:
+                return False
+            remaining.pop(match_index)
+        return True
+
+    return grounded_role(
+        "portion",
+        portion_g,
+        item_portions_g,
+    ) and grounded_role(
+        "carbs",
+        carbs_g,
+        item_carbs_g,
     )
 
 
@@ -1567,18 +1946,32 @@ def is_explicit_meal_correction(text: str) -> bool:
 
 
 def has_safe_photo_meal_context(text: str) -> bool:
-    """Authorize photo logging only without a caption or with a self-report.
+    """Route photo logging only without a caption or with safe meal-shaped text.
 
-    Arbitrary captions cannot be classified safely with a denylist: a question,
-    instruction, or prompt injection always has another paraphrase.  Photo-only
-    is an intentional logging flow; every nonempty caption must independently
-    prove that the user consumed the meal.
+    This is not write authority. Open-vocabulary captions still require the
+    provider's completed+self classification, exact action/food evidence, and
+    quantity grounding before persistence. Questions, other actors, and prompt
+    injection are denied before image upload.
     """
 
     clean = " ".join((text or "").strip().split())
     if not clean:
         return True
-    return has_explicit_meal_consumption(clean)
+    return bool(
+        has_explicit_meal_consumption(clean)
+        or (
+            len(_plain_words(clean)) >= 2
+            and has_semantic_meal_candidate(clean)
+            and _TRAILING_INTERROGATIVE_OR_REQUEST.search(clean) is None
+            and (
+                _EXPLICIT_MEAL_MASS.search(clean) is not None
+                or any(
+                    pattern.search(clean)
+                    for pattern in _EXPLICIT_MEAL_CARB_QUANTITY
+                )
+            )
+        )
+    )
 
 
 def parse_relative_meal_time_offset_ms(text: str) -> int | None:
@@ -1900,6 +2293,10 @@ def parse_terse_meal_portion_replacement(
         or _TERSE_MEAL_INSULIN_UNITS.search(clean)
         or _TERSE_MEAL_WRONG_PORTION_UNITS.search(clean)
         or _TERSE_MEAL_CARB_MASS.search(clean)
+        or any(
+            pattern.search(clean)
+            for pattern in _EXPLICIT_MEAL_CARB_QUANTITY
+        )
         or _TERSE_MEAL_SIGNED_PORTION.search(clean)
     ):
         return None
@@ -1950,9 +2347,17 @@ def is_safe_terse_meal_revision_text(
 
     raw = text or ""
     clean = " ".join(raw.strip().split())
+    carb_quantity_spans = [
+        match.span()
+        for pattern in _EXPLICIT_MEAL_CARB_QUANTITY
+        for match in pattern.finditer(clean)
+    ]
     has_explicit_portion_evidence = bool(
         _TERSE_MEAL_PORTION_RANGE.search(clean)
-        or _TERSE_MEAL_PORTION_GRAMS.search(clean)
+        or any(
+            not any(_overlaps(match.span(), span) for span in carb_quantity_spans)
+            for match in _EXPLICIT_MEAL_MASS.finditer(clean)
+        )
     )
     portion_is_unambiguous = bool(
         not has_explicit_portion_evidence

@@ -48,10 +48,13 @@ from .intake_chat import (
     has_contextual_insulin_time_correction_cue,
     has_safe_photo_meal_context,
     has_safe_meal_consumption_candidate,
+    has_semantic_meal_candidate,
     has_semantic_meal_consumption_cue,
+    has_substantive_noninsulin_residual,
     is_safe_semantic_insulin_text,
     is_safe_semantic_insulin_write,
     is_safe_semantic_meal_write,
+    semantic_meal_proposal_matches_explicit_quantities,
     is_explicit_delete_current,
     is_explicit_meal_correction,
     is_explicit_additional_meal_report,
@@ -75,6 +78,7 @@ from .intake_chat import (
     semantic_dose_values_are_consistent,
     semantic_action_evidence_matches_anchored_clause,
     semantic_meal_residual,
+    semantic_noninsulin_residual,
     semantic_product_dose_evidence_is_bound,
     semantic_product_evidence_span,
     uses_cyrillic,
@@ -3417,6 +3421,7 @@ def create_app(
         semantic_create_applied = False
         semantic_insulin_applied = False
         semantic_mixed_evidence_unresolved = False
+        semantic_noninsulin_residual_unresolved = False
         semantic_delete_target: _FrozenSemanticDeleteContext | None = None
         semantic_candidate = bool(
             not prepared_images
@@ -3558,14 +3563,27 @@ def create_app(
                     full_evidence,
                     semantic_anchor_span,
                 )
-                meal_residual_is_supported = has_explicit_meal_consumption(
-                    meal_residual
+                noninsulin_residual = semantic_noninsulin_residual(
+                    full_evidence,
+                    semantic_anchor_span,
+                )
+                meal_residual_is_supported = bool(
+                    has_explicit_meal_consumption(meal_residual)
+                    or has_semantic_meal_candidate(meal_residual)
                 )
                 if not meal_residual_is_supported:
+                    semantic_noninsulin_residual_unresolved = (
+                        has_substantive_noninsulin_residual(
+                            noninsulin_residual
+                        )
+                    )
                     meal_residual = ""
                 if not (
-                    has_semantic_meal_consumption_cue(full_evidence)
-                    and not meal_residual_is_supported
+                    semantic_noninsulin_residual_unresolved
+                    or (
+                        has_semantic_meal_consumption_cue(full_evidence)
+                        and not meal_residual_is_supported
+                    )
                 ):
                     explicit = ExplicitInsulinParse(
                         commands=(
@@ -3671,14 +3689,27 @@ def create_app(
                     full_evidence,
                     replace_anchor_span,
                 )
-                meal_residual_is_supported = has_explicit_meal_consumption(
-                    meal_residual
+                noninsulin_residual = semantic_noninsulin_residual(
+                    full_evidence,
+                    replace_anchor_span,
+                )
+                meal_residual_is_supported = bool(
+                    has_explicit_meal_consumption(meal_residual)
+                    or has_semantic_meal_candidate(meal_residual)
                 )
                 if not meal_residual_is_supported:
+                    semantic_noninsulin_residual_unresolved = (
+                        has_substantive_noninsulin_residual(
+                            noninsulin_residual
+                        )
+                    )
                     meal_residual = ""
                 if not (
-                    has_semantic_meal_consumption_cue(full_evidence)
-                    and not meal_residual_is_supported
+                    semantic_noninsulin_residual_unresolved
+                    or (
+                        has_semantic_meal_consumption_cue(full_evidence)
+                        and not meal_residual_is_supported
+                    )
                 ):
                     explicit = ExplicitInsulinParse(
                         commands=(
@@ -3758,10 +3789,13 @@ def create_app(
             revision_requested = True
 
         semantic_mixed_evidence_unresolved = bool(
-            semantic_result is not None
-            and semantic_result.intent in ("create", "replace_last")
-            and has_semantic_meal_consumption_cue(full_evidence)
-            and not semantic_insulin_applied
+            semantic_noninsulin_residual_unresolved
+            or (
+                semantic_result is not None
+                and semantic_result.intent in ("create", "replace_last")
+                and has_semantic_meal_consumption_cue(full_evidence)
+                and not semantic_insulin_applied
+            )
         )
 
         if pending_revision is not None:
@@ -3786,6 +3820,9 @@ def create_app(
         meal_consumption_candidate = has_safe_meal_consumption_candidate(
             explicit.meal_evidence
         )
+        meal_semantic_candidate = has_semantic_meal_candidate(
+            explicit.meal_evidence
+        )
         additional_meal_reported = is_explicit_additional_meal_report(
             explicit.meal_evidence
         )
@@ -3799,35 +3836,39 @@ def create_app(
             and pending_revision is None
             else meal_revision_context
         )
+        bounded_meal_revision_text = bool(
+            active_meal_revision_context is not None
+            and is_safe_terse_meal_revision_text(
+                explicit.meal_evidence,
+                expected_current_grams=(
+                    active_meal_revision_context.portion_g
+                ),
+            )
+        )
         if (
             active_meal_revision_context is not None
             and (
                 prepared_images
-                or not is_safe_terse_meal_revision_text(
-                    explicit.meal_evidence,
-                    expected_current_grams=(
-                        active_meal_revision_context.portion_g
-                    ),
+                or not (
+                    bounded_meal_revision_text
+                    or meal_semantic_candidate
                 )
             )
         ):
             active_meal_revision_context = None
             terse_meal_portion = None
+            bounded_meal_revision_text = False
         if (
             active_meal_revision_context is not None
-            and (
-                additional_meal_reported
-                or (
-                    active_meal_revision_context.scope == "recent_single_meal"
-                    and meal_consumption_candidate
-                )
-            )
+            and additional_meal_reported
         ):
-            # A completed report of a separate meal is not swallowed by the
-            # short-lived refinement context.  In an explicit pending flow only
-            # an "additional/another" marker overrides the asked correction.
+            # An explicitly additional meal is not swallowed by the short-lived
+            # refinement context. Other full natural reports still reach the
+            # model with the frozen context so it can distinguish a semantic
+            # correction ("rice instead") from a genuinely new meal.
             active_meal_revision_context = None
             terse_meal_portion = None
+            bounded_meal_revision_text = False
             if additional_meal_reported:
                 pending_revision = None
         safe_photo_context = has_safe_photo_meal_context(full_evidence)
@@ -3949,6 +3990,7 @@ def create_app(
             has_meal_evidence = bool(
                 (prepared_images and safe_photo_context)
                 or (explicit.meal_evidence and meal_consumption_candidate)
+                or (meal_semantic_candidate and not prepared_images)
                 or contextual_meal_correction is not None
                 or (
                     active_meal_revision_context is not None
@@ -3974,22 +4016,6 @@ def create_app(
                     raise HTTPException(
                         status_code=error.status_code, detail=error.detail
                     ) from error
-                if (
-                    model_result is not None
-                    and model_result.intent == "create"
-                    and active_meal_revision_context is not None
-                    and (
-                        active_meal_revision_context.scope == "pending_revision"
-                        or terse_meal_portion is not None
-                        or meal_correction_syntax
-                    )
-                ):
-                    # The current turn answers/refines the frozen meal.  A
-                    # provider cannot turn a terse payload into a duplicate;
-                    # explicit separate-meal wording disabled this context above.
-                    model_result = model_result.model_copy(
-                        update={"intent": "replace_last"}
-                    )
             elif not explicit.commands:
                 deterministic_clarification = (
                     "Не удалось распознать запись. Скажите, что вы съели или какой инсулин ввели."
@@ -3997,17 +4023,86 @@ def create_app(
                     else "I could not recognize an entry. Say what you ate or which insulin you took."
                 )
 
+        model_meal_quantities_supported = bool(
+            model_result is None
+            or model_result.intent not in ("create", "replace_last")
+            or (
+                model_result.meal is not None
+                and semantic_meal_proposal_matches_explicit_quantities(
+                    explicit.meal_evidence,
+                    portion_g=model_result.meal.total_portion_g,
+                    carbs_g=model_result.meal.estimated_carbs_g,
+                    action_evidence=model_result.meal_action_evidence,
+                    food_evidence=model_result.meal_food_evidence,
+                    item_portions_g=tuple(
+                        item.portion_g for item in model_result.meal.items
+                    ),
+                    item_carbs_g=tuple(
+                        item.carbs_g for item in model_result.meal.items
+                    ),
+                )
+            )
+        )
         semantic_meal_write_supported = bool(
             model_result is not None
             and model_result.intent in ("create", "replace_last")
-            and meal_consumption_candidate
-            and is_safe_semantic_meal_write(
-                explicit.meal_evidence,
-                event_status=model_result.meal_event_status,
-                actor=model_result.meal_actor,
-                action_evidence=model_result.meal_action_evidence,
-                food_evidence=model_result.meal_food_evidence,
-                confidence=model_result.meal_semantic_confidence,
+            and (
+                (
+                    bool(prepared_images)
+                    and safe_photo_context
+                    and not explicit.meal_evidence.strip()
+                    and model_result.meal_event_status == "not_applicable"
+                    and model_result.meal_actor == "unknown"
+                    and model_result.meal_action_evidence is None
+                    and model_result.meal_food_evidence is None
+                )
+                or is_safe_semantic_meal_write(
+                    explicit.meal_evidence,
+                    event_status=model_result.meal_event_status,
+                    actor=model_result.meal_actor,
+                    action_evidence=model_result.meal_action_evidence,
+                    food_evidence=model_result.meal_food_evidence,
+                    confidence=model_result.meal_semantic_confidence,
+                )
+                and model_meal_quantities_supported
+            )
+        )
+        if (
+            model_result is not None
+            and model_result.intent == "create"
+            and active_meal_revision_context is not None
+            and (
+                active_meal_revision_context.scope == "pending_revision"
+                or (
+                    not semantic_meal_write_supported
+                    and (
+                        terse_meal_portion is not None
+                        or meal_correction_syntax
+                    )
+                )
+            )
+        ):
+            # A terse answer about the frozen meal is a replacement even if
+            # the provider labels it create.  A semantically proven completed
+            # open-vocabulary meal report remains create: the trusted recent
+            # context must never swallow a genuinely new meal.
+            model_result = model_result.model_copy(
+                update={"intent": "replace_last"}
+            )
+        meal_report_proof_required = bool(
+            model_result is not None
+            and (
+                model_result.intent == "create"
+                or (
+                    model_result.intent == "replace_last"
+                    and (
+                        model_result.meal_event_status == "completed"
+                        or (
+                            meal_semantic_candidate
+                            and not bounded_meal_revision_text
+                        )
+                    )
+                )
             )
         )
         model_mutation_intent_rejected = bool(
@@ -4016,11 +4111,16 @@ def create_app(
                 model_result.intent == "undo_last"
                 or (
                     model_result.intent in ("create", "replace_last")
-                    and meal_consumption_candidate
+                    and not model_meal_quantities_supported
+                )
+                or (
+                    meal_report_proof_required
                     and not semantic_meal_write_supported
                 )
                 or (
                     active_meal_revision_context is not None
+                    and active_meal_revision_context.scope
+                    == "pending_revision"
                     and model_result.intent == "create"
                 )
                 or (
@@ -4069,7 +4169,7 @@ def create_app(
         )
         meal_replace_authorized = bool(
             model_result is not None
-            and model_result.intent in ("create", "replace_last")
+            and model_result.intent == "replace_last"
             and (
                 meal_correction_syntax
                 or contextual_meal_correction is not None
@@ -4093,7 +4193,7 @@ def create_app(
             else None
         )
         mixed_pair_required = bool(
-            explicit.commands and meal_consumption_candidate
+            explicit.commands and explicit.meal_evidence.strip()
         )
         if mixed_pair_required and approved_meal is None:
             deterministic_clarification = (

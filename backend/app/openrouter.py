@@ -13,7 +13,9 @@ from pydantic import ValidationError
 
 from .config import Settings, normalize_audio_language
 from .intake_chat import (
+    is_safe_semantic_meal_write,
     parse_explicit_insulin,
+    semantic_meal_proposal_matches_explicit_quantities,
     semantic_text_has_bounded_dose_evidence,
 )
 from .media import PreparedAudio, PreparedImage
@@ -28,6 +30,47 @@ from .schemas import (
     IntakeChatModelResult,
     MealAnalysis,
     MealChatModelResult,
+)
+
+
+_PROVIDER_SCHEMA_CONSTRAINT_KEYS = {
+    "exclusiveMaximum",
+    "exclusiveMinimum",
+    "format",
+    "maxItems",
+    "maxLength",
+    "maximum",
+    "minItems",
+    "minLength",
+    "minimum",
+    "multipleOf",
+    "pattern",
+}
+
+
+def _provider_compatible_schema(value):
+    """Keep the strict shape while moving complex bounds to Pydantic.
+
+    Some OpenRouter providers reject deeply nested JSON schemas when numeric,
+    string, and array bounds create too many constrained-decoding states. The
+    object shape, required fields, enums, and additionalProperties=false stay
+    provider-enforced; the original full schema is still enforced immediately
+    after the response by strict Pydantic validation.
+    """
+
+    if isinstance(value, dict):
+        return {
+            key: _provider_compatible_schema(item)
+            for key, item in value.items()
+            if key not in _PROVIDER_SCHEMA_CONSTRAINT_KEYS
+        }
+    if isinstance(value, list):
+        return [_provider_compatible_schema(item) for item in value]
+    return value
+
+
+INTAKE_CHAT_PROVIDER_JSON_SCHEMA = _provider_compatible_schema(
+    INTAKE_CHAT_JSON_SCHEMA
 )
 
 
@@ -229,7 +272,14 @@ concise food, drink, portion, or carbohydrate fact is an answer about the frozen
 must use replace_last without requiring the user to repeat a consumption or correction
 verb. Explicit wording that a separate/additional meal was consumed remains create. A
 greeting, question, plan, uncertainty, unrelated number, or unsafe text is never a
-replacement merely because trusted context exists. For a
+replacement merely because trusted context exists. In recent_single_meal scope, a new full
+completed-consumption report is create unless the current turn semantically says it corrects,
+replaces, or contrasts with the frozen meal; natural wording such as "instead", "actually",
+"rice, not pasta", "not pasta but rice", or an equivalent meaning in any language may
+prove that correction without matching a fixed command phrase. In a food contrast, identify
+the affirmed food as meal_food_evidence and never treat the negated alternative as consumed.
+In pending_revision scope the server has already asked what should change, so a complete
+answer about the frozen meal is replace_last. For a
 recognizable consumed food or drink, create one complete best-effort meal proposal using
 a typical serving only when the portion is absent. Use lower confidence, a wide
 carbohydrate range, and a warning for every material assumption. Never turn a question,
@@ -237,6 +287,14 @@ hypothetical, recommendation request, future plan, or quoted label alone into co
 An explicit carbohydrate quantity can form a generic consumed-meal record. Photos can
 support a meal only when the accompanying evidence or image reasonably depicts food that
 the user is logging. Ask one concise clarification when there is no explicit consumption.
+
+Interpret ordinary colloquial language, speech-to-text distortions, filler words, inflected
+food names, and unusual but unambiguous word order semantically. Do not require a memorized
+consumption verb or command template. When the most likely meaning is a completed self-report
+and the exact current turn contains both the consumption action and the food, return create
+or replace_last as appropriate and quote those fragments verbatim. Surface grammar, filler,
+or transcription noise alone is not a reason to clarify. Preserve every explicitly stated
+portion or carbohydrate quantity exactly; estimate only facts the user did not state.
 
 Every response must also classify the current turn in the five meal semantic fields. For a
 textual consumption report, meal_event_status describes whether the eating/drinking is
@@ -256,8 +314,22 @@ The proposal is a complete replacement snapshot for the meal it represents. Esti
 protein, fat, fiber, and absorption only when supported; optional values may be null.
 Never claim certainty from an image or a product-database match. In trusted recent-meal
 revision mode, use the latest active meal data in history as the base snapshot, change the
-facts stated in the current turn, and preserve facts the user did not change. If a safe
-complete snapshot cannot be reconstructed, return clarify rather than inventing it."""
+facts stated in the current turn, and preserve independent facts the user did not change.
+When the food identity or composition changes, recompute dependent carbohydrate, macro,
+and absorption estimates instead of copying the old meal's estimates. Preserve an explicit
+portion unless the user changes it. If a safe complete snapshot cannot be reconstructed,
+return clarify rather than inventing it."""
+
+
+_INTAKE_CHAT_REPAIR_PROMPT = """The previous response did not satisfy the strict JSON
+schema. Re-read the original current meal evidence and return one complete JSON object only.
+Do not quote, repair, or continue the previous response. Reapply every semantic, evidence,
+revision-context, and insulin-safety rule from the main system instructions. Evidence fields
+must be exact, shortest, non-overlapping substrings of the current turn. For an unambiguous
+completed self-report, use confidence at least 0.90. Every explicitly stated portion mass and
+carbohydrate mass must be copied exactly into total_portion_g and estimated_carbs_g; only
+omitted quantities may be estimated. Never invent a fact merely to make the schema valid. If
+a safe valid meal result cannot be produced, return clarify with a null meal."""
 
 
 _INTAKE_CHAT_CONTROL_SYSTEM_PROMPT = """You are a non-mutating intent classifier for a
@@ -1098,6 +1170,7 @@ class OpenRouterIntakeChatAnalyzer(OpenRouterMealAnalyzer):
                 return result
             except (json.JSONDecodeError, ValidationError, ValueError) as error:
                 validation_error = error
+                result = None
         raise AnalysisError(
             "AI service returned insulin semantics that failed schema validation"
         ) from validation_error
@@ -1175,8 +1248,11 @@ class OpenRouterIntakeChatAnalyzer(OpenRouterMealAnalyzer):
                         + json.dumps(revision_context.carbs_g)
                         + ". The current turn may be a terse answer about the exact "
                         "frozen meal. Return replace_last for a clear partial "
-                        "replacement fact; do not require a repeated consumption verb. "
-                        "Return create only for an explicitly separate/additional meal."
+                        "replacement fact or a full report that semantically corrects "
+                        "the frozen meal; do not require a memorized correction verb. "
+                        "A full completed-consumption report that does not semantically "
+                        "correct the frozen meal is create. Explicitly separate or "
+                        "additional meal wording is always create."
                     ),
                 }
             )
@@ -1237,7 +1313,7 @@ class OpenRouterIntakeChatAnalyzer(OpenRouterMealAnalyzer):
                 "json_schema": {
                     "name": "juggluco_intake_chat_turn",
                     "strict": True,
-                    "schema": INTAKE_CHAT_JSON_SCHEMA,
+                    "schema": INTAKE_CHAT_PROVIDER_JSON_SCHEMA,
                 },
             },
             "provider": {
@@ -1248,17 +1324,76 @@ class OpenRouterIntakeChatAnalyzer(OpenRouterMealAnalyzer):
             "temperature": 0.0,
             "max_tokens": 1400,
         }
-        raw_text = self._message_text(await self._chat_completion(payload))
-        try:
-            decoded = json.loads(
-                raw_text,
-                parse_constant=_reject_json_constant,
+        validation_error: Exception | None = None
+        result: IntakeChatModelResult | None = None
+        for attempt in range(2):
+            current_payload = payload
+            if attempt == 1:
+                current_payload = {
+                    **payload,
+                    "messages": [
+                        messages[0],
+                        {
+                            "role": "system",
+                            "content": _INTAKE_CHAT_REPAIR_PROMPT,
+                        },
+                        *messages[1:],
+                    ],
+                }
+            raw_text = self._message_text(
+                await self._chat_completion(current_payload)
             )
-            result = IntakeChatModelResult.model_validate(decoded, strict=True)
-        except (json.JSONDecodeError, ValidationError, ValueError) as error:
+            try:
+                decoded = json.loads(
+                    raw_text,
+                    parse_constant=_reject_json_constant,
+                )
+                candidate = IntakeChatModelResult.model_validate(
+                    decoded,
+                    strict=True,
+                )
+                if (
+                    candidate.intent in ("create", "replace_last")
+                    and (
+                        candidate.meal is None
+                        or (
+                            candidate.meal_event_status == "completed"
+                            and not is_safe_semantic_meal_write(
+                                safe_evidence,
+                                event_status=candidate.meal_event_status,
+                                actor=candidate.meal_actor,
+                                action_evidence=candidate.meal_action_evidence,
+                                food_evidence=candidate.meal_food_evidence,
+                                confidence=candidate.meal_semantic_confidence,
+                            )
+                        )
+                        or not semantic_meal_proposal_matches_explicit_quantities(
+                            safe_evidence,
+                            portion_g=candidate.meal.total_portion_g,
+                            carbs_g=candidate.meal.estimated_carbs_g,
+                            action_evidence=candidate.meal_action_evidence,
+                            food_evidence=candidate.meal_food_evidence,
+                            item_portions_g=tuple(
+                                item.portion_g for item in candidate.meal.items
+                            ),
+                            item_carbs_g=tuple(
+                                item.carbs_g for item in candidate.meal.items
+                            ),
+                        )
+                    )
+                ):
+                    raise ValueError(
+                        "meal write failed exact evidence grounding"
+                    )
+                result = candidate
+                break
+            except (json.JSONDecodeError, ValidationError, ValueError) as error:
+                validation_error = error
+                result = None
+        if result is None:
             raise AnalysisError(
                 "AI service returned intake-chat data that failed schema validation"
-            ) from error
+            ) from validation_error
         if _INTAKE_CHAT_UNSAFE_OUTPUT.search(result.model_dump_json()):
             raise AnalysisError("AI service output failed insulin safety validation")
 
