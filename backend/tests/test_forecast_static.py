@@ -14,14 +14,16 @@ from app.forecast import (
     BASELINE_VERSION,
     FORECAST_ENGINE_VERSION,
     STATIC_BANDS,
+    STATIC_DISPLAY_PROTOCOL,
     STATIC_FEATURE_COUNT,
     STATIC_FEATURE_SCHEMA,
-    STATIC_HIDDEN_SIZE,
     STATIC_INTERVAL_LEVEL,
     STATIC_LOW_GUARD_MG_DL,
     STATIC_NETWORK_KIND,
     STATIC_PERSONAL_ARCHITECTURE,
     STATIC_PROMOTION_GATE_VERSION,
+    STATIC_RIDGE_ALPHA,
+    STATIC_RIDGE_ALPHAS,
     STATIC_TRAINING_MODE,
     ForecastService,
     _Event,
@@ -97,17 +99,11 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
         "feature_schema": STATIC_FEATURE_SCHEMA,
         "x_mean": [0.0] * STATIC_FEATURE_COUNT,
         "x_scale": [1.0] * STATIC_FEATURE_COUNT,
-        "w1": [[0.0] * STATIC_HIDDEN_SIZE for _ in range(STATIC_FEATURE_COUNT)],
-        "b1": [0.0] * STATIC_HIDDEN_SIZE,
-        "w2": [[0.0] * 24 for _ in range(STATIC_HIDDEN_SIZE)],
-        "b2": [0.0] * 24,
+        "alpha": STATIC_RIDGE_ALPHA,
+        "coefficients": [[0.0] * 24 for _ in range(STATIC_FEATURE_COUNT)],
+        "intercept": [0.0] * 24,
     }
-    parameter_count = (
-        STATIC_FEATURE_COUNT * STATIC_HIDDEN_SIZE
-        + STATIC_HIDDEN_SIZE
-        + STATIC_HIDDEN_SIZE * 24
-        + 24
-    )
+    parameter_count = STATIC_FEATURE_COUNT * 24 + 24
     band_weights = [0.25, 0.50, 0.50, 0.25]
     blend: list[float] = []
     band_definitions: list[dict[str, float | int]] = []
@@ -201,6 +197,20 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
     parameters.update(
         {
             "network": network,
+            "model_selection": {
+                "protocol": "chronological-tuning-only-ridge-grid-v1",
+                "criterion": "lowest_tuning_mae_then_stronger_regularization",
+                "selected_alpha": STATIC_RIDGE_ALPHA,
+                "selected_tuning_mae": 9.0,
+                "candidates": [
+                    {
+                        "alpha": alpha,
+                        "tuning_mae": 9.0 if alpha == STATIC_RIDGE_ALPHA else 10.0,
+                        "band_weights": band_weights,
+                    }
+                    for alpha in STATIC_RIDGE_ALPHAS
+                ],
+            },
             "persistence_blend_weights": blend,
             "residual_sigma": sigma,
             "frozen_calibration": {
@@ -218,7 +228,7 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
                 "reference_sigma_mg_dl": [24.0] * 24,
             },
             "artifact": {
-                "artifact_version": 4,
+                "artifact_version": 6,
                 "engine_version": FORECAST_ENGINE_VERSION,
                 "architecture": STATIC_PERSONAL_ARCHITECTURE,
                 "feature_schema": STATIC_FEATURE_SCHEMA,
@@ -262,6 +272,8 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
         "predictor_sha256": predictor_hash,
         "pinned_comparator_version": BASELINE_VERSION,
         "pinned_comparator_sha256": _model_parameters_hash(_baseline_parameters()),
+        "runtime_dependency_version": BASELINE_VERSION,
+        "runtime_dependency_sha256": _model_parameters_hash(_baseline_parameters()),
         "candidate_metrics": candidate_metrics,
         "reference_metrics": reference_metrics,
         "pinned_metrics": reference_metrics,
@@ -290,6 +302,96 @@ def _static_record(version: str, *, accepted: bool = True) -> ForecastModelRecor
         metrics_json=json.dumps(parameters["artifact"]["evaluation"], separators=(",", ":")),
         decision_reason="static contract fixture",
     )
+
+
+def _display_parameters(version: str) -> dict:
+    parameters = _static_parameters(version)
+    artifact = parameters["artifact"]
+    old_approval = artifact["approval"]
+    candidate_metrics = old_approval["candidate_metrics"]
+    reference_metrics = old_approval["reference_metrics"]
+    day_results = old_approval["pinned_day_results"][:4]
+    gates = ForecastService.static_display_gates(
+        candidate_metrics,
+        reference_metrics,
+        reference_metrics,
+        day_results,
+        test_day_count=4,
+    )
+    assert gates["accepted"] is True
+    evaluation = artifact["evaluation"]
+    for key in list(evaluation):
+        if key.startswith("gate_"):
+            evaluation.pop(key)
+    evaluation.update(
+        {
+            "accepted": 1,
+            "prospective": 0,
+            "display_only": 1,
+            "gate_display_only": 1,
+            "exploratory": 1,
+            "unbiased_holdout": 0,
+            "receipt_causal_validation": 0,
+            "prospective_pending": 0,
+            "development_only": 0,
+            "gate_receipt_causal_evidence_sufficient": 1,
+            "test_days": 4,
+            "test_independent_anchors": 32,
+            "winning_days": gates["winning_days"],
+            "candidate_equal_day_mae": gates["candidate_equal_day_mae"],
+            "reference_equal_day_mae": gates["reference_equal_day_mae"],
+            "pinned_equal_day_mae": gates["pinned_equal_day_mae"],
+        }
+    )
+    for key, value in gates.items():
+        if key in evaluation or key == "finite":
+            continue
+        evaluation[f"gate_{key}"] = int(value) if isinstance(value, bool) else value
+    candidate_horizon_mae = [candidate_metrics["mae_5"]] * 24
+    reference_horizon_mae = [reference_metrics["mae_5"]] * 24
+    artifact["reliability"] = _static_reliability(
+        candidate_metrics,
+        reference_metrics,
+        gates,
+        test_days=4,
+        independent_anchors=32,
+        candidate_horizon_mae=candidate_horizon_mae,
+        reference_horizon_mae=reference_horizon_mae,
+    )
+    artifact["accepted"] = True
+    artifact["receipt_causal_replay"] = {
+        "validated_for_activation": False,
+        "window_count": 64,
+        "local_day_count": 4,
+        "causal_history_rejections": 0,
+        "causal_target_rejections": 10,
+        "causal_stale_anchor_rejections": 0,
+    }
+    artifact["approval"] = {
+        "state": "exploratory_retrospective_display",
+        "protocol": STATIC_DISPLAY_PROTOCOL,
+        "alert_approved": False,
+        "unbiased_holdout": False,
+        "receipt_causal_validation": False,
+        "use_scope": "chart_only_not_for_dosing_or_alerts",
+        "approved_model_version": version,
+        "evaluated_at_ms": TRAINED_AT_MS,
+        "test_days": 4,
+        "independent_anchors": 32,
+        "pinned_comparator_version": BASELINE_VERSION,
+        "pinned_comparator_sha256": _model_parameters_hash(_baseline_parameters()),
+        "runtime_dependency_version": BASELINE_VERSION,
+        "runtime_dependency_sha256": _model_parameters_hash(_baseline_parameters()),
+        "day_results": day_results,
+        "candidate_metrics": candidate_metrics,
+        "reference_metrics": reference_metrics,
+        "pinned_metrics": reference_metrics,
+        "candidate_horizon_mae": candidate_horizon_mae,
+        "reference_horizon_mae": reference_horizon_mae,
+        "predictor_sha256": artifact["predictor_sha256"],
+    }
+    artifact["content_sha256"] = _artifact_content_hash(parameters)
+    return parameters
 
 
 def _passing_alert_metrics(
@@ -415,9 +517,9 @@ def _add_pending_prospective_fixture(
         "freeze_time_ms": freeze_time_ms,
         "source_max_received_at_ms": cutoff_ms + 1_000,
         "pinned_comparator_version": BASELINE_VERSION,
-        "pinned_comparator_sha256": _model_parameters_hash(
-            json.loads(baseline.parameters_json)
-        ),
+        "pinned_comparator_sha256": _model_parameters_hash(_baseline_parameters()),
+        "runtime_dependency_version": BASELINE_VERSION,
+        "runtime_dependency_sha256": _model_parameters_hash(_baseline_parameters()),
         "predictor_sha256": artifact["predictor_sha256"],
     }
     artifact["content_sha256"] = _artifact_content_hash(parameters)
@@ -520,6 +622,67 @@ def test_activation_requires_approved_checksummed_static_artifact(app, client):
         assert service._alert_delivery_is_approved(session, activated) is False
         pin = session.get(BackendMetadataRecord, ACTIVE_MODEL_METADATA_KEY)
         assert pin is not None and pin.value_text == approved_version
+
+
+def test_activation_keeps_runtime_dependency_flat_across_many_releases(app, client):
+    del client
+    service = app.state.forecast_service
+    records: list[ForecastModelRecord] = []
+    previous_version = BASELINE_VERSION
+    previous_parameters = _baseline_parameters()
+    for index in range(40):
+        record = _static_record(f"static-flat-chain-{index}")
+        parameters = json.loads(record.parameters_json)
+        parameters["artifact"]["approval"].update(
+            {
+                "pinned_comparator_version": previous_version,
+                "pinned_comparator_sha256": _model_parameters_hash(
+                    previous_parameters
+                ),
+            }
+        )
+        parameters["artifact"]["content_sha256"] = _artifact_content_hash(
+            parameters
+        )
+        record.parameters_json = json.dumps(parameters, separators=(",", ":"))
+        assert _static_artifact_is_valid(parameters) is True
+        records.append(record)
+        previous_version = record.version
+        previous_parameters = parameters
+
+    with app.state.database.session_factory() as session:
+        service._ensure_baseline(session)
+        session.add_all(records)
+        session.commit()
+        activated = service.activate_model(session, records[-1].version)
+        assert activated.version == "static-flat-chain-39"
+        session.delete(records[-2])
+        session.commit()
+        assert service._champion(session).version == activated.version
+
+
+def test_activation_still_requires_direct_comparator_provenance(app, client):
+    del client
+    service = app.state.forecast_service
+    record = _static_record("static-missing-comparator")
+    parameters = json.loads(record.parameters_json)
+    parameters["artifact"]["approval"].update(
+        {
+            "pinned_comparator_version": "missing-static-comparator",
+            "pinned_comparator_sha256": "0" * 64,
+        }
+    )
+    parameters["artifact"]["content_sha256"] = _artifact_content_hash(parameters)
+    record.parameters_json = json.dumps(parameters, separators=(",", ":"))
+    assert _static_artifact_is_valid(parameters) is True
+
+    with app.state.database.session_factory() as session:
+        service._ensure_baseline(session)
+        session.add(record)
+        session.commit()
+        with pytest.raises(ValueError, match="approved, checksummed static model"):
+            service.activate_model(session, record.version)
+        assert service._champion(session).version == BASELINE_VERSION
 
 
 def test_alert_delivery_requires_explicit_checksummed_approval_flag(app, client):
@@ -990,6 +1153,42 @@ def test_pending_and_development_artifacts_cannot_activate(app, client):
                 service.activate_model(session, version)
 
 
+def test_display_only_artifact_can_activate_but_never_deliver_alerts(app, client):
+    del client
+    service = app.state.forecast_service
+    version = "static-display-only"
+    parameters = _display_parameters(version)
+    assert _static_artifact_is_valid(parameters) is True
+
+    tampered = copy.deepcopy(parameters)
+    tampered["artifact"]["approval"]["alert_approved"] = True
+    tampered["artifact"]["content_sha256"] = _artifact_content_hash(tampered)
+    assert _static_artifact_is_valid(tampered) is False
+
+    record = ForecastModelRecord(
+        version=version,
+        status="candidate",
+        architecture=STATIC_PERSONAL_ARCHITECTURE,
+        created_at_ms=TRAINED_AT_MS,
+        trained_at_ms=TRAINED_AT_MS,
+        promoted_at_ms=None,
+        training_cutoff_ms=DATA_CUTOFF_MS,
+        sample_count=SAMPLE_COUNT,
+        parameters_json=json.dumps(parameters, separators=(",", ":")),
+        metrics_json=json.dumps(
+            parameters["artifact"]["evaluation"], separators=(",", ":")
+        ),
+        decision_reason="display-only fixture",
+    )
+    with app.state.database.session_factory() as session:
+        service._ensure_baseline(session)
+        session.add(record)
+        session.commit()
+        activated = service.activate_model(session, version)
+        assert activated.status == "champion"
+        assert service._alert_delivery_is_approved(session, activated) is False
+
+
 def test_validator_recomputes_safety_gates_and_exact_reliability_cap():
     valid = _static_parameters("static-recomputed-gates")
     assert _static_artifact_is_valid(valid) is True
@@ -1028,6 +1227,13 @@ def test_validator_recomputes_safety_gates_and_exact_reliability_cap():
         tampered_audit
     )
     assert _static_artifact_is_valid(tampered_audit) is False
+
+    tampered_selection = copy.deepcopy(valid)
+    tampered_selection["model_selection"]["selected_alpha"] = STATIC_RIDGE_ALPHAS[-1]
+    tampered_selection["artifact"]["content_sha256"] = _artifact_content_hash(
+        tampered_selection
+    )
+    assert _static_artifact_is_valid(tampered_selection) is False
 
 
 def test_prospective_cohort_is_the_earliest_fixed_fourteen_whole_days():
@@ -1387,9 +1593,13 @@ def test_active_comparator_pin_change_aborts_training_freeze(
         original_fit = forecast_module._fit_network
         changed = False
 
-        def fit_with_pin_change(features, residual):
+        def fit_with_pin_change(
+            features,
+            residual,
+            alpha=forecast_module.STATIC_RIDGE_ALPHA,
+        ):
             nonlocal changed
-            fitted = original_fit(features, residual)
+            fitted = original_fit(features, residual, alpha)
             if not changed:
                 pin = session.get(
                     BackendMetadataRecord, ACTIVE_MODEL_METADATA_KEY
@@ -1412,13 +1622,77 @@ def test_active_comparator_pin_change_aborts_training_freeze(
         assert session.get(ForecastModelRecord, version) is None
 
 
+def test_display_training_cleanly_rejects_insufficient_receipt_causal_evidence(
+    app,
+    client,
+    monkeypatch,
+):
+    del client
+    service = app.state.forecast_service
+    version = "static-display-insufficient-causal-replay"
+    base_ms = 1_700_006_400_000  # UTC midnight.
+    step_ms = 5 * 60_000
+
+    with app.state.database.session_factory() as session:
+        service._ensure_baseline(session)
+        session.add_all(
+            [
+                GlucoseReadingRecord(
+                    reading_id=f"display-causal-{index}",
+                    measured_at_ms=base_ms + index * step_ms,
+                    glucose_mg_dl=120.0,
+                    trend_mg_dl_min=0.0,
+                    sensor_id="test",
+                    sensor_generation="test",
+                    quality=1.0,
+                    utc_offset_minutes=0,
+                    payload_hash=f"{index:064x}"[-64:],
+                    received_at_ms=base_ms + index * step_ms + 1_000,
+                )
+                for index in range(17 * 24 * 12)
+            ]
+        )
+        session.commit()
+
+        original_display_gates = service.static_display_gates
+
+        def point_gates_pass(*args, **kwargs):
+            return {**original_display_gates(*args, **kwargs), "accepted": True}
+
+        monkeypatch.setattr(service, "static_display_gates", point_gates_pass)
+        monkeypatch.setattr(
+            service,
+            "_prospective_causal_windows",
+            lambda _readings: (
+                [],
+                {
+                    "causal_history_rejections": 0,
+                    "causal_target_rejections": 1,
+                    "causal_stale_anchor_rejections": 0,
+                },
+            ),
+        )
+
+        result = service.train_static_model(
+            session,
+            candidate_version=version,
+            stage_pending=False,
+            allow_display_activation=True,
+        )
+        stored = session.get(ForecastModelRecord, version)
+
+        assert result.status == "rejected"
+        assert result.metrics["gate_receipt_causal_evidence_sufficient"] == 0
+        assert stored is not None and stored.status == "rejected"
+
+
 def test_non_finite_artifact_fails_closed_without_raising(app, client):
     del client
     service = app.state.forecast_service
     version = "static-non-finite"
     record = _static_record(version)
     parameters = json.loads(record.parameters_json)
-    parameters["network"]["b2"][0] = float("nan")
+    parameters["network"]["intercept"][0] = float("nan")
     # Keep a syntactically plausible digest. Validation must catch the rejected
     # non-standard JSON number instead of propagating json.dumps(ValueError).
     record.parameters_json = json.dumps(parameters, separators=(",", ":"))

@@ -9,8 +9,13 @@ import stat
 from pathlib import Path
 
 from app.database import Database
+from app.forecast import STATIC_DISPLAY_PROTOCOL
 from app.models import ForecastModelRecord, GlucoseReadingRecord, IntakeEventRecord
-from app.schemas import ForecastTrainingStatus, GlucoseReadingsResponse
+from app.schemas import (
+    ForecastTrainingStatus,
+    ForecastTrainResponse,
+    GlucoseReadingsResponse,
+)
 from scripts import forecast_admin
 
 
@@ -60,6 +65,60 @@ def _seed_private_source(database_path: Path) -> None:
         )
         session.commit()
     database.dispose()
+
+
+def _display_candidate_record(
+    version: str,
+    *,
+    status: str = "candidate",
+    accepted: bool = True,
+    alert_approved: bool = False,
+) -> ForecastModelRecord:
+    accepted_value = 1 if accepted else 0
+    return ForecastModelRecord(
+        version=version,
+        status=status,
+        architecture="display-test",
+        created_at_ms=1,
+        trained_at_ms=2,
+        promoted_at_ms=None,
+        training_cutoff_ms=1,
+        sample_count=42,
+        parameters_json=json.dumps(
+            {
+                "artifact": {
+                    "accepted": accepted,
+                    "evaluation": {
+                        "accepted": accepted_value,
+                        "display_only": 1,
+                        "exploratory": 1,
+                        "unbiased_holdout": 0,
+                        "receipt_causal_validation": 0,
+                        "prospective": 0,
+                    },
+                    "approval": {
+                        "state": "exploratory_retrospective_display",
+                        "protocol": STATIC_DISPLAY_PROTOCOL,
+                        "alert_approved": alert_approved,
+                        "unbiased_holdout": False,
+                        "receipt_causal_validation": False,
+                        "use_scope": "chart_only_not_for_dosing_or_alerts",
+                    },
+                }
+            }
+        ),
+        metrics_json=json.dumps(
+            {
+                "accepted": accepted_value,
+                "display_only": 1,
+                "exploratory": 1,
+                "unbiased_holdout": 0,
+                "receipt_causal_validation": 0,
+                "prospective": 0,
+            }
+        ),
+        decision_reason="display bootstrap test fixture",
+    )
 
 
 def test_export_uses_consistent_snapshot_and_hash_manifest(tmp_path):
@@ -204,6 +263,412 @@ def test_admin_commands_bind_only_to_explicit_service_methods(tmp_path):
         ("activate", "candidate-static-v2"),
         ("rollback", "static-v1"),
     ]
+
+
+def test_deploy_display_retries_source_change_then_explicitly_activates(tmp_path):
+    database_path = tmp_path / "display.sqlite"
+    candidate_version = "display-sha-test"
+
+    class FakeService:
+        def __init__(self):
+            self.train_calls = []
+            self.activation_calls = []
+
+        def train_static_model(
+            self,
+            session,
+            data_cutoff_ms=None,
+            candidate_version=None,
+            stage_pending=True,
+            allow_display_activation=False,
+        ):
+            self.train_calls.append(
+                (
+                    candidate_version,
+                    stage_pending,
+                    allow_display_activation,
+                )
+            )
+            if len(self.train_calls) == 1:
+                return ForecastTrainResponse(
+                    status="skipped",
+                    promoted=False,
+                    model_version="event-aware-persistence-v3",
+                    reason="Source glucose/intake data changed during training",
+                    sample_count=42,
+                    metrics={"source_revision_changed": 1},
+                )
+            session.add(_display_candidate_record(candidate_version))
+            session.commit()
+            return ForecastTrainResponse(
+                status="accepted",
+                promoted=False,
+                model_version=candidate_version,
+                reason="Display gates accepted",
+                sample_count=42,
+                metrics={"accepted": 1},
+            )
+
+        def activate_model(self, session, version):
+            self.activation_calls.append(version)
+            record = session.get(ForecastModelRecord, version)
+            record.status = "champion"
+            record.promoted_at_ms = 3
+            session.commit()
+            return record
+
+    service = FakeService()
+    result = forecast_admin.execute(
+        [
+            "--database",
+            str(database_path),
+            "deploy-display",
+            "--candidate-version",
+            candidate_version,
+            "--source-change-retries",
+            "2",
+            "--retry-delay-seconds",
+            "0",
+        ],
+        service_factory=lambda: service,
+    )
+
+    assert service.train_calls == [
+        (candidate_version, False, True),
+        (candidate_version, False, True),
+    ]
+    assert service.activation_calls == [candidate_version]
+    assert result["result"]["status"] == "promoted"
+    assert result["result"]["promoted"] is True
+    assert result["result"]["attempts"] == 2
+    assert result["result"]["activation"]["status"] == "champion"
+
+
+def test_deploy_display_reuses_rejected_version_without_training_or_activation(
+    tmp_path,
+):
+    database_path = tmp_path / "display-existing.sqlite"
+    candidate_version = "display-existing-rejected"
+    database = Database(database_path)
+    database.create_all()
+    with database.session_factory() as session:
+        session.add(
+            _display_candidate_record(
+                candidate_version,
+                status="rejected",
+                accepted=False,
+            )
+        )
+        session.commit()
+    database.dispose()
+
+    class NoCallService:
+        def train_static_model(self, *args, **kwargs):
+            raise AssertionError("an existing deterministic version must not retrain")
+
+        def activate_model(self, *args, **kwargs):
+            raise AssertionError("a rejected candidate must not activate")
+
+    result = forecast_admin.execute(
+        [
+            "--database",
+            str(database_path),
+            "deploy-display",
+            "--candidate-version",
+            candidate_version,
+        ],
+        service_factory=NoCallService,
+    )
+
+    assert result["result"] == {
+        "status": "retained",
+        "promoted": False,
+        "model_version": candidate_version,
+        "reason": (
+            "Existing display bootstrap candidate is rejected; "
+            "the active model was retained"
+        ),
+        "attempts": 0,
+        "reused_existing": True,
+    }
+
+
+def test_deploy_display_fresh_rejection_retains_active_model(tmp_path):
+    database_path = tmp_path / "display-fresh-rejected.sqlite"
+
+    class RejectingService:
+        def __init__(self):
+            self.activated = False
+
+        def train_static_model(self, session, **kwargs):
+            assert kwargs == {
+                "candidate_version": "display-fresh-rejected",
+                "stage_pending": False,
+                "allow_display_activation": True,
+            }
+            return ForecastTrainResponse(
+                status="rejected",
+                promoted=False,
+                model_version="display-fresh-rejected",
+                reason="Display gates retained the baseline",
+                sample_count=42,
+                metrics={"accepted": 0},
+            )
+
+        def activate_model(self, *args, **kwargs):
+            self.activated = True
+            raise AssertionError("a rejected result must not activate")
+
+    service = RejectingService()
+    result = forecast_admin.execute(
+        [
+            "--database",
+            str(database_path),
+            "deploy-display",
+            "--candidate-version",
+            "display-fresh-rejected",
+        ],
+        service_factory=lambda: service,
+    )
+
+    assert service.activated is False
+    assert result["result"]["status"] == "retained"
+    assert result["result"]["promoted"] is False
+    assert result["result"]["training"]["status"] == "rejected"
+
+
+def test_deploy_display_resumes_existing_accepted_candidate(tmp_path):
+    database_path = tmp_path / "display-resume.sqlite"
+    candidate_version = "display-resume"
+    database = Database(database_path)
+    database.create_all()
+    with database.session_factory() as session:
+        session.add(_display_candidate_record(candidate_version))
+        session.commit()
+    database.dispose()
+
+    class ResumingService:
+        def __init__(self):
+            self.activation_calls = []
+
+        def train_static_model(self, *args, **kwargs):
+            raise AssertionError("an already persisted candidate must not retrain")
+
+        def activate_model(self, session, version):
+            self.activation_calls.append(version)
+            record = session.get(ForecastModelRecord, version)
+            record.status = "champion"
+            record.promoted_at_ms = 3
+            session.commit()
+            return record
+
+    service = ResumingService()
+    result = forecast_admin.execute(
+        [
+            "--database",
+            str(database_path),
+            "deploy-display",
+            "--candidate-version",
+            candidate_version,
+        ],
+        service_factory=lambda: service,
+    )
+
+    assert service.activation_calls == [candidate_version]
+    assert result["result"]["status"] == "promoted"
+    assert result["result"]["reused_existing"] is True
+
+
+def test_deploy_display_revalidates_an_existing_active_candidate(tmp_path):
+    database_path = tmp_path / "display-active.sqlite"
+    candidate_version = "display-already-active"
+    database = Database(database_path)
+    database.create_all()
+    with database.session_factory() as session:
+        session.add(
+            _display_candidate_record(candidate_version, status="champion")
+        )
+        session.commit()
+    database.dispose()
+
+    class RevalidatingService:
+        def __init__(self):
+            self.activation_calls = []
+
+        def activate_model(self, session, version):
+            self.activation_calls.append(version)
+            return session.get(ForecastModelRecord, version)
+
+    service = RevalidatingService()
+    result = forecast_admin.execute(
+        [
+            "--database",
+            str(database_path),
+            "deploy-display",
+            "--candidate-version",
+            candidate_version,
+            "--require-activation",
+        ],
+        service_factory=lambda: service,
+    )
+
+    assert service.activation_calls == [candidate_version]
+    assert result["result"]["status"] == "already_active"
+    assert result["result"]["reused_existing"] is True
+
+
+def test_deploy_display_versions_a_retry_when_rejected_source_has_changed(tmp_path):
+    database_path = tmp_path / "display-source-revision.sqlite"
+    base_version = "display-sha-test"
+    old_revision = (1, 1, 1, 1, 1, 1)
+    new_revision = (2, 2, 2, 2, 2, 2)
+    database = Database(database_path)
+    database.create_all()
+    with database.session_factory() as session:
+        rejected = _display_candidate_record(
+            base_version,
+            status="rejected",
+            accepted=False,
+        )
+        parameters = json.loads(rejected.parameters_json)
+        parameters["artifact"]["snapshot"] = {
+            "source_revision": list(old_revision)
+        }
+        rejected.parameters_json = json.dumps(parameters, separators=(",", ":"))
+        session.add(rejected)
+        session.commit()
+    database.dispose()
+
+    class RevisionAwareService:
+        def __init__(self):
+            self.train_versions = []
+
+        @staticmethod
+        def _source_revision(session):
+            return new_revision
+
+        def train_static_model(self, session, **kwargs):
+            version = kwargs["candidate_version"]
+            self.train_versions.append(version)
+            session.add(_display_candidate_record(version))
+            session.commit()
+            return ForecastTrainResponse(
+                status="accepted",
+                promoted=False,
+                model_version=version,
+                reason="Display gates accepted",
+                sample_count=42,
+                metrics={"accepted": 1},
+            )
+
+        @staticmethod
+        def activate_model(session, version):
+            record = session.get(ForecastModelRecord, version)
+            record.status = "champion"
+            record.promoted_at_ms = 3
+            session.commit()
+            return record
+
+    service = RevisionAwareService()
+    expected_version = forecast_admin._revisioned_candidate_version(
+        base_version, new_revision
+    )
+    result = forecast_admin.execute(
+        [
+            "--database",
+            str(database_path),
+            "deploy-display",
+            "--candidate-version",
+            base_version,
+            "--require-activation",
+        ],
+        service_factory=lambda: service,
+    )
+
+    assert service.train_versions == [expected_version]
+    assert result["result"]["model_version"] == expected_version
+    assert result["result"]["status"] == "promoted"
+
+
+def test_deploy_display_never_activates_alert_approved_existing_candidate(tmp_path):
+    database_path = tmp_path / "display-alert.sqlite"
+    candidate_version = "display-alert-approved"
+    database = Database(database_path)
+    database.create_all()
+    with database.session_factory() as session:
+        session.add(
+            _display_candidate_record(
+                candidate_version,
+                alert_approved=True,
+            )
+        )
+        session.commit()
+    database.dispose()
+
+    class NoActivationService:
+        def activate_model(self, *args, **kwargs):
+            raise AssertionError("alert-approved candidates must never activate here")
+
+    try:
+        forecast_admin.execute(
+            [
+                "--database",
+                str(database_path),
+                "deploy-display",
+                "--candidate-version",
+                candidate_version,
+            ],
+            service_factory=NoActivationService,
+        )
+    except ValueError as error:
+        assert "alert-disabled" in str(error)
+    else:  # pragma: no cover - documents the fail-closed safety expectation.
+        raise AssertionError("unsafe existing candidate was not rejected")
+
+
+def test_deploy_display_cli_exits_zero_when_empty_data_retains_baseline(
+    tmp_path,
+    capsys,
+):
+    exit_code = forecast_admin.main(
+        [
+            "--database",
+            str(tmp_path / "empty.sqlite"),
+            "deploy-display",
+            "--candidate-version",
+            "display-empty",
+            "--retry-delay-seconds",
+            "0",
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert exit_code == 0
+    assert output.err == ""
+    assert json.loads(output.out)["result"]["status"] == "retained"
+
+
+def test_deploy_display_cli_exits_nonzero_when_gitops_requires_activation(
+    tmp_path,
+    capsys,
+):
+    exit_code = forecast_admin.main(
+        [
+            "--database",
+            str(tmp_path / "empty-required.sqlite"),
+            "deploy-display",
+            "--candidate-version",
+            "display-empty-required",
+            "--retry-delay-seconds",
+            "0",
+            "--require-activation",
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert exit_code == 1
+    assert output.out == ""
+    assert "activation required" in output.err
 
 
 def test_admin_serializes_activation_record_without_parameters():

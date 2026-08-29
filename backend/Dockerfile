@@ -30,6 +30,7 @@ RUN python -m pip install --no-cache-dir . \
     && mkdir -p /data \
     && chown juggluco:juggluco /data
 
+COPY backend/scripts ./scripts
 COPY --from=pwa-build /source/pwa/dist ./pwa/dist
 
 USER 10001:10001

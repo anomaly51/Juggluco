@@ -1650,4 +1650,4 @@ def test_legacy_champion_and_colliding_run_are_audit_only(tmp_path):
                     ForecastRunRecord.model_version == BASELINE_VERSION
                 )
             ) == 1
-    assert FORECAST_ENGINE_VERSION == "forecast-engine-v6-static-safe"
+    assert FORECAST_ENGINE_VERSION == "forecast-engine-v7-regularized-residual"

@@ -603,12 +603,15 @@ reduces attribution confidence, meal contribution is non-negative, insulin contr
 non-positive, and no event contributes before it starts. These curves are explanatory model
 estimates, not causal measurements, pharmacokinetic claims, or dosing recommendations.
 
-The manually trained model is a dependency-light NumPy residual network with one 12-unit
-`tanh` layer and 24 direct horizons. Its 138 causal inputs contain glucose deltas and quality
-masks from the detailed two-hour trace, progressively coarser samples through 72 hours,
+The manually trained model is a dependency-light NumPy linear ridge residual head with 24
+direct horizons. Its 138 causal inputs contain glucose deltas and quality masks from the
+detailed two-hour trace, progressively coarser samples through 72 hours,
 variability/dynamics summaries, daily harmonics, weekday phase, and current state. It receives
-no learned meal/rapid/long channels. The residual is added to event-aware persistence, then
-four separately tuned horizon-band weights can shrink it back toward that safe reference.
+no learned meal/rapid/long channels. A fixed chronological tuning day selects regularization
+from the checksummed `10, 30, 100, 300, 1000` grid and independently selects four horizon-band
+shrinkage weights. Neither choice sees calibration or retrospective selection days. The
+residual is added to event-aware persistence, then those weights can shrink it back toward the
+safe reference.
 Point-bias calibration is disabled. Exact finite-sample split-conformal 80% intervals and
 their order-statistic rank are frozen inside the checksummed artifact. The one-shot prospective
 approval may replace only the evaluation/reliability envelope; it never updates weights, blend,
@@ -619,19 +622,27 @@ frozen model calibration. Derived runs/scores are retained for 35 days; source C
 data are not pruned. A persisted random `server_instance_id` lets Android reset its history
 cursor if the backend database is recreated.
 
-Training is strictly manual and local: there is no training HTTP endpoint, background task,
-timer, backfill hook, or online calibrator. New source data only makes
+Training is never exposed over HTTP and has no background task, timer, ingestion hook, or
+online calibrator. The operator CLI and the bounded deployment bootstrap described below are
+the only entrypoints. New source data only makes
 `training.data_changed_since_training` true. The explicit `active_forecast_model` pin is the
 sole runtime selector; a missing, corrupt, rejected, or incompatible artifact fails closed to
 the baseline. The pinned artifact continues serving until an operator explicitly activates a
-different approved version.
+different prospectively approved version or the GitOps bootstrap explicitly activates a
+clearly labelled exploratory display-only selection. Evaluation provenance retains the exact
+active comparator version and digest, while runtime compatibility binds directly to the
+code-owned baseline digest; releases therefore do not form an unbounded dependency chain.
+The exact comparator record must still exist when a new active pin is created, but it is not
+an ongoing inference dependency after activation.
 
 Manual training requires at least fifteen dense local-day blocks: at least eight early days
-for fitting, one separate tuning day, two frozen-calibration days, and four untouched test
+for fitting, one separate tuning day, two frozen-calibration days, and four chronologically
+held-out retrospective selection
 days. Every split boundary has a 120-minute purge. The primary evaluation samples anchors at
 least 120 minutes apart and weights calendar days equally; overlapping five-minute windows are
-diagnostics only. The four development days can reject a model but can never approve one. A
-development pass at the latest available reading freezes exactly one `pending` candidate, its
+diagnostics only. In the prospective path these four development days can reject a model but
+can never approve one; the GitOps path may use them only for an explicitly exploratory,
+non-alerting chart selection. A development pass at the latest available reading freezes exactly one `pending` candidate, its
 predictor digest, and the exact pinned comparator version/digest. It preregisters the earliest
 fourteen complete, dense later local days as a one-shot prospective cohort; no interim or
 expanding-prefix choice is allowed. Replay uses each anchor's backend receipt time: history must
@@ -655,6 +666,7 @@ Run the administration commands from `backend` against the local SQLite database
 python -m scripts.forecast_admin status
 python -m scripts.forecast_admin export
 python -m scripts.forecast_admin train --candidate-version personal-review-1
+python -m scripts.forecast_admin deploy-display --candidate-version display-image-v1
 python -m scripts.forecast_admin evaluate personal-review-1
 python -m scripts.forecast_admin activate personal-review-1
 python -m scripts.forecast_admin rollback
@@ -675,6 +687,15 @@ approved candidate; `rollback [version]` pins either
 the prior version or an explicitly named existing version. `GET /v1/forecast/status` reports
 `training.mode=manual`, `automatic_enabled=false`, whether data changed, data coverage,
 30/60/120-minute errors, interval coverage, and rolling 7/30-day error.
+
+`deploy-display` is the narrower idempotent GitOps path. It trains with the deterministic
+candidate version, retries a bounded number of concurrent source-revision races, and calls the
+separate activation method only when display gates return `accepted`. A skipped or rejected
+result normally retains the current safe model; `--require-activation` also returns a failing
+exit code so a PostSync hook cannot claim deployment success. The stored approval explicitly
+keeps `alert_approved=false`; this command cannot enable forecast notifications. Re-running the
+same source revision resumes an accepted-but-not-yet-activated candidate or safely no-ops an
+already decided version; a changed source revision can use a deterministic suffixed attempt.
 
 This remains an experimental conditional visualization. It does not calculate a dose and
 assumes no unrecorded food, insulin, exercise, illness, or sensor error.

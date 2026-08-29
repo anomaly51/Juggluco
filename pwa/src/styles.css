@@ -1790,6 +1790,41 @@ body,
   font-size: 0.9rem;
 }
 
+.forecast-glance .forecast-horizon {
+  grid-column: 1 / -1;
+  justify-self: start;
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-style: normal;
+  font-weight: 680;
+  white-space: nowrap;
+}
+
+.forecast-glance .forecast-safety {
+  grid-column: 1 / -1;
+  justify-self: start;
+  color: var(--orange);
+  font-size: 0.65rem;
+  font-style: normal;
+  font-weight: 720;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.forecast-glance.pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.forecast-glance.pending > span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 720;
+  line-height: 1.25;
+}
+
 .compact-empty {
   min-height: 0;
   flex: 1;
@@ -1927,43 +1962,35 @@ body,
 }
 
 .chart-panel .forecast-line {
+  stroke: var(--blue);
   stroke-width: 2.5;
   stroke-dasharray: 8 7;
 }
 
-.chart-panel .actual-line.glucose-low,
-.chart-panel .forecast-line.glucose-low {
+.chart-panel .actual-line.glucose-low {
   stroke: var(--glucose-low);
 }
 
-.chart-panel .actual-line.glucose-target,
-.chart-panel .forecast-line.glucose-target {
+.chart-panel .actual-line.glucose-target {
   stroke: var(--glucose-target);
 }
 
-.chart-panel .actual-line.glucose-high,
-.chart-panel .forecast-line.glucose-high {
+.chart-panel .actual-line.glucose-high {
   stroke: var(--glucose-high);
 }
 
 .chart-panel .forecast-band {
+  fill: color-mix(in srgb, var(--blue) 15%, transparent);
+  stroke: color-mix(in srgb, var(--blue) 30%, transparent);
   stroke-width: 0.75;
   vector-effect: non-scaling-stroke;
 }
 
-.chart-panel .forecast-band.glucose-low {
-  fill: color-mix(in srgb, var(--glucose-low) 14%, transparent);
-  stroke: color-mix(in srgb, var(--glucose-low) 26%, transparent);
-}
-
-.chart-panel .forecast-band.glucose-target {
-  fill: color-mix(in srgb, var(--glucose-target) 14%, transparent);
-  stroke: color-mix(in srgb, var(--glucose-target) 26%, transparent);
-}
-
-.chart-panel .forecast-band.glucose-high {
-  fill: color-mix(in srgb, var(--glucose-high) 14%, transparent);
-  stroke: color-mix(in srgb, var(--glucose-high) 26%, transparent);
+.chart-panel .forecast-endpoint {
+  fill: var(--blue);
+  stroke: var(--surface);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
 }
 
 .chart-panel .actual-dot,

@@ -21,6 +21,17 @@ it into the `juggluco` namespace. `GITHUB_TOKEN` writes the deployment branch.
 workload gets its registry credential from `kv/apps/registry` through Vault Secrets
 Operator.
 
+After the Deployment is healthy, Argo CD runs the values-controlled
+`juggluco-forecast-bootstrap` PostSync Job. It uses the same immutable image and retained SQLite
+PVC, but receives no API, viewer, or OpenRouter secret. The Job derives a deterministic
+`display-<image-tag>` candidate version, retries bounded source-data races, and explicitly pins
+the candidate only when the display gates accept it. Rejected or insufficient-data runs retain
+the existing safe model and fail the PostSync hook, so GitOps cannot report a false success. A
+new source revision receives a deterministic suffix rather than making rejection sticky.
+Forecast alert approval remains false. Set
+`forecastBootstrap.enabled=false` to omit the hook, or override its version, retry, deadline,
+and resource settings in chart values.
+
 The copies under `deploy/github-actions/` mirror both active workflows for forks that
 cannot commit `.github/workflows/` during setup.
 

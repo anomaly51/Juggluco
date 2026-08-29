@@ -1,7 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, PointerEvent } from 'react'
 import { mmol, time } from '../format'
-import { effectiveServerNow, forecastIsCurrentAt } from '../freshness'
+import { forecastPresentationAt } from '../forecastPresentation'
+import { effectiveServerNow } from '../freshness'
 import type { ForecastPoint, GlucoseReading, RangeHours, ViewerSnapshot } from '../types'
 
 const DEFAULT_SIZE = { width: 820, height: 330 }
@@ -162,7 +163,6 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
   const descriptionId = useId()
   const helpId = useId()
   const liveId = useId()
-  const zoneClipPrefix = `glucose-zone-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const viewportRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState(DEFAULT_SIZE)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
@@ -202,12 +202,11 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
     () => snapshot.glucoseHistory.filter((point) => point.measuredAtMs >= start && point.measuredAtMs <= now),
     [snapshot.glucoseHistory, start, now],
   )
-  const forecast = useMemo(
-    () => forecastIsCurrentAt(snapshot, now)
-      ? snapshot.forecast.points.filter((point) => point.atMs >= now)
-      : [],
+  const forecastPresentation = useMemo(
+    () => forecastPresentationAt(snapshot, now),
     [snapshot, now],
   )
+  const forecast = forecastPresentation.kind === 'ready' ? forecastPresentation.points : []
   const visibleInsulin = useMemo(
     () => (snapshot.insulinEvents ?? [])
       .filter((event) => event.occurredAtMs >= start && event.occurredAtMs <= now)
@@ -260,24 +259,6 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
       key: `${segment[0].readingId}-${gapIndex}-${zoneIndex}`,
     })),
   )
-  const forecastZoneSegments = splitGlucoseLine(
-    forecast.map((point) => ({ atMs: point.atMs, valueMgDl: point.medianMgDl })),
-    snapshot.targetRange.lowMgDl,
-    snapshot.targetRange.highMgDl,
-  )
-  let cumulativeForecastDistance = 0
-  const forecastRenderSegments = forecastZoneSegments.map((segment) => {
-    const dashOffset = -cumulativeForecastDistance
-    for (let index = 1; index < segment.points.length; index += 1) {
-      const left = segment.points[index - 1]
-      const right = segment.points[index]
-      cumulativeForecastDistance += Math.hypot(
-        x(right.atMs) - x(left.atMs),
-        y(right.valueMgDl) - y(left.valueMgDl),
-      )
-    }
-    return { ...segment, dashOffset }
-  })
   const insulinAnnotations = (() => {
     const maxLanes = plotHeight < 175 ? 2 : plotHeight < 235 ? 3 : 4
     const lastXByLane = Array.from({ length: maxLanes }, () => Number.NEGATIVE_INFINITY)
@@ -353,15 +334,19 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
         return `${name} ${insulinUnits(event.insulinUnits)} ЕД в ${time(event.occurredAtMs)}`
       }).join('; ')}.`
     : ''
-  const forecastConfidence = Math.round(Math.max(0, Math.min(1, snapshot.forecast.confidence)) * 100)
+  const forecastConfidence = forecastPresentation.kind === 'ready'
+    ? Math.round(Math.max(0, Math.min(1, forecastPresentation.confidence)) * 100)
+    : 0
   const latestActualZone = latestActual
     ? glucoseZone(latestActual.glucoseMgDl, snapshot.targetRange.lowMgDl, snapshot.targetRange.highMgDl)
     : null
   const narrative = latestActual
     ? `Последнее значение ${mmol(latestActual.glucoseMgDl)} ммоль/л в ${time(latestActual.measuredAtMs)}. ${glucoseZoneSentence(latestActualZone!)} ${
         latestForecast
-          ? `${direction(forecast)} К ${time(latestForecast.atMs)} медиана составляет ${mmol(latestForecast.medianMgDl)} ммоль/л, возможный диапазон ${mmol(latestForecast.lowMgDl)}–${mmol(latestForecast.highMgDl)}. Уверенность прогноза ${forecastConfidence}%.`
-          : 'Доступного прогноза сейчас нет.'
+          ? `${direction(forecast)} К ${time(latestForecast.atMs)} медиана составляет ${mmol(latestForecast.medianMgDl)} ммоль/л, возможный диапазон ${mmol(latestForecast.lowMgDl)}–${mmol(latestForecast.highMgDl)}. Уверенность прогноза ${forecastConfidence}%. Прогноз экспериментальный и не предназначен для расчёта дозы.`
+          : forecastPresentation.kind === 'pending'
+            ? `${forecastPresentation.label}.`
+            : 'Доступного прогноза сейчас нет.'
       }${insulinNarrative}${actualSegments.length > 1 ? ' В истории есть паузы между измерениями более 10 минут.' : ''}`
     : 'За выбранный период измерений нет. Попробуйте выбрать более длинный интервал.'
 
@@ -484,6 +469,9 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
           aria-keyshortcuts="ArrowLeft ArrowRight Home End Escape + -"
           data-y-min-mg-dl={yLow}
           data-y-max-mg-dl={yHigh}
+          data-chart-start-ms={start}
+          data-chart-end-ms={end}
+          data-forecast-state={forecastPresentation.kind}
           onFocus={() => {
             if (selectedKey == null && inspectablePoints.length) {
               const current = inspectablePoints.reduce((nearest, point) =>
@@ -499,19 +487,8 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
             if (event.pointerType === 'mouse') setSelectedKey(null)
           }}
         >
-          <title id={titleId}>Сахар за {range} часов и прогноз</title>
+          <title id={titleId}>Сахар за {range} часов{forecastPresentation.kind === 'ready' ? ' и прогноз' : ''}</title>
           <desc id={descriptionId}>{narrative}</desc>
-          <defs aria-hidden="true">
-            <clipPath id={`${zoneClipPrefix}-high`}>
-              <rect x={margin.left} y={margin.top} width={plotWidth} height={targetTop - margin.top} />
-            </clipPath>
-            <clipPath id={`${zoneClipPrefix}-target`}>
-              <rect x={margin.left} y={targetTop} width={plotWidth} height={targetBottom - targetTop} />
-            </clipPath>
-            <clipPath id={`${zoneClipPrefix}-low`}>
-              <rect x={margin.left} y={targetBottom} width={plotWidth} height={plotBottom - targetBottom} />
-            </clipPath>
-          </defs>
           <rect
             className="glucose-zone-band high-zone-band"
             data-glucose-zone="high"
@@ -556,15 +533,13 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
             </text>
           ))}
           {end > now && <line className="now-line" x1={x(now)} x2={x(now)} y1={margin.top} y2={chartHeight - margin.bottom} />}
-          {uncertainty && (['high', 'target', 'low'] as const).map((zone) => (
+          {uncertainty && (
             <polygon
-              className={`forecast-band glucose-${zone}`}
-              clipPath={`url(#${zoneClipPrefix}-${zone})`}
-              data-glucose-zone={zone}
-              key={`forecast-band-${zone}`}
+              className="forecast-band"
+              data-series="forecast-uncertainty"
               points={uncertainty}
             />
-          ))}
+          )}
           {actualZoneSegments.map((segment) => (
               <path
                 className={`actual-line glucose-${segment.zone}`}
@@ -588,18 +563,15 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
               />
             ) : null,
           )}
-          {forecastRenderSegments.map((segment, index) => (
+          {forecast.length >= 2 && (
             <path
-              className={`forecast-line glucose-${segment.zone}`}
+              className="forecast-line"
               data-series="forecast"
               data-line-style="dashed"
-              data-glucose-zone={segment.zone}
               strokeDasharray="8 7"
-              strokeDashoffset={segment.dashOffset.toFixed(1)}
-              d={linePath(segment.points, (point) => point.atMs, (point) => point.valueMgDl)}
-              key={`forecast-${segment.zone}-${index}`}
+              d={linePath(forecast, (point) => point.atMs, (point) => point.medianMgDl)}
             />
-          ))}
+          )}
           {insulinAnnotations.map((annotation) => {
             const point: InspectablePoint = {
               key: annotation.key,
@@ -664,6 +636,15 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
               r="5"
             />
           )}
+          {latestForecast && (
+            <circle
+              className="forecast-endpoint"
+              data-forecast-confidence={forecastConfidence}
+              cx={x(latestForecast.atMs)}
+              cy={y(latestForecast.medianMgDl)}
+              r="4.5"
+            />
+          )}
           {end > now && (
             <text className="now-label" x={x(now) + 5} y={margin.top + 11}>
               сейчас
@@ -685,7 +666,7 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
               textAnchor="end"
               aria-hidden="true"
             >
-              прогноз {mmol(latestForecast.medianMgDl)} ммоль/л
+              прогноз {mmol(latestForecast.medianMgDl)} ммоль/л · {forecastConfidence}%
             </text>
           )}
           {!latestActual && (

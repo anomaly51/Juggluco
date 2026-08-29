@@ -12,12 +12,13 @@ from app.forecast import (
     STATIC_BANDS,
     STATIC_FEATURE_COUNT,
     STATIC_FEATURE_SCHEMA,
-    STATIC_HIDDEN_SIZE,
     STATIC_INTERVAL_LEVEL,
     STATIC_LOW_GUARD_MG_DL,
     STATIC_NETWORK_KIND,
     STATIC_PERSONAL_ARCHITECTURE,
     STATIC_PROMOTION_GATE_VERSION,
+    STATIC_RIDGE_ALPHA,
+    STATIC_RIDGE_ALPHAS,
     STATIC_TRAINING_MODE,
     ForecastService,
     _artifact_content_hash,
@@ -52,16 +53,15 @@ def _valid_static_parameters(version: str) -> dict:
         "feature_schema": STATIC_FEATURE_SCHEMA,
         "x_mean": [0.0] * STATIC_FEATURE_COUNT,
         "x_scale": [1.0] * STATIC_FEATURE_COUNT,
-        "w1": [
-            [0.0] * STATIC_HIDDEN_SIZE for _ in range(STATIC_FEATURE_COUNT)
+        "alpha": STATIC_RIDGE_ALPHA,
+        "coefficients": [
+            [0.0] * HORIZON_STEPS for _ in range(STATIC_FEATURE_COUNT)
         ],
-        "b1": [0.0] * STATIC_HIDDEN_SIZE,
-        "w2": [[0.0] * HORIZON_STEPS for _ in range(STATIC_HIDDEN_SIZE)],
-        "b2": [0.0] * HORIZON_STEPS,
+        "intercept": [0.0] * HORIZON_STEPS,
     }
     parameter_count = sum(
         np.asarray(network[name], dtype=np.float64).size
-        for name in ("w1", "b1", "w2", "b2")
+        for name in ("coefficients", "intercept")
     )
 
     band_weights = [0.25, 0.50, 0.50, 0.25]
@@ -105,6 +105,20 @@ def _valid_static_parameters(version: str) -> dict:
     parameters.update(
         {
             "network": network,
+            "model_selection": {
+                "protocol": "chronological-tuning-only-ridge-grid-v1",
+                "criterion": "lowest_tuning_mae_then_stronger_regularization",
+                "selected_alpha": STATIC_RIDGE_ALPHA,
+                "selected_tuning_mae": 9.0,
+                "candidates": [
+                    {
+                        "alpha": alpha,
+                        "tuning_mae": 9.0 if alpha == STATIC_RIDGE_ALPHA else 10.0,
+                        "band_weights": band_weights,
+                    }
+                    for alpha in STATIC_RIDGE_ALPHAS
+                ],
+            },
             "persistence_blend_weights": blend,
             "residual_sigma": sigma,
             "frozen_calibration": {
@@ -123,7 +137,7 @@ def _valid_static_parameters(version: str) -> dict:
                 "reference_sigma_mg_dl": reference_sigma,
             },
             "artifact": {
-                "artifact_version": 4,
+                "artifact_version": 5,
                 "engine_version": FORECAST_ENGINE_VERSION,
                 "architecture": STATIC_PERSONAL_ARCHITECTURE,
                 "feature_schema": STATIC_FEATURE_SCHEMA,

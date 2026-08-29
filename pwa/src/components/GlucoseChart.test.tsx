@@ -12,19 +12,24 @@ describe('GlucoseChart', () => {
     render(<GlucoseChart snapshot={normalizeSnapshot(rawSnapshot)} savedAt={Date.now()} range={6} onRangeChange={onRangeChange} />)
 
     expect(screen.getByRole('img', { name: /^Сахар за 6 часов и прогноз/ })).toBeInTheDocument()
-    expect(screen.getByText('прогноз 5,6 ммоль/л')).toBeInTheDocument()
+    expect(screen.getByText('прогноз 5,6 ммоль/л · 76%')).toBeInTheDocument()
     expect(screen.getByText('цель 4,2–9')).toBeInTheDocument()
     expect(screen.getByText(/Последнее значение 6,0 ммоль\/л/, { selector: 'desc' })).toBeInTheDocument()
     expect(screen.getByText(/Уверенность прогноза 76%/, { selector: 'desc' })).toBeInTheDocument()
     expect(document.querySelector('.forecast-line')).toHaveAttribute('data-line-style', 'dashed')
     expect(document.querySelector('.forecast-line')).toHaveAttribute('stroke-dasharray', '8 7')
+    expect(document.querySelector('.forecast-line')).not.toHaveAttribute('data-glucose-zone')
+    expect(document.querySelector('.forecast-band')).toHaveAttribute('data-series', 'forecast-uncertainty')
+    expect(document.querySelector('.forecast-endpoint')).toHaveAttribute('data-forecast-confidence', '76')
+    expect(screen.getByRole('img', { name: /^Сахар за 6 часов и прогноз/ }))
+      .toHaveAttribute('data-chart-end-ms', '2400000')
     expect(screen.getByRole('button', { name: 'Показать данные за 8 часов' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Показать данные за 12 часов' }))
     expect(onRangeChange).toHaveBeenCalledWith(12)
   })
 
-  it('matches Android glucose zones and splits actual and forecast lines at exact target crossings', () => {
+  it('matches Android history zones while keeping the ready forecast one distinctly dashed series', () => {
     const crossingSnapshot = normalizeSnapshot({
       ...rawSnapshot,
       current_glucose: { ...rawSnapshot.current_glucose, measured_at_ms: 1_400_000, glucose_mg_dl: 180 },
@@ -49,19 +54,12 @@ describe('GlucoseChart', () => {
       .toEqual(['high', 'target', 'low'])
     expect(Array.from(chart.querySelectorAll('.actual-line')).map((line) => line.getAttribute('data-glucose-zone')))
       .toEqual(['low', 'target', 'high'])
-    expect(Array.from(chart.querySelectorAll('.forecast-line')).map((line) => line.getAttribute('data-glucose-zone')))
-      .toEqual(['low', 'target', 'high'])
-    expect(Array.from(chart.querySelectorAll('.forecast-band')).map((band) => band.getAttribute('data-glucose-zone')))
-      .toEqual(['high', 'target', 'low'])
-    for (const line of chart.querySelectorAll('.forecast-line')) {
-      expect(line).toHaveAttribute('data-line-style', 'dashed')
-      expect(line).toHaveAttribute('stroke-dasharray', '8 7')
-    }
-    const forecastDashOffsets = Array.from(chart.querySelectorAll('.forecast-line'))
-      .map((line) => Number(line.getAttribute('stroke-dashoffset')))
-    expect(forecastDashOffsets[0]).toBe(0)
-    expect(forecastDashOffsets[1]).toBeLessThan(0)
-    expect(forecastDashOffsets[2]).toBeLessThan(forecastDashOffsets[1])
+    expect(chart.querySelectorAll('.forecast-line')).toHaveLength(1)
+    expect(chart.querySelector('.forecast-line')).toHaveAttribute('data-line-style', 'dashed')
+    expect(chart.querySelector('.forecast-line')).toHaveAttribute('stroke-dasharray', '8 7')
+    expect(chart.querySelector('.forecast-line')).not.toHaveAttribute('data-glucose-zone')
+    expect(chart.querySelectorAll('.forecast-band')).toHaveLength(1)
+    expect(chart.querySelector('.forecast-band')).not.toHaveAttribute('data-glucose-zone')
 
     const targetBand = chart.querySelector('.target-zone-band')!
     const targetTop = Number(targetBand.getAttribute('y'))
@@ -70,6 +68,42 @@ describe('GlucoseChart', () => {
     const highPathNumbers = chart.querySelector('.actual-line.glucose-high')!.getAttribute('d')!.match(/-?\d+(?:\.\d+)?/g)!.map(Number)
     expect(lowPathNumbers.at(-1)).toBeCloseTo(targetBottom, 1)
     expect(highPathNumbers[1]).toBeCloseTo(targetTop, 1)
+  })
+
+  it('keeps a cold-start forecast out of the line, uncertainty band, and future axis', () => {
+    const snapshot = normalizeSnapshot({
+      ...rawSnapshot,
+      forecast: {
+        ...rawSnapshot.forecast,
+        status: 'cold_start',
+        confidence: 0.34,
+        points: rawSnapshot.forecast.points.map((point) => ({
+          ...point,
+          median_mg_dl: 112,
+          low_mg_dl: 57,
+          high_mg_dl: 167,
+        })),
+      },
+    })
+    render(
+      <GlucoseChart
+        snapshot={snapshot}
+        savedAt={Date.now()}
+        serverNowMs={rawSnapshot.server_time_ms}
+        range={6}
+        onRangeChange={vi.fn()}
+      />,
+    )
+
+    const chart = screen.getByRole('img', { name: 'Сахар за 6 часов' })
+    expect(chart).toHaveAttribute('data-forecast-state', 'pending')
+    expect(chart).toHaveAttribute('data-chart-end-ms', String(rawSnapshot.server_time_ms))
+    expect(chart.querySelector('.forecast-line')).toBeNull()
+    expect(chart.querySelector('.forecast-band')).toBeNull()
+    expect(chart.querySelector('.forecast-endpoint')).toBeNull()
+    expect(chart.querySelector('.forecast-series-label')).toBeNull()
+    expect(chart.querySelector('.now-line')).toBeNull()
+    expect(screen.getByText(/Прогноз ещё не готов/, { selector: 'desc' })).toBeInTheDocument()
   })
 
   it('keeps exact 4.2 and 9.0 mmol/L boundaries inside the target zone', () => {

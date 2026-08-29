@@ -70,8 +70,8 @@ V3_FEATURE_SCHEMA = "context-sequence-v3"
 V3_NETWORK_KIND = "contextual_gated_v3"
 PERSONAL_ARCHITECTURE = "personalized-contextual-gated-mlp-direct-24-v3"
 LEGACY_PERSONAL_ARCHITECTURE = "personalized-hybrid-mlp-direct-24-v2"
-STATIC_PERSONAL_ARCHITECTURE = "personalized-static-generic-residual-v2"
-FORECAST_ENGINE_VERSION = "forecast-engine-v6-static-safe"
+STATIC_PERSONAL_ARCHITECTURE = "personalized-static-ridge-residual-v3"
+FORECAST_ENGINE_VERSION = "forecast-engine-v7-regularized-residual"
 ACTIVE_MODEL_METADATA_KEY = "active_forecast_model"
 ACTIVATION_HISTORY_METADATA_KEY = "forecast_model_activation_history"
 GLUCOSE_SOURCE_REVISION_METADATA_KEY = "forecast_glucose_source_revision"
@@ -81,12 +81,14 @@ STATIC_INTERVAL_Z = 1.2816
 STATIC_LOW_GUARD_MG_DL = 90.0
 STATIC_TRAINING_SEED = 20_260_805
 STATIC_FEATURE_SCHEMA = "generic-glucose-context-v2"
-STATIC_NETWORK_KIND = "static_generic_tanh_v2"
+STATIC_NETWORK_KIND = "static_generic_ridge_v3"
 STATIC_FEATURE_COUNT = 138
-STATIC_HIDDEN_SIZE = 12
+STATIC_RIDGE_ALPHA = 100.0
+STATIC_RIDGE_ALPHAS = (10.0, 30.0, 100.0, 300.0, 1_000.0)
 STATIC_PURGE_MINUTES = HORIZON_MINUTES
 STATIC_PURGE_WINDOWS = STATIC_PURGE_MINUTES // STEP_MINUTES
 STATIC_PROMOTION_GATE_VERSION = "independent-day-block-hypo-safe-v3"
+STATIC_DISPLAY_PROTOCOL = "retrospective-exploratory-display-v1"
 STATIC_MIN_TRAIN_DAYS = 8
 STATIC_TUNING_DAYS = 1
 STATIC_CALIBRATION_DAYS = 2
@@ -1350,11 +1352,31 @@ def _model_parameters_hash(parameters: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def _static_runtime_dependency_envelope_is_valid(
+    approval: dict[str, Any],
+) -> bool:
+    """Keep runtime compatibility flat while preserving comparator provenance.
+
+    A candidate may be evaluated against the active champion, but making that
+    champion a transitive runtime dependency creates an ever-growing chain that
+    eventually becomes impossible to validate. Static artifacts therefore bind
+    inference compatibility directly to the code-owned baseline. The separately
+    checksummed ``pinned_comparator_*`` fields remain evaluation provenance.
+    """
+
+    return bool(
+        approval.get("runtime_dependency_version") == BASELINE_VERSION
+        and approval.get("runtime_dependency_sha256")
+        == _model_parameters_hash(_baseline_parameters())
+    )
+
+
 def _static_artifact_is_valid(
     parameters: dict[str, Any], *, require_approved: bool = True
 ) -> bool:
     artifact = parameters.get("artifact")
     network = parameters.get("network")
+    model_selection = parameters.get("model_selection")
     calibration = parameters.get("frozen_calibration")
     reliability = artifact.get("reliability") if isinstance(artifact, dict) else None
     evaluation = artifact.get("evaluation") if isinstance(artifact, dict) else None
@@ -1362,7 +1384,15 @@ def _static_artifact_is_valid(
     approval = artifact.get("approval") if isinstance(artifact, dict) else None
     if not all(
         isinstance(item, dict)
-        for item in (artifact, network, calibration, reliability, evaluation, split)
+        for item in (
+            artifact,
+            network,
+            model_selection,
+            calibration,
+            reliability,
+            evaluation,
+            split,
+        )
     ):
         return False
     expected = artifact.get("content_sha256")
@@ -1396,7 +1426,7 @@ def _static_artifact_is_valid(
         and parameters.get("architecture") == STATIC_PERSONAL_ARCHITECTURE
         and parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA
         and parameters.get("kind") == "personalized_static_generic_residual"
-        and artifact.get("artifact_version") == 4
+        and artifact.get("artifact_version") == 6
         and artifact.get("engine_version") == FORECAST_ENGINE_VERSION
         and artifact.get("architecture") == STATIC_PERSONAL_ARCHITECTURE
         and artifact.get("feature_schema") == STATIC_FEATURE_SCHEMA
@@ -1486,28 +1516,91 @@ def _static_artifact_is_valid(
     try:
         x_mean = np.asarray(network["x_mean"], dtype=np.float64)
         x_scale = np.asarray(network["x_scale"], dtype=np.float64)
-        w1 = np.asarray(network["w1"], dtype=np.float64)
-        b1 = np.asarray(network["b1"], dtype=np.float64)
-        w2 = np.asarray(network["w2"], dtype=np.float64)
-        b2 = np.asarray(network["b2"], dtype=np.float64)
+        coefficients = np.asarray(network["coefficients"], dtype=np.float64)
+        intercept = np.asarray(network["intercept"], dtype=np.float64)
     except (KeyError, TypeError, ValueError):
         return False
-    hidden = w1.shape[1] if w1.ndim == 2 else 0
-    tensors = (x_mean, x_scale, w1, b1, w2, b2)
-    parameter_count = int(sum(tensor.size for tensor in (w1, b1, w2, b2)))
+    tensors = (x_mean, x_scale, coefficients, intercept)
+    parameter_count = int(coefficients.size + intercept.size)
     if (
         x_mean.shape != (STATIC_FEATURE_COUNT,)
         or x_scale.shape != (STATIC_FEATURE_COUNT,)
         or np.any(x_scale <= 1e-8)
-        or hidden != STATIC_HIDDEN_SIZE
-        or w1.shape != (STATIC_FEATURE_COUNT, hidden)
-        or b1.shape != (hidden,)
-        or w2.shape != (hidden, HORIZON_STEPS)
-        or b2.shape != (HORIZON_STEPS,)
+        or not any(
+            math.isclose(
+                _finite(network.get("alpha"), -1.0), candidate, abs_tol=1e-12
+            )
+            for candidate in STATIC_RIDGE_ALPHAS
+        )
+        or coefficients.shape != (STATIC_FEATURE_COUNT, HORIZON_STEPS)
+        or intercept.shape != (HORIZON_STEPS,)
         or parameter_count != int(artifact.get("parameter_count"))
         or any(not np.isfinite(tensor).all() for tensor in tensors)
     ):
         return False
+    candidates = model_selection.get("candidates")
+    try:
+        candidate_alphas = [float(item["alpha"]) for item in candidates]
+        candidate_losses = [float(item["tuning_mae"]) for item in candidates]
+        candidate_band_weights = [
+            [float(value) for value in item["band_weights"]] for item in candidates
+        ]
+    except (KeyError, TypeError, ValueError):
+        return False
+    selected_index = min(
+        range(len(STATIC_RIDGE_ALPHAS)),
+        key=lambda index: (candidate_losses[index], -candidate_alphas[index]),
+    ) if isinstance(candidates, list) and len(candidates) == len(STATIC_RIDGE_ALPHAS) else -1
+    if (
+        model_selection.get("protocol")
+        != "chronological-tuning-only-ridge-grid-v1"
+        or model_selection.get("criterion")
+        != "lowest_tuning_mae_then_stronger_regularization"
+        or candidate_alphas != list(STATIC_RIDGE_ALPHAS)
+        or selected_index < 0
+        or any(not math.isfinite(value) or value < 0.0 for value in candidate_losses)
+        or any(
+            len(values) != len(STATIC_BANDS)
+            or any(value not in {0.0, 0.25, 0.5, 0.75, 1.0} for value in values)
+            for values in candidate_band_weights
+        )
+        or not math.isclose(
+            _finite(model_selection.get("selected_alpha"), -1.0),
+            candidate_alphas[selected_index],
+            abs_tol=1e-12,
+        )
+        or not math.isclose(
+            _finite(model_selection.get("selected_tuning_mae"), -1.0),
+            candidate_losses[selected_index],
+            abs_tol=1e-12,
+        )
+        or not math.isclose(
+            _finite(network.get("alpha"), -1.0),
+            candidate_alphas[selected_index],
+            abs_tol=1e-12,
+        )
+        or any(
+            not math.isclose(
+                float(blend[(start // STEP_MINUTES) - 1]),
+                candidate_band_weights[selected_index][band_index],
+                abs_tol=1e-12,
+            )
+            for band_index, (start, _end) in enumerate(STATIC_BANDS)
+        )
+    ):
+        return False
+    if (
+        require_approved
+        and isinstance(approval, dict)
+        and approval.get("state") == "exploratory_retrospective_display"
+    ):
+        return _static_display_approval_is_valid(
+            artifact=artifact,
+            evaluation=evaluation,
+            reliability=reliability,
+            approval=approval,
+            predictor_hash=predictor_hash,
+        )
     required_evaluation = (
         "accepted",
         "candidate_equal_day_mae",
@@ -1603,7 +1696,10 @@ def _static_artifact_is_valid(
             or int(_finite(approval.get("cohort_end_ms"), -1))
             <= int(_finite(approval.get("cohort_start_ms"), -1))
             or approval.get("predictor_sha256") != predictor_hash
+            or not _static_runtime_dependency_envelope_is_valid(approval)
             or not isinstance(approval.get("pinned_comparator_version"), str)
+            or approval.get("pinned_comparator_version")
+            == artifact.get("model_version")
             or not isinstance(approval.get("pinned_comparator_sha256"), str)
             or len(approval.get("pinned_comparator_sha256", "")) != 64
             or evaluation.get("prospective") != 1
@@ -1810,6 +1906,217 @@ def _static_artifact_is_valid(
             math.isclose(
                 _finite(actual, math.nan),
                 float(expected),
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            for actual, expected in zip(by_horizon, expected_by_horizon)
+        )
+    )
+
+
+def _static_display_approval_is_valid(
+    *,
+    artifact: dict[str, Any],
+    evaluation: dict[str, Any],
+    reliability: dict[str, Any],
+    approval: dict[str, Any],
+    predictor_hash: str,
+) -> bool:
+    """Validate a checksummed retrospective approval for chart display only."""
+
+    test_days = int(_finite(evaluation.get("test_days"), -1))
+    causal_replay = artifact.get("receipt_causal_replay")
+    independent_anchors = int(
+        _finite(evaluation.get("test_independent_anchors"), -1)
+    )
+    if (
+        approval.get("protocol") != STATIC_DISPLAY_PROTOCOL
+        or approval.get("alert_approved") is not False
+        or approval.get("unbiased_holdout") is not False
+        or approval.get("receipt_causal_validation") is not False
+        or approval.get("use_scope") != "chart_only_not_for_dosing_or_alerts"
+        or not _static_runtime_dependency_envelope_is_valid(approval)
+        or approval.get("predictor_sha256") != predictor_hash
+        or approval.get("approved_model_version") != artifact.get("model_version")
+        or int(_finite(approval.get("test_days"), -1)) != test_days
+        or int(_finite(approval.get("independent_anchors"), -1))
+        != independent_anchors
+        or test_days != STATIC_TEST_DAYS
+        or independent_anchors < 8 * STATIC_TEST_DAYS
+        or evaluation.get("accepted") != 1
+        or evaluation.get("display_only") != 1
+        or evaluation.get("exploratory") != 1
+        or evaluation.get("unbiased_holdout") != 0
+        or evaluation.get("receipt_causal_validation") != 0
+        or evaluation.get("prospective") != 0
+        or evaluation.get("prospective_pending") != 0
+        or evaluation.get("gate_display_only") != 1
+        or evaluation.get("gate_receipt_causal_evidence_sufficient") != 1
+        or not isinstance(causal_replay, dict)
+        or causal_replay.get("validated_for_activation") is not False
+        or int(_finite(causal_replay.get("window_count"), -1)) < 32
+        or int(_finite(causal_replay.get("local_day_count"), -1)) < 4
+        or any(
+            int(_finite(causal_replay.get(key), -1)) < 0
+            for key in (
+                "causal_history_rejections",
+                "causal_target_rejections",
+                "causal_stale_anchor_rejections",
+            )
+        )
+        or not isinstance(approval.get("pinned_comparator_version"), str)
+        or approval.get("pinned_comparator_version") == artifact.get("model_version")
+        or not isinstance(approval.get("pinned_comparator_sha256"), str)
+        or len(approval.get("pinned_comparator_sha256", "")) != 64
+    ):
+        return False
+    candidate_metrics = approval.get("candidate_metrics")
+    reference_metrics = approval.get("reference_metrics")
+    pinned_metrics = approval.get("pinned_metrics")
+    day_results = approval.get("day_results")
+    if not all(
+        isinstance(item, dict)
+        for item in (candidate_metrics, reference_metrics, pinned_metrics)
+    ) or not isinstance(day_results, list):
+        return False
+    try:
+        gates = ForecastService.static_display_gates(
+            candidate_metrics,
+            reference_metrics,
+            pinned_metrics,
+            day_results,
+            test_day_count=test_days,
+        )
+    except (KeyError, TypeError, ValueError, IndexError, OverflowError):
+        return False
+    if not bool(gates.get("accepted")):
+        return False
+
+    metric_consistency: dict[str, Any] = {
+        "candidate_anchor_mae": candidate_metrics.get("mae"),
+        "reference_anchor_mae": reference_metrics.get("mae"),
+        "pinned_anchor_mae": pinned_metrics.get("mae"),
+        "candidate_rmse": candidate_metrics.get("rmse"),
+        "reference_rmse": reference_metrics.get("rmse"),
+        "pinned_rmse": pinned_metrics.get("rmse"),
+        "candidate_coverage_80": candidate_metrics.get("coverage_80"),
+        "candidate_interval_score_80": candidate_metrics.get("interval_score_80"),
+        "reference_interval_score_80": reference_metrics.get("interval_score_80"),
+        "pinned_interval_score_80": pinned_metrics.get("interval_score_80"),
+        "candidate_hypo_recall": candidate_metrics.get("hypo_recall"),
+        "reference_hypo_recall": reference_metrics.get("hypo_recall"),
+        "pinned_hypo_recall": pinned_metrics.get("hypo_recall"),
+        "candidate_hypo_fpr": candidate_metrics.get("hypo_fpr"),
+        "reference_hypo_fpr": reference_metrics.get("hypo_fpr"),
+        "pinned_hypo_fpr": pinned_metrics.get("hypo_fpr"),
+        "candidate_hypo_missed_episodes": candidate_metrics.get(
+            "hypo_missed_episodes"
+        ),
+        "reference_hypo_missed_episodes": reference_metrics.get(
+            "hypo_missed_episodes"
+        ),
+        "pinned_hypo_missed_episodes": pinned_metrics.get(
+            "hypo_missed_episodes"
+        ),
+        "candidate_low_zone_mae": candidate_metrics.get("low_zone_mae"),
+        "reference_low_zone_mae": reference_metrics.get("low_zone_mae"),
+        "pinned_low_zone_mae": pinned_metrics.get("low_zone_mae"),
+        "hypo_low_points": candidate_metrics.get("hypo_low_points"),
+        "hypo_low_episodes": candidate_metrics.get("hypo_low_episodes"),
+        "hypo_low_days": candidate_metrics.get("hypo_low_days"),
+    }
+    for prefix, metrics in (
+        ("candidate", candidate_metrics),
+        ("reference", reference_metrics),
+        ("pinned", pinned_metrics),
+    ):
+        for horizon in (5, 15, 30, 60, 120):
+            metric_consistency[f"{prefix}_mae_{horizon}"] = metrics.get(
+                f"mae_{horizon}"
+            )
+    for band_index in range(len(STATIC_BANDS)):
+        metric_consistency[f"candidate_coverage_band_{band_index}"] = (
+            candidate_metrics.get(f"coverage_band_{band_index}")
+        )
+    if any(
+        expected is None
+        or not math.isclose(
+            _finite(evaluation.get(key), math.nan),
+            _finite(expected, math.nan),
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
+        for key, expected in metric_consistency.items()
+    ):
+        return False
+
+    direct_gate_keys = {
+        "accepted",
+        "test_days",
+        "candidate_equal_day_mae",
+        "reference_equal_day_mae",
+        "pinned_equal_day_mae",
+        "winning_days",
+    }
+    for key, value in gates.items():
+        if key == "finite":
+            continue
+        evaluation_key = key if key in direct_gate_keys else f"gate_{key}"
+        if isinstance(value, bool):
+            if evaluation.get(evaluation_key) != int(value):
+                return False
+        elif not math.isclose(
+            _finite(evaluation.get(evaluation_key), math.nan),
+            _finite(value, math.nan),
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            return False
+
+    candidate_horizon_mae = approval.get("candidate_horizon_mae")
+    reference_horizon_mae = approval.get("reference_horizon_mae")
+    try:
+        expected_reliability = _static_reliability(
+            candidate_metrics,
+            reference_metrics,
+            gates,
+            test_days=test_days,
+            independent_anchors=independent_anchors,
+            candidate_horizon_mae=candidate_horizon_mae,
+            reference_horizon_mae=reference_horizon_mae,
+        )
+    except (KeyError, TypeError, ValueError, IndexError):
+        return False
+    by_horizon = reliability.get("by_horizon")
+    expected_by_horizon = expected_reliability.get("by_horizon")
+    return bool(
+        reliability.get("clinical_validation") is False
+        and math.isclose(
+            _finite(reliability.get("overall"), math.nan),
+            _finite(expected_reliability.get("overall"), math.nan),
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+        and math.isclose(
+            _finite(reliability.get("test_day_cap"), math.nan),
+            0.35,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+        and math.isclose(
+            _finite(reliability.get("test_day_cap"), math.nan),
+            _finite(expected_reliability.get("test_day_cap"), math.nan),
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+        and isinstance(by_horizon, list)
+        and isinstance(expected_by_horizon, list)
+        and len(by_horizon) == HORIZON_STEPS
+        and len(expected_by_horizon) == HORIZON_STEPS
+        and all(
+            math.isclose(
+                _finite(actual, math.nan),
+                _finite(expected, math.nan),
                 rel_tol=0.0,
                 abs_tol=1e-12,
             )
@@ -3081,62 +3388,43 @@ def _basal_context_amplitude(
     return _clamp(scale, 0.88, 1.12), confidence
 
 
-def _fit_network(x_train: np.ndarray, residual_train: np.ndarray) -> dict[str, Any]:
-    """Fit the deterministic, deliberately small static residual head."""
+def _fit_network(
+    x_train: np.ndarray,
+    residual_train: np.ndarray,
+    alpha: float = STATIC_RIDGE_ALPHA,
+) -> dict[str, Any]:
+    """Fit a deterministic regularized direct multi-horizon residual head.
+
+    A linear ridge head is intentionally used here instead of the previous
+    small MLP.  With only a few weeks of one-person data, the lower-capacity
+    model is substantially easier to audit and less likely to turn an
+    unrecorded meal or sensor artifact into a confident non-linear trajectory.
+    The event-aware physiological reference remains outside this learned head.
+    """
 
     x_mean = x_train.mean(axis=0)
     x_scale = x_train.std(axis=0)
     x_scale[x_scale < 0.05] = 1.0
     x = np.clip((x_train - x_mean) / x_scale, -8.0, 8.0)
     y = np.clip(residual_train, -180.0, 180.0)
-    rng = np.random.default_rng(STATIC_TRAINING_SEED)
-    hidden_size = STATIC_HIDDEN_SIZE
-    w1 = rng.normal(0.0, 0.08, size=(x.shape[1], hidden_size))
-    b1 = np.zeros(hidden_size)
-    w2 = rng.normal(0.0, 0.04, size=(hidden_size, HORIZON_STEPS))
-    b2 = np.zeros(HORIZON_STEPS)
-    moment1 = [np.zeros_like(value) for value in (w1, b1, w2, b2)]
-    moment2 = [np.zeros_like(value) for value in (w1, b1, w2, b2)]
-    learning_rate = 0.006
-    regularization = 0.0008
-    smoothness = 0.035
-    for iteration in range(1, 321):
-        hidden = np.tanh(x @ w1 + b1)
-        prediction = hidden @ w2 + b2
-        error = prediction - y
-        # Huber loss limits the influence of sensor errors and unrecorded meals.
-        gradient_output = np.where(np.abs(error) <= 30.0, error, 30.0 * np.sign(error))
-        gradient_output /= max(1, x.shape[0] * HORIZON_STEPS)
-        second_difference = prediction[:, 2:] - 2.0 * prediction[:, 1:-1] + prediction[:, :-2]
-        smooth_gradient = np.zeros_like(prediction)
-        smooth_scale = 2.0 * smoothness / max(1, x.shape[0] * (HORIZON_STEPS - 2))
-        smooth_gradient[:, :-2] += smooth_scale * second_difference
-        smooth_gradient[:, 1:-1] -= 2.0 * smooth_scale * second_difference
-        smooth_gradient[:, 2:] += smooth_scale * second_difference
-        gradient_output += smooth_gradient
-        gradients_w2 = hidden.T @ gradient_output + regularization * w2
-        gradients_b2 = gradient_output.sum(axis=0)
-        gradient_hidden = (gradient_output @ w2.T) * (1.0 - hidden * hidden)
-        gradients_w1 = x.T @ gradient_hidden + regularization * w1
-        gradients_b1 = gradient_hidden.sum(axis=0)
-        gradients = [gradients_w1, gradients_b1, gradients_w2, gradients_b2]
-        values = [w1, b1, w2, b2]
-        for index, (value, gradient) in enumerate(zip(values, gradients)):
-            np.clip(gradient, -5.0, 5.0, out=gradient)
-            moment1[index] = 0.9 * moment1[index] + 0.1 * gradient
-            moment2[index] = 0.999 * moment2[index] + 0.001 * gradient * gradient
-            corrected1 = moment1[index] / (1.0 - 0.9**iteration)
-            corrected2 = moment2[index] / (1.0 - 0.999**iteration)
-            value -= learning_rate * corrected1 / (np.sqrt(corrected2) + 1e-8)
+    intercept = y.mean(axis=0)
+    centered = y - intercept.reshape(1, -1)
+    gram = x.T @ x
+    if not any(math.isclose(alpha, item, abs_tol=1e-12) for item in STATIC_RIDGE_ALPHAS):
+        raise ValueError("ridge alpha is outside the preregistered tuning grid")
+    regularized = gram + alpha * np.eye(x.shape[1], dtype=np.float64)
+    try:
+        coefficients = np.linalg.solve(regularized, x.T @ centered)
+    except np.linalg.LinAlgError:
+        coefficients = np.linalg.pinv(regularized, rcond=1e-10) @ (x.T @ centered)
     return {
         "kind": STATIC_NETWORK_KIND,
         "feature_schema": STATIC_FEATURE_SCHEMA,
+        "alpha": alpha,
         "x_mean": x_mean.tolist(),
         "x_scale": x_scale.tolist(),
-        "w1": w1.tolist(),
-        "b1": b1.tolist(),
-        "w2": w2.tolist(),
-        "b2": b2.tolist(),
+        "coefficients": coefficients.tolist(),
+        "intercept": intercept.tolist(),
     }
 
 
@@ -3309,7 +3597,25 @@ class ForecastService:
     def _runtime_model_dependencies_are_valid(
         cls, session: Session, record: ForecastModelRecord
     ) -> bool:
+        del session  # Runtime compatibility is deliberately code-owned and flat.
         if not cls._runtime_model_is_valid(record):
+            return False
+        if record.version == BASELINE_VERSION:
+            return True
+        parameters = _json_dict(record.parameters_json)
+        approval = parameters.get("artifact", {}).get("approval", {})
+        return bool(
+            isinstance(approval, dict)
+            and _static_runtime_dependency_envelope_is_valid(approval)
+        )
+
+    @classmethod
+    def _activation_model_provenance_is_valid(
+        cls, session: Session, record: ForecastModelRecord
+    ) -> bool:
+        """Require the exact evaluation comparator when changing the active pin."""
+
+        if not cls._runtime_model_dependencies_are_valid(session, record):
             return False
         if record.version == BASELINE_VERSION:
             return True
@@ -3323,10 +3629,11 @@ class ForecastService:
             or not isinstance(comparator_hash, str)
         ):
             return False
+        if comparator_version == BASELINE_VERSION:
+            return comparator_hash == _model_parameters_hash(_baseline_parameters())
         comparator = session.get(ForecastModelRecord, comparator_version)
         return bool(
             comparator is not None
-            and cls._runtime_model_is_valid(comparator)
             and _model_parameters_hash(_json_dict(comparator.parameters_json))
             == comparator_hash
         )
@@ -3510,7 +3817,7 @@ class ForecastService:
         selected = session.get(ForecastModelRecord, version)
         if selected is None:
             raise ValueError(f"unknown forecast model version: {version}")
-        if not self._runtime_model_dependencies_are_valid(session, selected):
+        if not self._activation_model_provenance_is_valid(session, selected):
             raise ValueError(
                 "only the baseline or an approved, checksummed static model can be activated"
             )
@@ -4377,7 +4684,13 @@ class ForecastService:
         # The runtime validator above recomputes the complete artifact digest,
         # so this exact boolean cannot be added or changed without invalidating
         # the model. Missing flags remain shadow-only for backward compatibility.
-        return isinstance(approval, dict) and approval.get("alert_approved") is True
+        return bool(
+            isinstance(approval, dict)
+            and approval.get("state") == "approved_prospective"
+            and approval.get("protocol") == STATIC_PROSPECTIVE_PROTOCOL
+            and approval.get("alert_approved") is True
+            and _alert_approval_envelope_is_valid(approval)
+        )
 
     @staticmethod
     def _based_on_reading(
@@ -5725,6 +6038,100 @@ class ForecastService:
         return result
 
     @staticmethod
+    def static_display_gates(
+        candidate_metrics: dict[str, float | None],
+        reference_metrics: dict[str, float | None],
+        pinned_metrics: dict[str, float | None],
+        day_results: Sequence[dict[str, float]],
+        *,
+        test_day_count: int,
+        finite: bool = True,
+    ) -> dict[str, bool | float | int]:
+        """Engineering selection gate for an exploratory display-only predictor.
+
+        This deliberately cannot approve predictive alert delivery.  It keeps
+        the chronological independent-day, horizon, calibration, RMSE, and
+        low-glucose safeguards from the prospective gate, while treating a
+        modest false-positive-rate change as diagnostic because the resulting
+        model is used only to draw an explicitly uncertain chart.  Alert
+        eligibility still requires the separate frozen future-day protocol.
+        """
+
+        result = ForecastService.static_promotion_gates(
+            candidate_metrics,
+            reference_metrics,
+            pinned_metrics,
+            day_results,
+            test_day_count=test_day_count,
+            finite=finite,
+        )
+        required = (
+            "reference_equal_day_improvement",
+            "pinned_equal_day_improvement",
+            "winning_days",
+            "required_winning_days",
+            "median_day_improvement",
+            "no_day_regression_over_2pct",
+            "horizons_safe",
+            "coverage_safe",
+            "hypo_evidence_sufficient",
+            "hypo_recall_safe",
+            "hypo_episode_safe",
+            "low_zone_safe",
+            "rmse_safe",
+            "anchor_mae_safe",
+        )
+        if any(key not in result for key in required):
+            result["accepted"] = False
+            result["display_only"] = True
+            return result
+        interval_score_safe = bool(
+            float(candidate_metrics["interval_score_80"])
+            <= float(reference_metrics["interval_score_80"])
+            and float(candidate_metrics["interval_score_80"])
+            <= float(pinned_metrics["interval_score_80"])
+        )
+        hypo_display_safe = bool(
+            result["hypo_evidence_sufficient"]
+            and result["hypo_recall_safe"]
+            and result["hypo_episode_safe"]
+            and result["low_zone_safe"]
+        )
+        # With only 22 independent calibration anchors, one observation changes
+        # empirical coverage by about 4.5 percentage points.  A small amount of
+        # conservative over-coverage is acceptable for an uncertainty band that
+        # cannot trigger alerts; under-coverage is not.
+        display_coverage_safe = bool(
+            0.75 <= float(candidate_metrics["coverage_80"]) <= 0.92
+            and all(
+                float(candidate_metrics[f"coverage_band_{index}"]) >= 0.70
+                for index in range(len(STATIC_BANDS))
+            )
+        )
+        result.update(
+            {
+                "display_only": True,
+                "coverage_safe": display_coverage_safe,
+                "interval_score_safe": interval_score_safe,
+                "hypo_safe": hypo_display_safe,
+            }
+        )
+        result["accepted"] = bool(
+            float(result["reference_equal_day_improvement"]) >= 0.05
+            and float(result["pinned_equal_day_improvement"]) >= 0.03
+            and int(result["winning_days"]) >= int(result["required_winning_days"])
+            and float(result["median_day_improvement"]) > 0.0
+            and result["no_day_regression_over_2pct"]
+            and result["horizons_safe"]
+            and display_coverage_safe
+            and interval_score_safe
+            and result["rmse_safe"]
+            and result["anchor_mae_safe"]
+            and hypo_display_safe
+        )
+        return result
+
+    @staticmethod
     def _non_hypo_promotion_gates(
         candidate_metrics: dict[str, float | None],
         reference_metrics: dict[str, float | None],
@@ -5899,13 +6306,15 @@ class ForecastService:
         data_cutoff_ms: int | None = None,
         candidate_version: str | None = None,
         stage_pending: bool = True,
+        allow_display_activation: bool = False,
     ) -> ForecastTrainResponse:
         """Manually build one frozen candidate from an immutable causal snapshot.
 
-        This method is intentionally reachable only from the local admin CLI. It
-        never activates a candidate. The normal path freezes a development-gate
-        pass with ``status=pending``; only a later one-shot prospective approval
-        can make it eligible for a separate explicit activation.
+        This method is intentionally reachable only from the local admin CLI and
+        never activates a candidate itself.  The normal path freezes a
+        development-gate pass with ``status=pending`` for prospective approval.
+        A separately requested display-only path may emit an activation-eligible
+        chart model whose checksummed approval keeps predictive alerts disabled.
         """
 
         with self._training_lock:
@@ -5914,6 +6323,7 @@ class ForecastService:
                 data_cutoff_ms=data_cutoff_ms,
                 candidate_version=candidate_version,
                 stage_pending=stage_pending,
+                allow_display_activation=allow_display_activation,
             )
 
     def _train_static_model_unlocked(
@@ -5923,7 +6333,12 @@ class ForecastService:
         data_cutoff_ms: int | None,
         candidate_version: str | None,
         stage_pending: bool,
+        allow_display_activation: bool,
     ) -> ForecastTrainResponse:
+        if stage_pending and allow_display_activation:
+            raise ValueError(
+                "display-only activation and prospective registration are mutually exclusive"
+            )
         champion = self._champion(session)
         champion_parameters_json = champion.parameters_json
         source_revision_before = self._source_revision(session)
@@ -5960,6 +6375,15 @@ class ForecastService:
             )
         cutoff_ms = int(readings[-1].measured_at_ms)
         all_windows = self._training_windows(readings, max_windows=None)
+        receipt_causal_windows, receipt_causal_diagnostics = (
+            self._prospective_causal_windows(readings)
+        )
+        receipt_causal_days = len(
+            {
+                self._window_local_day(readings, window)
+                for window in receipt_causal_windows
+            }
+        )
         split_result = self._static_day_split(readings, all_windows)
         if split_result is None:
             day_count = len(
@@ -5974,7 +6398,7 @@ class ForecastService:
                 model_version=champion.version,
                 reason=(
                     "Need at least 15 dense local-day blocks: 8+ training, 1 tuning, "
-                    "2 frozen calibration, and 4 untouched test days"
+                    "2 frozen calibration, and 4 held-out retrospective selection days"
                 ),
                 sample_count=len(all_windows),
                 metrics={"eligible_day_candidates": day_count},
@@ -6039,9 +6463,6 @@ class ForecastService:
         x_train, reference_train, target_train = self._dataset_for_parameters(
             readings, events, train_windows, parameters
         )
-        parameters["network"] = _fit_network(
-            x_train, target_train - reference_train
-        )
 
         def raw_static(
             windows: Sequence[tuple[int, np.ndarray]],
@@ -6053,38 +6474,84 @@ class ForecastService:
             raw = np.clip(reference + residual, 20.0, 600.0)
             return features, reference, target, raw
 
-        _tune_x, tune_reference, tune_target, tune_raw = raw_static(
-            tuning_independent
-        )
         grid = (0.0, 0.25, 0.50, 0.75, 1.0)
-        band_weights: list[float] = []
-        for start, end in STATIC_BANDS:
-            start_index = (start // STEP_MINUTES) - 1
-            end_index = end // STEP_MINUTES
-            best_weight = 0.0
-            best_loss = math.inf
-            for weight in grid:
-                prediction = tune_reference[:, start_index:end_index] + weight * (
-                    tune_raw[:, start_index:end_index]
-                    - tune_reference[:, start_index:end_index]
-                )
-                loss = float(
-                    np.mean(
-                        np.abs(prediction - tune_target[:, start_index:end_index])
+        selection_results: list[dict[str, Any]] = []
+        selected_network: dict[str, Any] | None = None
+        selected_blend: np.ndarray | None = None
+        selected_loss = math.inf
+        selected_alpha = -1.0
+        for alpha in STATIC_RIDGE_ALPHAS:
+            parameters["network"] = _fit_network(
+                x_train, target_train - reference_train, alpha
+            )
+            _tune_x, tune_reference, tune_target, tune_raw = raw_static(
+                tuning_independent
+            )
+            candidate_band_weights: list[float] = []
+            for start, end in STATIC_BANDS:
+                start_index = (start // STEP_MINUTES) - 1
+                end_index = end // STEP_MINUTES
+                best_weight = 0.0
+                best_band_loss = math.inf
+                for weight in grid:
+                    prediction = tune_reference[:, start_index:end_index] + weight * (
+                        tune_raw[:, start_index:end_index]
+                        - tune_reference[:, start_index:end_index]
                     )
-                )
-                if loss < best_loss - 1e-9:
-                    best_loss = loss
-                    best_weight = weight
-            band_weights.append(best_weight)
-        blend = np.asarray(
-            [
-                weight
-                for weight, (start, end) in zip(band_weights, STATIC_BANDS)
-                for _ in range(((end - start) // STEP_MINUTES) + 1)
-            ],
-            dtype=np.float64,
-        )
+                    loss = float(
+                        np.mean(
+                            np.abs(
+                                prediction
+                                - tune_target[:, start_index:end_index]
+                            )
+                        )
+                    )
+                    if loss < best_band_loss - 1e-9:
+                        best_band_loss = loss
+                        best_weight = weight
+                candidate_band_weights.append(best_weight)
+            candidate_blend = np.asarray(
+                [
+                    weight
+                    for weight, (start, end) in zip(
+                        candidate_band_weights, STATIC_BANDS
+                    )
+                    for _ in range(((end - start) // STEP_MINUTES) + 1)
+                ],
+                dtype=np.float64,
+            )
+            tuning_prediction = tune_reference + candidate_blend.reshape(1, -1) * (
+                tune_raw - tune_reference
+            )
+            tuning_mae = float(np.mean(np.abs(tuning_prediction - tune_target)))
+            selection_results.append(
+                {
+                    "alpha": alpha,
+                    "tuning_mae": tuning_mae,
+                    "band_weights": candidate_band_weights,
+                }
+            )
+            if tuning_mae < selected_loss or (
+                tuning_mae == selected_loss and alpha > selected_alpha
+            ):
+                selected_loss = tuning_mae
+                selected_alpha = alpha
+                selected_network = parameters["network"]
+                selected_blend = candidate_blend
+        if selected_network is None or selected_blend is None:
+            raise RuntimeError("ridge tuning grid did not produce a finite candidate")
+        parameters["network"] = selected_network
+        parameters["model_selection"] = {
+            "protocol": "chronological-tuning-only-ridge-grid-v1",
+            "criterion": "lowest_tuning_mae_then_stronger_regularization",
+            "selected_alpha": selected_alpha,
+            "selected_tuning_mae": selected_loss,
+            "candidates": selection_results,
+        }
+        blend = selected_blend
+        band_weights = [
+            float(blend[(start // STEP_MINUTES) - 1]) for start, _end in STATIC_BANDS
+        ]
         parameters["persistence_blend_weights"] = blend.tolist()
 
         _cal_x, cal_reference, cal_target, cal_raw = raw_static(
@@ -6220,7 +6687,30 @@ class ForecastService:
                 and np.isfinite(sigma).all()
             ),
         )
-        accepted = bool(gates["accepted"])
+        display_gates = self.static_display_gates(
+            candidate_metrics,
+            reference_metrics,
+            pinned_metrics,
+            day_results,
+            test_day_count=len(day_results),
+            finite=bool(
+                np.isfinite(candidate_prediction).all()
+                and np.isfinite(sigma).all()
+            ),
+        )
+        if allow_display_activation:
+            display_gates = {
+                **display_gates,
+                "receipt_causal_evidence_sufficient": bool(
+                    len(receipt_causal_windows) >= 32 and receipt_causal_days >= 4
+                ),
+            }
+            display_gates["accepted"] = bool(
+                display_gates["accepted"]
+                and display_gates["receipt_causal_evidence_sufficient"]
+            )
+        reporting_gates = display_gates if allow_display_activation else gates
+        accepted = bool(reporting_gates["accepted"])
 
         # Overlapping windows are retained only as a transparent secondary
         # diagnostic; they never participate in the gate or confidence.
@@ -6237,7 +6727,7 @@ class ForecastService:
         development_reliability = _static_reliability(
             candidate_metrics,
             reference_metrics,
-            gates,
+            reporting_gates,
             test_days=test_days,
             independent_anchors=len(test_independent),
             candidate_horizon_mae=np.mean(
@@ -6273,24 +6763,25 @@ class ForecastService:
         evaluation: dict[str, float | int | None] = {
             "accepted": int(accepted),
             "candidate_equal_day_mae": _finite(
-                gates.get("candidate_equal_day_mae"),
+                reporting_gates.get("candidate_equal_day_mae"),
                 float(candidate_metrics["mae"] or 0.0),
             ),
             "reference_equal_day_mae": _finite(
-                gates.get("reference_equal_day_mae"),
+                reporting_gates.get("reference_equal_day_mae"),
                 float(reference_metrics["mae"] or 0.0),
             ),
             "pinned_equal_day_mae": _finite(
-                gates.get("pinned_equal_day_mae"),
+                reporting_gates.get("pinned_equal_day_mae"),
                 float(pinned_metrics["mae"] or 0.0),
             ),
             "candidate_anchor_mae": float(candidate_metrics["mae"] or 0.0),
             "reference_anchor_mae": float(reference_metrics["mae"] or 0.0),
             "pinned_anchor_mae": float(pinned_metrics["mae"] or 0.0),
             "candidate_rmse": float(candidate_metrics["rmse"] or 0.0),
+            "reference_rmse": float(reference_metrics["rmse"] or 0.0),
+            "pinned_rmse": float(pinned_metrics["rmse"] or 0.0),
             "candidate_mae_5": float(candidate_metrics["mae_5"] or 0.0),
             "candidate_mae_15": float(candidate_metrics["mae_15"] or 0.0),
-            "reference_rmse": float(reference_metrics["rmse"] or 0.0),
             "candidate_mae_30": float(candidate_metrics["mae_30"] or 0.0),
             "candidate_mae_60": float(candidate_metrics["mae_60"] or 0.0),
             "candidate_mae_120": float(candidate_metrics["mae_120"] or 0.0),
@@ -6311,19 +6802,27 @@ class ForecastService:
             "reference_interval_score_80": float(
                 reference_metrics["interval_score_80"] or 0.0
             ),
+            "pinned_interval_score_80": float(
+                pinned_metrics["interval_score_80"] or 0.0
+            ),
             "candidate_hypo_recall": float(
                 candidate_metrics["hypo_recall"] or 0.0
             ),
             "reference_hypo_recall": float(
                 reference_metrics["hypo_recall"] or 0.0
             ),
+            "pinned_hypo_recall": float(pinned_metrics["hypo_recall"] or 0.0),
             "candidate_hypo_fpr": float(candidate_metrics["hypo_fpr"] or 0.0),
             "reference_hypo_fpr": float(reference_metrics["hypo_fpr"] or 0.0),
+            "pinned_hypo_fpr": float(pinned_metrics["hypo_fpr"] or 0.0),
             "candidate_hypo_missed_episodes": float(
                 candidate_metrics["hypo_missed_episodes"] or 0.0
             ),
             "reference_hypo_missed_episodes": float(
                 reference_metrics["hypo_missed_episodes"] or 0.0
+            ),
+            "pinned_hypo_missed_episodes": float(
+                pinned_metrics["hypo_missed_episodes"] or 0.0
             ),
             "candidate_low_zone_mae": float(
                 candidate_metrics["low_zone_mae"] or 0.0
@@ -6342,11 +6841,15 @@ class ForecastService:
             "test_days": test_days,
             "test_independent_anchors": len(test_independent),
             "calibration_independent_anchors": len(calibration_independent),
-            "winning_days": int(gates.get("winning_days", 0)),
+            "winning_days": int(reporting_gates.get("winning_days", 0)),
             "diagnostic_overlapping_mae": float(diagnostic_metrics["mae"]),
             "reliability": reliability_overall,
         }
-        for key, value in gates.items():
+        for band_index in range(len(STATIC_BANDS)):
+            evaluation[f"candidate_coverage_band_{band_index}"] = float(
+                candidate_metrics[f"coverage_band_{band_index}"] or 0.0
+            )
+        for key, value in reporting_gates.items():
             if key in evaluation or key == "finite":
                 continue
             if isinstance(value, bool):
@@ -6354,9 +6857,6 @@ class ForecastService:
             elif isinstance(value, (int, float)) and math.isfinite(float(value)):
                 evaluation[f"gate_{key}"] = value
 
-        # A prospective candidate deliberately ignores the development-fold
-        # promotion result.  It is frozen now, but cannot become runnable until
-        # a preregistered fourteen-day future cohort passes the same gates.
         development_evaluation = dict(evaluation)
         development_accepted = accepted
         pending_eligible = bool(
@@ -6364,13 +6864,28 @@ class ForecastService:
             and development_accepted
             and cutoff_ms == int(latest_available)
         )
-        # Development evidence is diagnostic only. Even the private historical
-        # helper path cannot emit an accepted/activation-eligible artifact.
-        accepted = False
         evaluation = dict(evaluation)
-        evaluation["accepted"] = 0
-        evaluation["prospective_pending"] = int(pending_eligible)
-        evaluation["development_only"] = int(not stage_pending)
+        if allow_display_activation:
+            # This is an explicitly exploratory engineering selection, not an
+            # unbiased validation claim: the artifact may power a clearly
+            # labelled chart, never an alert or dose recommendation.
+            accepted = bool(development_accepted)
+            evaluation["accepted"] = int(accepted)
+            evaluation["display_only"] = 1
+            evaluation["exploratory"] = 1
+            evaluation["unbiased_holdout"] = 0
+            evaluation["receipt_causal_validation"] = 0
+            evaluation["prospective"] = 0
+            evaluation["prospective_pending"] = 0
+            evaluation["development_only"] = 0
+            evaluation["strict_gate_passed"] = int(bool(gates["accepted"]))
+        else:
+            # Development evidence is diagnostic only. Even the private
+            # historical helper cannot emit an activation-eligible artifact.
+            accepted = False
+            evaluation["accepted"] = 0
+            evaluation["prospective_pending"] = int(pending_eligible)
+            evaluation["development_only"] = int(not stage_pending)
         if pending_eligible:
             self._assert_prospective_registration_allowed(
                 session, cutoff_ms=cutoff_ms
@@ -6380,13 +6895,13 @@ class ForecastService:
         parameter_count = int(
             sum(
                 np.asarray(network[name], dtype=np.float64).size
-                for name in ("w1", "b1", "w2", "b2")
+                for name in ("coefficients", "intercept")
             )
         )
         max_received_at = max(int(row.received_at_ms) for row in readings)
         event_revision = source_revision_before[3]
         parameters["artifact"] = {
-            "artifact_version": 4,
+            "artifact_version": 6,
             "engine_version": FORECAST_ENGINE_VERSION,
             "architecture": STATIC_PERSONAL_ARCHITECTURE,
             "feature_schema": STATIC_FEATURE_SCHEMA,
@@ -6403,6 +6918,7 @@ class ForecastService:
             "sample_count": len(train_windows),
             "dataset_sha256": _dataset_fingerprint(readings, events),
             "snapshot": {
+                "source_revision": list(source_revision_before),
                 "last_reading_at_ms": cutoff_ms,
                 "max_received_at_ms": max_received_at,
                 "event_revision": event_revision,
@@ -6410,6 +6926,12 @@ class ForecastService:
                 "glucose_source_revision": source_revision_before[5],
             },
             "split": split,
+            "receipt_causal_replay": {
+                "validated_for_activation": False,
+                "window_count": len(receipt_causal_windows),
+                "local_day_count": receipt_causal_days,
+                **receipt_causal_diagnostics,
+            },
             "band_definitions": [
                 {
                     "start_minutes": start,
@@ -6436,8 +6958,39 @@ class ForecastService:
         parameters["artifact"]["development_evaluation"] = (
             development_evaluation
         )
-        if pending_eligible:
-            comparator_parameters = _json_dict(champion.parameters_json)
+        comparator_parameters = champion_parameters
+        runtime_dependency_sha256 = _model_parameters_hash(_baseline_parameters())
+        if accepted and allow_display_activation:
+            parameters["artifact"]["approval"] = {
+                "state": "exploratory_retrospective_display",
+                "protocol": STATIC_DISPLAY_PROTOCOL,
+                "alert_approved": False,
+                "unbiased_holdout": False,
+                "receipt_causal_validation": False,
+                "use_scope": "chart_only_not_for_dosing_or_alerts",
+                "approved_model_version": version,
+                "evaluated_at_ms": now,
+                "test_days": test_days,
+                "independent_anchors": len(test_independent),
+                "pinned_comparator_version": champion.version,
+                "pinned_comparator_sha256": _model_parameters_hash(
+                    comparator_parameters
+                ),
+                "runtime_dependency_version": BASELINE_VERSION,
+                "runtime_dependency_sha256": runtime_dependency_sha256,
+                "day_results": day_results,
+                "candidate_metrics": candidate_metrics,
+                "reference_metrics": reference_metrics,
+                "pinned_metrics": pinned_metrics,
+                "candidate_horizon_mae": np.mean(
+                    np.abs(candidate_prediction - test_target), axis=0
+                ).tolist(),
+                "reference_horizon_mae": np.mean(
+                    np.abs(reference_prediction - test_target), axis=0
+                ).tolist(),
+                "predictor_sha256": parameters["artifact"]["predictor_sha256"],
+            }
+        elif pending_eligible:
             parameters["artifact"]["approval"] = {
                 "state": "pending_prospective",
                 "protocol": STATIC_PROSPECTIVE_PROTOCOL,
@@ -6455,11 +7008,28 @@ class ForecastService:
                 "pinned_comparator_sha256": _model_parameters_hash(
                     comparator_parameters
                 ),
+                "runtime_dependency_version": BASELINE_VERSION,
+                "runtime_dependency_sha256": runtime_dependency_sha256,
             }
         parameters["artifact"]["content_sha256"] = _artifact_content_hash(
             parameters
         )
-        if pending_eligible:
+        if accepted and allow_display_activation:
+            if not _static_artifact_is_valid(parameters, require_approved=True):
+                raise RuntimeError(
+                    "constructed exploratory display envelope failed artifact validation"
+                )
+            reason = (
+                "Exploratory retrospective selection passed; eligible for a clearly "
+                "labelled chart only. Predictive alerts and dosing use remain disabled "
+                "pending receipt-causal prospective validation"
+            )
+        elif allow_display_activation:
+            reason = (
+                "Rejected: retrospective display evidence did not safely beat the "
+                "persistence and pinned comparators"
+            )
+        elif pending_eligible:
             reason = (
                 "Frozen pending a preregistered fourteen-day prospective evaluation; "
                 "not eligible for activation"
@@ -6476,7 +7046,11 @@ class ForecastService:
             )
         candidate = ForecastModelRecord(
             version=version,
-            status="pending" if pending_eligible else "rejected",
+            status=(
+                "candidate"
+                if accepted and allow_display_activation
+                else ("pending" if pending_eligible else "rejected")
+            ),
             architecture=STATIC_PERSONAL_ARCHITECTURE,
             created_at_ms=now,
             trained_at_ms=now,
@@ -6544,7 +7118,11 @@ class ForecastService:
         session.add(candidate)
         session.commit()
         return ForecastTrainResponse(
-            status="pending" if pending_eligible else "rejected",
+            status=(
+                "accepted"
+                if accepted and allow_display_activation
+                else ("pending" if pending_eligible else "rejected")
+            ),
             promoted=False,
             model_version=version,
             reason=reason,
@@ -6657,6 +7235,7 @@ class ForecastService:
             or not isinstance(comparator_version, str)
             or not isinstance(comparator_hash, str)
             or len(comparator_hash) != 64
+            or not _static_runtime_dependency_envelope_is_valid(approval)
             or int(_finite(approval.get("minimum_new_days"), -1))
             != STATIC_PROSPECTIVE_MIN_DAYS
         ):
@@ -6668,13 +7247,21 @@ class ForecastService:
             )
 
         frozen_comparator = session.get(ForecastModelRecord, comparator_version)
+        frozen_comparator_hash = (
+            _model_parameters_hash(_baseline_parameters())
+            if comparator_version == BASELINE_VERSION
+            else (
+                _model_parameters_hash(_json_dict(frozen_comparator.parameters_json))
+                if frozen_comparator is not None
+                else None
+            )
+        )
         if (
             frozen_comparator is None
             or not self._runtime_model_dependencies_are_valid(
                 session, frozen_comparator
             )
-            or _model_parameters_hash(_json_dict(frozen_comparator.parameters_json))
-            != comparator_hash
+            or frozen_comparator_hash != comparator_hash
         ):
             return self._permanently_reject_pending_candidate(
                 session,
@@ -7851,50 +8438,58 @@ def _network_predict_batch(features: np.ndarray, parameters: dict[str, Any]) -> 
             or np.any(x_scale <= 1e-8)
         ):
             return fallback
-        w1_raw = np.asarray(network["w1"], dtype=np.float64)
-        if w1_raw.ndim != 2 or w1_raw.shape[0] != x_mean.size:
-            return fallback
-        hidden_size = w1_raw.shape[1]
-        if hidden_size <= 0:
-            return fallback
-        w1 = finite_array("w1", (x_mean.size, hidden_size))
-        b1 = finite_array("b1", (hidden_size,))
         with np.errstate(over="raise", divide="raise", invalid="raise"):
             normalized = np.clip((features - x_mean) / x_scale, -8.0, 8.0)
-            shared = np.tanh(normalized @ w1 + b1)
-            if network.get("kind") == V3_NETWORK_KIND:
-                base_w = finite_array("base_w", (hidden_size, HORIZON_STEPS))
-                base_b = finite_array("base_b", (HORIZON_STEPS,))
-                event_w1_raw = np.asarray(network["event_w1"], dtype=np.float64)
-                if event_w1_raw.ndim != 2 or event_w1_raw.shape[0] != hidden_size:
-                    return fallback
-                interaction_size = event_w1_raw.shape[1]
-                if interaction_size <= 0:
-                    return fallback
-                event_w1 = finite_array(
-                    "event_w1", (hidden_size, interaction_size)
-                )
-                event_b1 = finite_array("event_b1", (interaction_size,))
-                event_w2 = finite_array(
-                    "event_w2", (interaction_size, HORIZON_STEPS)
-                )
-                event_b2 = finite_array("event_b2", (HORIZON_STEPS,))
-                gate_w = finite_array("gate_w", (hidden_size, HORIZON_STEPS))
-                gate_b = finite_array("gate_b", (HORIZON_STEPS,))
-                base = shared @ base_w + base_b
-                interaction_hidden = np.tanh(shared @ event_w1 + event_b1)
-                refinement = interaction_hidden @ event_w2 + event_b2
-                gate = 1.0 / (
-                    1.0
-                    + np.exp(
-                        -np.clip(shared @ gate_w + gate_b, -20.0, 20.0)
+        if network.get("kind") == STATIC_NETWORK_KIND:
+            coefficients = finite_array(
+                "coefficients", (x_mean.size, HORIZON_STEPS)
+            )
+            intercept = finite_array("intercept", (HORIZON_STEPS,))
+            prediction = normalized @ coefficients + intercept
+        else:
+            w1_raw = np.asarray(network["w1"], dtype=np.float64)
+            if w1_raw.ndim != 2 or w1_raw.shape[0] != x_mean.size:
+                return fallback
+            hidden_size = w1_raw.shape[1]
+            if hidden_size <= 0:
+                return fallback
+            w1 = finite_array("w1", (x_mean.size, hidden_size))
+            b1 = finite_array("b1", (hidden_size,))
+            with np.errstate(over="raise", divide="raise", invalid="raise"):
+                shared = np.tanh(normalized @ w1 + b1)
+                if network.get("kind") == V3_NETWORK_KIND:
+                    base_w = finite_array("base_w", (hidden_size, HORIZON_STEPS))
+                    base_b = finite_array("base_b", (HORIZON_STEPS,))
+                    event_w1_raw = np.asarray(network["event_w1"], dtype=np.float64)
+                    if event_w1_raw.ndim != 2 or event_w1_raw.shape[0] != hidden_size:
+                        return fallback
+                    interaction_size = event_w1_raw.shape[1]
+                    if interaction_size <= 0:
+                        return fallback
+                    event_w1 = finite_array(
+                        "event_w1", (hidden_size, interaction_size)
                     )
-                )
-                prediction = base + gate * refinement
-            else:
-                w2 = finite_array("w2", (hidden_size, HORIZON_STEPS))
-                b2 = finite_array("b2", (HORIZON_STEPS,))
-                prediction = shared @ w2 + b2
+                    event_b1 = finite_array("event_b1", (interaction_size,))
+                    event_w2 = finite_array(
+                        "event_w2", (interaction_size, HORIZON_STEPS)
+                    )
+                    event_b2 = finite_array("event_b2", (HORIZON_STEPS,))
+                    gate_w = finite_array("gate_w", (hidden_size, HORIZON_STEPS))
+                    gate_b = finite_array("gate_b", (HORIZON_STEPS,))
+                    base = shared @ base_w + base_b
+                    interaction_hidden = np.tanh(shared @ event_w1 + event_b1)
+                    refinement = interaction_hidden @ event_w2 + event_b2
+                    gate = 1.0 / (
+                        1.0
+                        + np.exp(
+                            -np.clip(shared @ gate_w + gate_b, -20.0, 20.0)
+                        )
+                    )
+                    prediction = base + gate * refinement
+                else:
+                    w2 = finite_array("w2", (hidden_size, HORIZON_STEPS))
+                    b2 = finite_array("b2", (HORIZON_STEPS,))
+                    prediction = shared @ w2 + b2
         if (
             prediction.shape != (features.shape[0], HORIZON_STEPS)
             or not np.isfinite(prediction).all()

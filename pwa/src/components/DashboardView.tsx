@@ -1,5 +1,5 @@
 import { dateTime, mmol, relativeAge, trend } from '../format'
-import { forecastIsCurrentAt } from '../freshness'
+import { forecastHorizonLabel, forecastPresentationAt } from '../forecastPresentation'
 import type { RangeHours, ViewerSnapshot } from '../types'
 import { GlucoseChart } from './GlucoseChart'
 import { Icon } from './Icon'
@@ -24,9 +24,11 @@ export function DashboardView({ snapshot, savedAt, serverNowMs, range, onRangeCh
   const state = current
     ? glucoseState(current.glucoseMgDl, snapshot.targetRange.lowMgDl, snapshot.targetRange.highMgDl)
     : null
-  const forecastPoint = snapshot.forecast.points.at(-1)
-  const currentForecast = forecastIsCurrentAt(snapshot, serverNowMs)
-  const forecastStart = snapshot.forecast.points.at(0)?.medianMgDl ?? current?.glucoseMgDl ?? null
+  const forecastPresentation = forecastPresentationAt(snapshot, serverNowMs)
+  const forecastPoint = forecastPresentation.kind === 'ready' ? forecastPresentation.endpoint : null
+  const forecastStart = forecastPresentation.kind === 'ready'
+    ? forecastPresentation.points.at(0)?.medianMgDl ?? current?.glucoseMgDl ?? null
+    : null
   const forecastDelta = forecastPoint && forecastStart != null
     ? forecastPoint.medianMgDl - forecastStart
     : 0
@@ -69,14 +71,21 @@ export function DashboardView({ snapshot, savedAt, serverNowMs, range, onRangeCh
           )}
         </section>
 
-        {forecastPoint && currentForecast && (
+        {forecastPoint && forecastPresentation.kind === 'ready' && (
           <div
             className="forecast-glance"
-            aria-label={`Прогноз ${mmol(forecastPoint.medianMgDl)} миллимоль на литр, ${forecastDirection.label}, уверенность ${Math.round(snapshot.forecast.confidence * 100)} процентов`}
+            aria-label={`Экспериментальный прогноз, не для расчёта дозы. Через ${forecastHorizonLabel(forecastPresentation.horizonMinutes)}: ${mmol(forecastPoint.medianMgDl)} миллимоль на литр, ${forecastDirection.label}, уверенность ${Math.round(forecastPresentation.confidence * 100)} процентов`}
           >
             <span>Прогноз</span>
             <strong>{mmol(forecastPoint.medianMgDl)}</strong>
-            <small><span aria-hidden="true">{forecastDirection.arrow}</span> {Math.round(snapshot.forecast.confidence * 100)}%</small>
+            <small><span aria-hidden="true">{forecastDirection.arrow}</span> {Math.round(forecastPresentation.confidence * 100)}%</small>
+            <small className="forecast-horizon">через {forecastHorizonLabel(forecastPresentation.horizonMinutes)}</small>
+            <small className="forecast-safety">не для дозы</small>
+          </div>
+        )}
+        {forecastPresentation.kind === 'pending' && (
+          <div className="forecast-glance pending" aria-label={forecastPresentation.label}>
+            <span>{forecastPresentation.label}</span>
           </div>
         )}
       </div>
