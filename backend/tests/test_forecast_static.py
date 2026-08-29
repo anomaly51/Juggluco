@@ -7,6 +7,7 @@ import time
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from app.forecast import (
     ACTIVE_MODEL_METADATA_KEY,
@@ -46,6 +47,7 @@ from app.models import (
     GlucoseReadingRecord,
     IntakeEventRecord,
 )
+from app.schemas import ForecastLatestTrainingAttempt
 
 
 TRAINED_AT_MS = 1_700_000_000_000
@@ -1982,13 +1984,25 @@ def test_runtime_uses_only_the_valid_artifact_pin_and_fails_closed(app, client):
         assert pin.value_text == BASELINE_VERSION
 
 
-def test_active_status_uses_frozen_champion_metadata_not_newer_rejection(app, client):
-    del client
+def test_active_status_uses_frozen_champion_metadata_not_newer_rejection(
+    app, client, auth_headers
+):
     service = app.state.forecast_service
     approved = _static_record("static-active")
     rejected = _static_record("static-later-rejected", accepted=False)
     rejected.status = "rejected"
     rejected.trained_at_ms = TRAINED_AT_MS + 50_000
+    rejected.metrics_json = json.dumps(
+        {
+            "candidate_mae_30": 21.5,
+            "test_days": 4,
+            "accepted": False,
+            "note": "not a numeric metric",
+            "missing": None,
+        },
+        separators=(",", ":"),
+    )
+    rejected.decision_reason = "latest candidate did not pass the display gate"
 
     with app.state.database.session_factory() as session:
         service._ensure_baseline(session)
@@ -2001,3 +2015,50 @@ def test_active_status_uses_frozen_champion_metadata_not_newer_rejection(app, cl
     assert status.training.state == "frozen"
     assert status.training.last_trained_at_ms == TRAINED_AT_MS
     assert status.training.sample_count == SAMPLE_COUNT
+    assert status.training.latest_attempt is not None
+    assert status.training.latest_attempt.model_version == rejected.version
+    assert status.training.latest_attempt.status == "rejected"
+    assert status.training.latest_attempt.trained_at_ms == TRAINED_AT_MS + 50_000
+    assert status.training.latest_attempt.training_cutoff_ms == DATA_CUTOFF_MS
+    assert status.training.latest_attempt.sample_count == SAMPLE_COUNT
+    assert (
+        status.training.latest_attempt.decision_reason
+        == "latest candidate did not pass the display gate"
+    )
+    assert status.training.latest_attempt.metrics == {
+        "candidate_mae_30": 21.5,
+        "test_days": 4,
+    }
+
+    payload = client.get("/v1/forecast/status", headers=auth_headers).json()
+    assert payload["training"]["latest_attempt"] == {
+        "model_version": rejected.version,
+        "status": "rejected",
+        "trained_at_ms": TRAINED_AT_MS + 50_000,
+        "training_cutoff_ms": DATA_CUTOFF_MS,
+        "sample_count": SAMPLE_COUNT,
+        "decision_reason": "latest candidate did not pass the display gate",
+        "metrics": {"candidate_mae_30": 21.5, "test_days": 4},
+    }
+
+
+def test_latest_training_attempt_schema_is_strict():
+    payload = {
+        "model_version": "static-observability",
+        "status": "rejected",
+        "trained_at_ms": TRAINED_AT_MS,
+        "training_cutoff_ms": DATA_CUTOFF_MS,
+        "sample_count": SAMPLE_COUNT,
+        "decision_reason": "did not pass",
+        "metrics": {"candidate_mae_30": 21.5},
+    }
+
+    assert ForecastLatestTrainingAttempt(**payload).metrics == {
+        "candidate_mae_30": 21.5
+    }
+    with pytest.raises(ValidationError):
+        ForecastLatestTrainingAttempt(**{**payload, "unexpected": "value"})
+    with pytest.raises(ValidationError):
+        ForecastLatestTrainingAttempt(
+            **{**payload, "metrics": {"candidate_mae_30": "21.5"}}
+        )

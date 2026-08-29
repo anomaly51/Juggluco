@@ -38,6 +38,7 @@ from .schemas import (
     ForecastCapabilityStatus,
     ForecastCurrentResponse,
     ForecastDataStatus,
+    ForecastLatestTrainingAttempt,
     ForecastPoint,
     ForecastStatusResponse,
     ForecastTrainingStatus,
@@ -8357,6 +8358,25 @@ class ForecastService:
             )
             .order_by(ForecastModelRecord.trained_at_ms.desc())
         )
+        latest_attempt_status: ForecastLatestTrainingAttempt | None = None
+        if latest_attempt is not None:
+            raw_latest_metrics = _json_dict(latest_attempt.metrics_json)
+            latest_attempt_status = ForecastLatestTrainingAttempt(
+                model_version=latest_attempt.version,
+                status=latest_attempt.status,
+                trained_at_ms=int(latest_attempt.trained_at_ms),
+                training_cutoff_ms=latest_attempt.training_cutoff_ms,
+                sample_count=int(latest_attempt.sample_count),
+                decision_reason=latest_attempt.decision_reason,
+                metrics={
+                    key: value
+                    for key, value in raw_latest_metrics.items()
+                    if isinstance(key, str)
+                    and isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                },
+            )
         if champion.version != BASELINE_VERSION:
             last_trained = champion.trained_at_ms
             trained_samples = champion.sample_count
@@ -8483,6 +8503,7 @@ class ForecastService:
                 next_eligible_at_ms=None,
                 sample_count=int(trained_samples),
                 minimum_samples=MINIMUM_TRAIN_WINDOWS,
+                latest_attempt=latest_attempt_status,
             ),
             data=ForecastDataStatus(
                 reading_count=int(reading_count),

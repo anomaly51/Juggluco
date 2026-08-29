@@ -1048,6 +1048,22 @@ class ViewerSnapshot(BaseModel):
     forecast: ForecastCurrentResponse
 
 
+class ForecastLatestTrainingAttempt(BaseModel):
+    """Operator-facing summary of the newest persisted static training attempt."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    model_version: str = Field(min_length=1, max_length=96)
+    status: Literal[
+        "candidate", "pending", "rejected", "inconclusive", "champion", "retired"
+    ]
+    trained_at_ms: int = Field(gt=0)
+    training_cutoff_ms: int | None = Field(default=None, gt=0)
+    sample_count: int = Field(ge=0)
+    decision_reason: str | None = None
+    metrics: dict[str, int | float] = Field(default_factory=dict)
+
+
 class ForecastTrainingStatus(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1066,6 +1082,7 @@ class ForecastTrainingStatus(BaseModel):
     next_eligible_at_ms: int | None
     sample_count: int = Field(ge=0)
     minimum_samples: int = Field(ge=1)
+    latest_attempt: ForecastLatestTrainingAttempt | None = None
 
 
 class ForecastDataStatus(BaseModel):
