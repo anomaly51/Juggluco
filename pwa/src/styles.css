@@ -1888,19 +1888,22 @@ body,
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: 13px;
-  background:
-    radial-gradient(circle at 88% 8%, color-mix(in srgb, var(--blue) 8%, transparent), transparent 34%),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 56%, var(--surface)), color-mix(in srgb, var(--bg) 70%, var(--surface)));
-  touch-action: none;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 56%, var(--surface)), color-mix(in srgb, var(--bg) 70%, var(--surface)));
+  touch-action: pan-y pinch-zoom;
 }
 
 .chart-interactive {
   width: 100%;
   height: 100%;
   min-height: 0;
-  cursor: crosshair;
-  touch-action: none;
+  cursor: default;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: pan-y pinch-zoom;
   user-select: none;
+}
+
+.chart-interactive:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .chart-interactive:focus-visible {
@@ -1909,6 +1912,11 @@ body,
 }
 
 .chart-panel .glucose-zone-band {
+  pointer-events: none;
+}
+
+.chart-panel .future-window {
+  fill: color-mix(in srgb, var(--blue) 3.5%, transparent);
   pointer-events: none;
 }
 
@@ -1928,7 +1936,7 @@ body,
 }
 
 .chart-panel .chart-grid {
-  stroke: color-mix(in srgb, var(--border) 64%, transparent);
+  stroke: color-mix(in srgb, var(--border) 52%, transparent);
 }
 
 .chart-panel .axis-label,
@@ -1946,9 +1954,9 @@ body,
 }
 
 .chart-panel .now-line {
-  stroke: color-mix(in srgb, var(--text) 68%, transparent);
+  stroke: color-mix(in srgb, var(--green) 64%, transparent);
   stroke-width: 1.5;
-  stroke-dasharray: none;
+  stroke-dasharray: 3 5;
 }
 
 .chart-panel .now-label {
@@ -2006,6 +2014,22 @@ body,
 .chart-panel .actual-dot.glucose-high,
 .chart-panel .latest-dot.glucose-high {
   fill: var(--glucose-high);
+}
+
+.chart-panel .latest-halo {
+  fill: none;
+  stroke: var(--glucose-target);
+  stroke-width: 2;
+  opacity: 0.34;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-panel .latest-halo.glucose-low {
+  stroke: var(--glucose-low);
+}
+
+.chart-panel .latest-halo.glucose-high {
+  stroke: var(--glucose-high);
 }
 
 .chart-panel .series-label {
@@ -2112,6 +2136,12 @@ body,
   stroke: var(--border-strong);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .chart-interactive {
+    cursor: crosshair;
+  }
 }
 
 .inspection-value {
@@ -2247,6 +2277,48 @@ body,
 }
 
 @media (max-width: 430px) {
+  .chart-panel .axis-label {
+    font-size: 12px;
+  }
+
+  .chart-panel .now-label,
+  .chart-panel .series-label,
+  .insulin-marker-label {
+    font-size: 11px;
+  }
+
+  .chart-panel .actual-line {
+    stroke-width: 3.75;
+  }
+
+  .chart-panel .forecast-line {
+    stroke-width: 3;
+  }
+
+  .chart-panel .now-line {
+    stroke-width: 1.25;
+  }
+
+  .chart-panel .target-zone-band {
+    fill: color-mix(in srgb, var(--glucose-target) 11%, transparent);
+  }
+
+  .chart-panel .low-zone-band {
+    fill: color-mix(in srgb, var(--glucose-low) 3.5%, transparent);
+  }
+
+  .chart-panel .high-zone-band {
+    fill: color-mix(in srgb, var(--glucose-high) 3.5%, transparent);
+  }
+
+  .inspection-line.horizontal {
+    display: none;
+  }
+
+  .insulin-marker-stem {
+    opacity: 0.3;
+  }
+
   .compact-brand strong {
     position: absolute;
     width: 1px;

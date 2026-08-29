@@ -7,6 +7,9 @@ import type { ForecastPoint, GlucoseReading, RangeHours, ViewerSnapshot } from '
 
 const DEFAULT_SIZE = { width: 820, height: 330 }
 const GAP_MS = 10 * 60_000
+const DEFAULT_FORECAST_HORIZON_MINUTES = 120
+const MIN_FORECAST_HORIZON_MINUTES = 30
+const MAX_FORECAST_HORIZON_MINUTES = 180
 const RANGE_OPTIONS = [3, 6, 8, 12, 24] as RangeHours[]
 
 type GlucoseZone = 'low' | 'target' | 'high'
@@ -213,7 +216,19 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
       .sort((left, right) => left.occurredAtMs - right.occurredAtMs),
     [snapshot.insulinEvents, start, now],
   )
-  const end = Math.max(now, forecast.at(-1)?.atMs ?? now)
+  const configuredHorizonMinutes = Number.isFinite(snapshot.forecast.horizonMinutes)
+    ? snapshot.forecast.horizonMinutes
+    : DEFAULT_FORECAST_HORIZON_MINUTES
+  const visibleFutureMinutes = Math.max(
+    MIN_FORECAST_HORIZON_MINUTES,
+    Math.min(MAX_FORECAST_HORIZON_MINUTES, configuredHorizonMinutes),
+  )
+  // Keep the time scale stable while a forecast is learning: the right-hand
+  // side is a real future window, but it remains empty until a ready forecast exists.
+  const end = Math.max(
+    now + visibleFutureMinutes * 60_000,
+    forecast.at(-1)?.atMs ?? now,
+  )
   const allValues = [
     ...actual.map((point) => point.glucoseMgDl),
     ...forecast.flatMap((point) => [point.lowMgDl, point.highMgDl]),
@@ -229,7 +244,7 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
   const chartHeight = Math.max(1, size.height)
   const margin = {
     top: chartHeight < 240 ? 12 : 18,
-    right: chartWidth < 420 ? 38 : 46,
+    right: chartWidth < 420 ? 42 : 46,
     bottom: chartHeight < 240 ? 25 : 32,
     left: chartWidth < 420 ? 10 : 18,
   }
@@ -260,7 +275,9 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
     })),
   )
   const insulinAnnotations = (() => {
-    const maxLanes = plotHeight < 175 ? 2 : plotHeight < 235 ? 3 : 4
+    const maxLanes = chartWidth < 440
+      ? plotHeight < 220 ? 2 : 3
+      : plotHeight < 175 ? 2 : plotHeight < 235 ? 3 : 4
     const lastXByLane = Array.from({ length: maxLanes }, () => Number.NEGATIVE_INFINITY)
     const minimumLabelGap = chartWidth < 440 ? 68 : 86
 
@@ -292,10 +309,19 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
       }
     })
   })()
-  const yTickCount = chartHeight < 240 ? 4 : 5
-  const xTickCount = chartWidth < 440 ? 3 : 5
+  const yTickCount = chartWidth < 440 || chartHeight < 240 ? 4 : 5
   const gridTicks = Array.from({ length: yTickCount }, (_, index) => yLow + ((yHigh - yLow) * index) / (yTickCount - 1))
-  const timeTicks = Array.from({ length: xTickCount }, (_, index) => start + ((end - start) * index) / (xTickCount - 1))
+  const timeTicks = (() => {
+    const minimumGap = chartWidth < 440 ? 54 : 48
+    const ticks = [start, end]
+    const optionalTicks = chartWidth < 440
+      ? [now, start + (now - start) / 2]
+      : [now, start + (now - start) / 2, now + (end - now) / 2]
+    for (const candidate of optionalTicks) {
+      if (ticks.every((tick) => Math.abs(x(tick) - x(candidate)) >= minimumGap)) ticks.push(candidate)
+    }
+    return ticks.sort((left, right) => left - right)
+  })()
   const latestActual = actual.at(-1)
   const latestForecast = forecast.at(-1)
   const inspectablePoints: InspectablePoint[] = [
@@ -350,16 +376,23 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
       }${insulinNarrative}${actualSegments.length > 1 ? ' В истории есть паузы между измерениями более 10 минут.' : ''}`
     : 'За выбранный период измерений нет. Попробуйте выбрать более длинный интервал.'
 
-  const selectNearest = (atMs: number, localY?: number) => {
+  const selectNearest = (atMs: number, localY?: number, maxHorizontalDistance?: number) => {
     if (!inspectablePoints.length) return
-    let nearest = inspectablePoints[0]
     const cursorX = x(atMs)
+    const candidates = maxHorizontalDistance == null
+      ? inspectablePoints
+      : inspectablePoints.filter((point) => Math.abs(x(point.atMs) - cursorX) <= maxHorizontalDistance)
+    if (!candidates.length) {
+      setSelectedKey(null)
+      return
+    }
+    let nearest = candidates[0]
     const score = (point: InspectablePoint) => {
       const horizontalDistance = Math.abs(x(point.atMs) - cursorX)
       if (localY == null) return horizontalDistance
       return Math.hypot(horizontalDistance, (point.chartY! - localY) * 0.72)
     }
-    for (const point of inspectablePoints.slice(1)) {
+    for (const point of candidates.slice(1)) {
       if (score(point) < score(nearest)) nearest = point
     }
     setSelectedKey((current) => current === nearest.key ? current : nearest.key)
@@ -373,12 +406,10 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
       ? ((event.clientY - bounds.top) / bounds.height) * chartHeight
       : undefined
     const ratio = Math.max(0, Math.min(1, (localX - margin.left) / plotWidth))
-    selectNearest(start + ratio * (end - start), localY)
+    selectNearest(start + ratio * (end - start), localY, chartWidth < 440 ? 36 : 44)
   }
 
   const handlePointerDown = (event: PointerEvent<SVGSVGElement>) => {
-    event.currentTarget.focus()
-    // Focus first so its keyboard default cannot overwrite the point selected by this touch/click.
     inspectPointer(event)
     event.currentTarget.setPointerCapture?.(event.pointerId)
   }
@@ -471,6 +502,9 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
           data-y-max-mg-dl={yHigh}
           data-chart-start-ms={start}
           data-chart-end-ms={end}
+          data-chart-now-ms={now}
+          data-chart-now-x={x(now)}
+          data-future-window-minutes={visibleFutureMinutes}
           data-forecast-state={forecastPresentation.kind}
           onFocus={() => {
             if (selectedKey == null && inspectablePoints.length) {
@@ -483,6 +517,7 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
           onKeyDown={handleKeyDown}
           onPointerDown={handlePointerDown}
           onPointerMove={inspectPointer}
+          onPointerCancel={() => setSelectedKey(null)}
           onPointerLeave={(event) => {
             if (event.pointerType === 'mouse') setSelectedKey(null)
           }}
@@ -513,6 +548,14 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
             width={plotWidth}
             height={plotBottom - targetBottom}
           />
+          <rect
+            className={`future-window ${forecastPresentation.kind}`}
+            data-series="future-window"
+            x={x(now)}
+            y={margin.top}
+            width={chartWidth - margin.right - x(now)}
+            height={plotHeight}
+          />
           {gridTicks.map((tick) => (
             <g key={tick}>
               <line className="chart-grid" x1={margin.left} x2={chartWidth - margin.right} y1={y(tick)} y2={y(tick)} />
@@ -525,6 +568,8 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
             <text
               key={tick}
               className="axis-label"
+              data-axis="time"
+              data-time-ms={tick}
               x={x(tick)}
               y={chartHeight - 9}
               textAnchor={index === 0 ? 'start' : index === timeTicks.length - 1 ? 'end' : 'middle'}
@@ -580,7 +625,9 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
               insulinName: annotation.name,
               insulinUnits: annotation.units,
             }
-            const markerLabel = `${annotation.name} ${insulinUnits(annotation.units)} ЕД`
+            const markerLabel = chartWidth < 440
+              ? `${insulinUnits(annotation.units)} ЕД`
+              : `${annotation.name} ${insulinUnits(annotation.units)} ЕД`
             return (
               <g
                 key={annotation.key}
@@ -628,13 +675,22 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
             )
           })}
           {latestActual && (
-            <circle
-              className={`latest-dot glucose-${latestActualZone}`}
-              data-glucose-zone={latestActualZone!}
-              cx={x(latestActual.measuredAtMs)}
-              cy={y(latestActual.glucoseMgDl)}
-              r="5"
-            />
+            <>
+              <circle
+                className={`latest-halo glucose-${latestActualZone}`}
+                cx={x(latestActual.measuredAtMs)}
+                cy={y(latestActual.glucoseMgDl)}
+                r="9"
+                aria-hidden="true"
+              />
+              <circle
+                className={`latest-dot glucose-${latestActualZone}`}
+                data-glucose-zone={latestActualZone!}
+                cx={x(latestActual.measuredAtMs)}
+                cy={y(latestActual.glucoseMgDl)}
+                r="5"
+              />
+            </>
           )}
           {latestForecast && (
             <circle

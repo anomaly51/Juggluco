@@ -9,7 +9,15 @@ describe('GlucoseChart', () => {
   it('keeps the detailed narrative accessible while exposing compact range controls', async () => {
     const user = userEvent.setup()
     const onRangeChange = vi.fn()
-    render(<GlucoseChart snapshot={normalizeSnapshot(rawSnapshot)} savedAt={Date.now()} range={6} onRangeChange={onRangeChange} />)
+    render(
+      <GlucoseChart
+        snapshot={normalizeSnapshot(rawSnapshot)}
+        savedAt={Date.now()}
+        serverNowMs={rawSnapshot.server_time_ms}
+        range={6}
+        onRangeChange={onRangeChange}
+      />,
+    )
 
     expect(screen.getByRole('img', { name: /^Сахар за 6 часов и прогноз/ })).toBeInTheDocument()
     expect(screen.getByText('прогноз 5,6 ммоль/л · 76%')).toBeInTheDocument()
@@ -22,7 +30,7 @@ describe('GlucoseChart', () => {
     expect(document.querySelector('.forecast-band')).toHaveAttribute('data-series', 'forecast-uncertainty')
     expect(document.querySelector('.forecast-endpoint')).toHaveAttribute('data-forecast-confidence', '76')
     expect(screen.getByRole('img', { name: /^Сахар за 6 часов и прогноз/ }))
-      .toHaveAttribute('data-chart-end-ms', '2400000')
+      .toHaveAttribute('data-chart-end-ms', '9000000')
     expect(screen.getByRole('button', { name: 'Показать данные за 8 часов' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Показать данные за 12 часов' }))
@@ -70,7 +78,7 @@ describe('GlucoseChart', () => {
     expect(highPathNumbers[1]).toBeCloseTo(targetTop, 1)
   })
 
-  it('keeps a cold-start forecast out of the line, uncertainty band, and future axis', () => {
+  it('keeps a cold-start forecast out of the prediction while reserving the real future window', () => {
     const snapshot = normalizeSnapshot({
       ...rawSnapshot,
       forecast: {
@@ -97,12 +105,14 @@ describe('GlucoseChart', () => {
 
     const chart = screen.getByRole('img', { name: 'Сахар за 6 часов' })
     expect(chart).toHaveAttribute('data-forecast-state', 'pending')
-    expect(chart).toHaveAttribute('data-chart-end-ms', String(rawSnapshot.server_time_ms))
+    expect(chart).toHaveAttribute('data-chart-end-ms', String(rawSnapshot.server_time_ms + 120 * 60_000))
+    expect(chart).toHaveAttribute('data-future-window-minutes', '120')
     expect(chart.querySelector('.forecast-line')).toBeNull()
     expect(chart.querySelector('.forecast-band')).toBeNull()
     expect(chart.querySelector('.forecast-endpoint')).toBeNull()
     expect(chart.querySelector('.forecast-series-label')).toBeNull()
-    expect(chart.querySelector('.now-line')).toBeNull()
+    expect(chart.querySelector('.now-line')).not.toBeNull()
+    expect(chart.querySelector('.future-window')).toHaveAttribute('data-series', 'future-window')
     expect(screen.getByText(/Прогноз ещё не готов/, { selector: 'desc' })).toBeInTheDocument()
   })
 
@@ -204,10 +214,18 @@ describe('GlucoseChart', () => {
       value: () => ({ left: 0, top: 0, right: 820, bottom: 330, width: 820, height: 330, x: 0, y: 0, toJSON: () => ({}) }),
     })
 
-    fireEvent(chart, new MouseEvent('pointerdown', { bubbles: true, clientX: 812, clientY: 160 }))
+    const forecastEndpoint = chart.querySelector('.forecast-endpoint')!
+    fireEvent(chart, new MouseEvent('pointerdown', {
+      bubbles: true,
+      clientX: Number(forecastEndpoint.getAttribute('cx')),
+      clientY: Number(forecastEndpoint.getAttribute('cy')),
+    }))
     expect(screen.getByTestId('chart-inspector')).toHaveAttribute('data-point-kind', 'forecast')
+    expect(chart).not.toHaveFocus()
+    fireEvent(chart, new MouseEvent('pointercancel', { bubbles: true }))
+    expect(screen.queryByTestId('chart-inspector')).not.toBeInTheDocument()
 
-    fireEvent.focus(chart)
+    act(() => chart.focus())
     fireEvent.keyDown(chart, { key: 'Home' })
     expect(screen.getByTestId('chart-inspector')).toHaveAttribute('data-point-kind', 'actual')
     expect(screen.getByText(/Измерение в .*7,0 ммоль\/л/, { selector: '.chart-inspection-live' })).toBeInTheDocument()
@@ -222,13 +240,46 @@ describe('GlucoseChart', () => {
     expect(onRangeChange).toHaveBeenCalledWith(8)
   })
 
+  it('filters touch candidates by horizontal reach before comparing their vertical distance', () => {
+    const snapshot = {
+      ...normalizeSnapshot(rawSnapshot),
+      insulinEvents: [
+        { occurredAtMs: -1_000_000, insulinUnits: 5, insulinType: 'rapid' as const, insulinName: 'NovoRapid' },
+      ],
+    }
+    render(
+      <GlucoseChart
+        snapshot={snapshot}
+        savedAt={Date.now()}
+        serverNowMs={rawSnapshot.server_time_ms}
+        range={6}
+        onRangeChange={vi.fn()}
+      />,
+    )
+
+    const chart = screen.getByRole('img', { name: /^Сахар за 6 часов и прогноз/ })
+    Object.defineProperty(chart, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ left: 0, top: 0, right: 820, bottom: 330, width: 820, height: 330, x: 0, y: 0, toJSON: () => ({}) }),
+    })
+    const latest = chart.querySelector('.latest-dot')!
+    const distantInsulin = screen.getByTestId('insulin-marker-rapid')
+    fireEvent(chart, new MouseEvent('pointerdown', {
+      bubbles: true,
+      clientX: Number(latest.getAttribute('cx')),
+      clientY: Number(distantInsulin.getAttribute('data-chart-y')),
+    }))
+
+    expect(screen.getByTestId('chart-inspector')).toHaveAttribute('data-point-kind', 'actual')
+  })
+
   it('matches its SVG coordinate system to the live chart container', async () => {
     class TestResizeObserver {
       constructor(private readonly callback: ResizeObserverCallback) {}
 
       observe() {
         this.callback([
-          { contentRect: { width: 390, height: 510 } } as ResizeObserverEntry,
+          { contentRect: { width: 375, height: 510 } } as ResizeObserverEntry,
         ], this as unknown as ResizeObserver)
       }
 
@@ -238,11 +289,42 @@ describe('GlucoseChart', () => {
 
     vi.stubGlobal('ResizeObserver', TestResizeObserver)
     try {
-      render(<GlucoseChart snapshot={normalizeSnapshot(rawSnapshot)} savedAt={Date.now()} range={6} onRangeChange={vi.fn()} />)
+      const { rerender } = render(
+        <GlucoseChart
+          snapshot={normalizeSnapshot(rawSnapshot)}
+          savedAt={Date.now()}
+          serverNowMs={rawSnapshot.server_time_ms}
+          range={6}
+          onRangeChange={vi.fn()}
+        />,
+      )
       const chart = screen.getByRole('img', { name: /^Сахар за 6 часов и прогноз/ })
 
-      await waitFor(() => expect(chart).toHaveAttribute('viewBox', '0 0 390 510'))
+      await waitFor(() => expect(chart).toHaveAttribute('viewBox', '0 0 375 510'))
       expect(chart.closest('.chart-viewport')).toHaveAttribute('data-chart-height', '510')
+      expect(chart).toHaveAttribute('data-future-window-minutes', '120')
+      const plotLeft = 10
+      const plotWidth = 375 - plotLeft - 42
+      const nowRatio = (Number(chart.getAttribute('data-chart-now-x')) - plotLeft) / plotWidth
+      expect(nowRatio).toBeCloseTo(0.75, 4)
+      expect(screen.getByText('5 ЕД')).toBeInTheDocument()
+      expect(screen.getByText('12 ЕД')).toBeInTheDocument()
+
+      rerender(
+        <GlucoseChart
+          snapshot={normalizeSnapshot(rawSnapshot)}
+          savedAt={Date.now()}
+          serverNowMs={rawSnapshot.server_time_ms}
+          range={24}
+          onRangeChange={vi.fn()}
+        />,
+      )
+      const timeTickXs = Array.from(chart.querySelectorAll('[data-axis="time"]'))
+        .map((tick) => Number(tick.getAttribute('x')))
+      expect(timeTickXs).toHaveLength(3)
+      for (let index = 1; index < timeTickXs.length; index += 1) {
+        expect(timeTickXs[index] - timeTickXs[index - 1]).toBeGreaterThanOrEqual(54)
+      }
     } finally {
       act(() => vi.unstubAllGlobals())
     }

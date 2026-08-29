@@ -31,7 +31,7 @@ export default function App() {
   const install = useInstall()
   const update = usePwaUpdate()
   const [panel, setPanel] = useState<AppPanel | null>(null)
-  const [range, setRange] = useState<RangeHours>(8)
+  const [range, setRange] = useState<RangeHours>(6)
   const panelRef = useRef<HTMLElement | null>(null)
   const panelWasOpenRef = useRef(false)
   const returnFocusRef = useRef<HTMLElement | null>(null)

@@ -70,6 +70,7 @@ describe('App public viewer', () => {
     expect(screen.queryByRole('button', { name: 'События' })).not.toBeInTheDocument()
     expect(screen.getByText('Онлайн')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Обновить данные' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Показать данные за 6 часов' })).toHaveAttribute('aria-pressed', 'true')
 
     const settingsButton = screen.getByRole('button', { name: 'Настройки' })
     await user.click(settingsButton)
