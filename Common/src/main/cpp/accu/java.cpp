@@ -84,8 +84,12 @@ float makearrow(const SensorGlucoseData *sens,float mgdL,uint32_t was)  {
     } */
 extern jlong glucoseback(uint32_t nu,uint32_t glval,float drate,SensorGlucoseData *hist);
 
-jlong mkres(SensorGlucoseData *sens,uint32_t timsec,uint32_t eventTime, int min,int mgdL, int abbotttrend, float change){
+jlong mkres(SensorGlucoseData *sens,uint32_t timsec,uint32_t eventTime,
+        int min,int mgdL,int abbotttrend,float change,
+        uint32_t *persistedTime){
     if(sens->savestreamonly(eventTime,min,mgdL,abbotttrend, change)) {
+            if(persistedTime)
+                *persistedTime=eventTime;
             jlong res;
             if((timsec-eventTime)<maxbluetoothage) {
                  sens->sensorerror=false;
@@ -108,11 +112,21 @@ jlong mkres(SensorGlucoseData *sens,uint32_t timsec,uint32_t eventTime, int min,
              }
      return 0LL;
     }
-extern "C" JNIEXPORT jlong JNICALL   fromjava(accuProcessData)(JNIEnv *env, jclass cl,jlong dataptr,jbyteArray value,jlong mmsec) {
-    if(!value) {
-        LOGAR("accuProcessData value==null");
+
+// Air shares the same persistence helper but already returns eventTime through
+// its own Java time array, so retain the original ABI for that translation unit.
+jlong mkres(SensorGlucoseData *sens,uint32_t timsec,uint32_t eventTime,
+        int min,int mgdL,int abbotttrend,float change) {
+    return mkres(sens,timsec,eventTime,min,mgdL,abbotttrend,change,nullptr);
+    }
+extern "C" JNIEXPORT jlong JNICALL fromjava(accuProcessData)(JNIEnv *env,
+        jclass cl,jlong dataptr,jbyteArray value,jlongArray persistedTimeMs) {
+    if(!value||!persistedTimeMs||env->GetArrayLength(persistedTimeMs)<1) {
+        LOGAR("accuProcessData value/time==null");
           return 1LL;
         }
+    jlong mmsec=0;
+    env->GetLongArrayRegion(persistedTimeMs,0,1,&mmsec);
      accustream *sdata=reinterpret_cast<accustream *>(dataptr);
      SensorGlucoseData *sens=sdata->hist;
       if(!sens) {
@@ -173,7 +187,16 @@ extern "C" JNIEXPORT jlong JNICALL   fromjava(accuProcessData)(JNIEnv *env, jcla
                             if((timsec-eventTime)<maxbluetoothage) {
                                 sens->sensorerror=false;
                                 } */
-                            return mkres(sens, timsec, eventTime, min, mgdL, 0, NAN);
+                            uint32_t persistedTime=0;
+                            const jlong res=mkres(sens,timsec,eventTime,min,
+                                    mgdL,0,NAN,&persistedTime);
+                            if(persistedTime) {
+                                const jlong output=static_cast<jlong>(
+                                        persistedTime)*1000LL;
+                                env->SetLongArrayRegion(persistedTimeMs,0,1,
+                                        &output);
+                                }
+                            return res;
                             }
                         }
                     }
@@ -211,7 +234,14 @@ extern "C" JNIEXPORT jlong JNICALL   fromjava(accuProcessData)(JNIEnv *env, jcla
     const char *label=abbotttrend<6?GlucoseNow::trendString[abbotttrend]:"Error";
     LOGGER("accuProcessData glucose id=%d %.1f mg/dL %.1f mmol/L rate=%.2f label=%s CGMQuality=%d %s",accu->min, mgdLf, mgdLf/18.0f,change,label,accu->CGMQuality,ctime(&tim));
     #endif
-    return mkres(sens,timsec,eventTime,accu-> min, mgdL, abbotttrend, change);
+    uint32_t persistedTime=0;
+    const jlong res=mkres(sens,timsec,eventTime,accu->min,mgdL,
+            abbotttrend,change,&persistedTime);
+    if(persistedTime) {
+        const jlong output=static_cast<jlong>(persistedTime)*1000LL;
+        env->SetLongArrayRegion(persistedTimeMs,0,1,&output);
+        }
+    return res;
     }
 extern "C" JNIEXPORT jbyteArray JNICALL   fromjava(accuAskValues)(JNIEnv *env, jclass cl,jlong dataptr) {
    if(!dataptr) {

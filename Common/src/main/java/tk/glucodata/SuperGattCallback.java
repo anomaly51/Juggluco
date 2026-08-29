@@ -444,6 +444,21 @@ protected void handleGlucoseResult(long res,long timmsec) {
 
             short ratein = (short) ((res >> 32) & 0xFFFFL);
             float rate = ratein / 1000.0f;
+            if(!isWearable) {
+                try {
+                    // Every local BLE implementation converges here after its
+                    // native parser has stored the raw poll. Native stream
+                    // identities have one-second precision even though these
+                    // callbacks carry System.currentTimeMillis().
+                    ForecastRepository.enqueueLiveReading(Applic.app,
+                            ForecastRepository.canonicalReadingTimestamp(
+                                    timmsec));
+                }
+                catch(Throwable error) {
+                    if(doLog) Log.e(LOG_ID,"forecast live sync skipped: "
+                            +error.getClass().getSimpleName());
+                }
+            }
             dowithglucose(SerialNumber, (int)Math.round(glumgL/10.0f),gl,rate, alarm, timmsec,sensorstartmsec,showtime,sensorgen);
             charcha[0] = timmsec;
             if(!isWearable) {

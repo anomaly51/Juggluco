@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -11,10 +12,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from .forecast import STALE_AFTER_MS
+from .forecast import STALE_AFTER_MS, glucose_source_revision
 from .models import AnalysisRecord, GlucoseReadingRecord, IntakeEventRecord
 from .schemas import (
     ForecastCurrentResponse,
@@ -32,6 +34,7 @@ from .schemas import (
 )
 from .security import (
     VIEWER_SESSION_COOKIE,
+    ViewerAccess,
     issue_viewer_session,
     require_viewer_token,
     viewer_session_expiry_ms,
@@ -44,9 +47,27 @@ DEFAULT_PAGE_MS = 31 * 24 * 60 * 60_000
 MAX_WINDOW_MS = 31 * 24 * 60 * 60_000
 MAX_FUTURE_MS = 10 * 60_000
 CURSOR_VERSION = 1
+STREAM_HEARTBEAT_SECONDS = 15.0
 
 SessionProvider = Callable[..., Generator[Session, None, None]]
 EventResponseFactory = Callable[[IntakeEventRecord, str | None], IntakeEvent]
+
+
+def _sse_event(
+    event: str,
+    payload: dict[str, Any],
+    *,
+    event_id: str | None = None,
+) -> str:
+    fields: list[str] = []
+    if event_id is not None:
+        fields.append(f"id: {event_id}")
+    fields.append(f"event: {event}")
+    fields.append(
+        "data: "
+        + json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    )
+    return "\n".join(fields) + "\n\n"
 
 
 def _require_same_origin(request: Request) -> None:
@@ -531,6 +552,96 @@ def create_viewer_router(
         tags=["read-only viewer"],
     )
 
+    @router.get("/stream", response_class=StreamingResponse)
+    async def glucose_stream(
+        request: Request,
+        viewer_access: ViewerAccess = Depends(require_viewer_token),
+    ) -> StreamingResponse:
+        hub = request.app.state.glucose_updates
+        # Register first, then read SQLite's durable watermark. A commit racing
+        # with this handshake is therefore either represented by the ready
+        # revision or retained in the subscriber's one-slot queue.
+        queue = hub.subscribe()
+        try:
+            with request.app.state.database.session_factory() as stream_session:
+                initial_revision = glucose_source_revision(stream_session)
+        except Exception:
+            hub.unsubscribe(queue)
+            raise
+
+        stream_id = hub.stream_id
+        expires_at_ms = (
+            viewer_access.expires_at_ms
+            if viewer_access.method == "session"
+            else None
+        )
+
+        async def events():
+            last_revision = initial_revision
+            try:
+                yield _sse_event(
+                    "ready",
+                    {
+                        "stream_id": stream_id,
+                        "revision": last_revision,
+                        "server_time_ms": _now_ms(),
+                    },
+                    event_id=f"{stream_id}:{last_revision}",
+                )
+                while True:
+                    now_ms = _now_ms()
+                    if expires_at_ms is not None and now_ms >= expires_at_ms:
+                        return
+                    if await request.is_disconnected():
+                        return
+                    timeout = STREAM_HEARTBEAT_SECONDS
+                    if expires_at_ms is not None:
+                        timeout = min(
+                            timeout,
+                            max(0.001, (expires_at_ms - now_ms) / 1_000),
+                        )
+                    try:
+                        update = await asyncio.wait_for(queue.get(), timeout=timeout)
+                    except TimeoutError:
+                        now_ms = _now_ms()
+                        if expires_at_ms is not None and now_ms >= expires_at_ms:
+                            return
+                        yield _sse_event(
+                            "heartbeat",
+                            {
+                                "stream_id": stream_id,
+                                "revision": last_revision,
+                                "server_time_ms": now_ms,
+                            },
+                        )
+                        continue
+                    if update is None:
+                        return
+                    if update.revision <= last_revision:
+                        continue
+                    last_revision = update.revision
+                    yield _sse_event(
+                        "glucose",
+                        {
+                            "stream_id": stream_id,
+                            "revision": last_revision,
+                            "server_time_ms": _now_ms(),
+                            "latest_reading_at_ms": update.latest_reading_at_ms,
+                        },
+                        event_id=f"{stream_id}:{last_revision}",
+                    )
+            finally:
+                hub.unsubscribe(queue)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-store, no-transform, private",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     @router.get("/snapshot", response_model=ViewerSnapshot)
     def snapshot(
         request: Request,
@@ -543,6 +654,10 @@ def create_viewer_router(
         event_limit: int = Query(default=100, ge=1, le=500),
     ) -> ViewerSnapshot:
         now = _now_ms()
+        # Read the watermark before any row. If ingestion races this request,
+        # the snapshot may conservatively understate its revision, but can
+        # never claim to include a commit that its rows did not observe.
+        snapshot_glucose_revision = glucose_source_revision(session)
         is_public = request.app.state.settings.viewer_public
         public_key = (
             request.app.state.viewer_public_cursor_key if is_public else None
@@ -629,6 +744,8 @@ def create_viewer_router(
         if is_public and forecast.activities:
             forecast = forecast.model_copy(update={"activities": []})
         return ViewerSnapshot(
+            stream_id=request.app.state.glucose_updates.stream_id,
+            glucose_revision=snapshot_glucose_revision,
             server_time_ms=now,
             from_ms=resolved_from,
             to_ms=resolved_to,

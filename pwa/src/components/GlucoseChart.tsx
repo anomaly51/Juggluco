@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, PointerEvent } from 'react'
 import { mmol, time } from '../format'
-import { effectiveServerNow, forecastIsCurrent } from '../freshness'
+import { effectiveServerNow, forecastIsCurrentAt } from '../freshness'
 import type { ForecastPoint, GlucoseReading, RangeHours, ViewerSnapshot } from '../types'
 
 const DEFAULT_SIZE = { width: 820, height: 330 }
@@ -13,6 +13,7 @@ type GlucoseZone = 'low' | 'target' | 'high'
 interface ChartProps {
   snapshot: ViewerSnapshot
   savedAt: number | null
+  serverNowMs?: number
   range: RangeHours
   onRangeChange: (range: RangeHours) => void
 }
@@ -156,7 +157,7 @@ function inspectionText(point: InspectablePoint): string {
   return `Измерение в ${time(point.atMs)}: ${mmol(point.valueMgDl!)} ммоль/л.${zone}`
 }
 
-export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartProps) {
+export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeChange }: ChartProps) {
   const titleId = useId()
   const descriptionId = useId()
   const helpId = useId()
@@ -194,18 +195,18 @@ export function GlucoseChart({ snapshot, savedAt, range, onRangeChange }: ChartP
     return () => window.removeEventListener('resize', measure)
   }, [])
 
-  const clientNow = useMemo(() => Date.now(), [snapshot, savedAt])
-  const now = effectiveServerNow(snapshot, savedAt, clientNow)
+  const fallbackClientNow = useMemo(() => Date.now(), [snapshot, savedAt])
+  const now = serverNowMs ?? effectiveServerNow(snapshot, savedAt, fallbackClientNow)
   const start = now - range * 60 * 60_000
   const actual = useMemo(
     () => snapshot.glucoseHistory.filter((point) => point.measuredAtMs >= start && point.measuredAtMs <= now),
     [snapshot.glucoseHistory, start, now],
   )
   const forecast = useMemo(
-    () => forecastIsCurrent(snapshot, savedAt, clientNow)
+    () => forecastIsCurrentAt(snapshot, now)
       ? snapshot.forecast.points.filter((point) => point.atMs >= now)
       : [],
-    [snapshot, savedAt, clientNow, now],
+    [snapshot, now],
   )
   const visibleInsulin = useMemo(
     () => (snapshot.insulinEvents ?? [])

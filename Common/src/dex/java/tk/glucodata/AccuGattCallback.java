@@ -444,13 +444,14 @@ private int phase=0;
 private int redrawer=0;
 private  void    processChanged(byte[] value) {
   long timmsec=System.currentTimeMillis();
-  long res=Natives.accuProcessData(dataptr, value,timmsec);
+  long[] persistedTimeMs={timmsec};
+  long res=Natives.accuProcessData(dataptr, value,persistedTimeMs);
   if(res==1L) {
       if(redrawer++%15==13)
             Applic.app.redraw();
      return;
     };
-  handleGlucoseResult(res,timmsec);
+  handleGlucoseResult(res,persistedTimeMs[0]);
   }
 
     @Override 

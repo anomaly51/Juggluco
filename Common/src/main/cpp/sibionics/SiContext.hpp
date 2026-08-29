@@ -47,7 +47,8 @@ jlong interpret_data(SensorGlucoseData *sens,int sensorindex,uint32_t nowsecs,co
 public:
    void  	setNewSI(SensorGlucoseData *sens);
    SiContext(SensorGlucoseData *sens);
-    jlong processData(SensorGlucoseData *sens,time_t nowsecs,int8_t *data,int totlen,int sensorindex) ;
+    jlong processData(SensorGlucoseData *sens,time_t nowsecs,int8_t *data,
+            int totlen,int sensorindex,uint32_t *persistedTime) ;
 #ifdef NEWSIBIONICS
     jlong processData2(SensorGlucoseData *sens,time_t nowsecs,data_t *data,int sensorindex) ;
 #endif

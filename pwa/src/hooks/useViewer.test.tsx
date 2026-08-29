@@ -2,6 +2,8 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { deleteSession, fetchSnapshot, getSession } from '../api'
 import { clearDeviceData, clearSnapshot, loadSnapshot, saveSnapshot } from '../db'
+import { connectViewerStream } from '../live'
+import type { ViewerStreamHandlers } from '../live'
 import { normalizeSnapshot } from '../normalize'
 import { rawSnapshot } from '../test/fixtures'
 import { useViewer } from './useViewer'
@@ -24,6 +26,10 @@ vi.mock('../db', () => ({
   saveSnapshot: vi.fn(async () => undefined),
 }))
 
+vi.mock('../live', () => ({
+  connectViewerStream: vi.fn(),
+}))
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -38,8 +44,11 @@ describe('useViewer request ordering', () => {
   const firstSnapshot = normalizeSnapshot(rawSnapshot)
   const secondSnapshot = normalizeSnapshot({
     ...rawSnapshot,
+    glucose_revision: 2,
     current_glucose: { ...rawSnapshot.current_glucose, glucose_mg_dl: 144 },
   })
+  let streamHandlers: ViewerStreamHandlers | null = null
+  let closeStream: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     localStorage.clear()
@@ -51,7 +60,19 @@ describe('useViewer request ordering', () => {
     vi.mocked(clearDeviceData).mockClear()
     vi.mocked(clearSnapshot).mockClear()
     vi.mocked(fetchSnapshot).mockReset()
+    streamHandlers = null
+    closeStream = vi.fn()
+    vi.mocked(connectViewerStream).mockReset()
+    vi.mocked(connectViewerStream).mockImplementation((handlers) => {
+      streamHandlers = handlers
+      return { close: closeStream }
+    })
   })
+
+  const emitStreamEvent = (event: Parameters<ViewerStreamHandlers['onEvent']>[0]) => {
+    if (!streamHandlers) throw new Error('stream is not connected')
+    streamHandlers.onEvent(event)
+  }
 
   it('does not let an older response replace a newer refresh', async () => {
     const first = deferred<typeof firstSnapshot>()
@@ -60,8 +81,8 @@ describe('useViewer request ordering', () => {
     const { result } = renderHook(() => useViewer())
     await waitFor(() => expect(result.current.authState).toBe('unauthenticated'))
 
-    let firstRefresh!: Promise<void>
-    let secondRefresh!: Promise<void>
+    let firstRefresh!: Promise<boolean>
+    let secondRefresh!: Promise<boolean>
     act(() => {
       firstRefresh = result.current.refresh()
       secondRefresh = result.current.refresh()
@@ -112,6 +133,97 @@ describe('useViewer request ordering', () => {
     expect(result.current.authState).toBe('authenticated')
     expect(result.current.accessMode).toBe('public')
     expect(result.current.sessionExpiresAt).toBeNull()
+  })
+
+  it('reconciles immediately when the stream advertises a newer glucose revision', async () => {
+    vi.mocked(getSession).mockResolvedValueOnce({ authenticated: true, accessMode: 'public', expiresAtMs: null })
+    vi.mocked(fetchSnapshot)
+      .mockResolvedValueOnce(firstSnapshot)
+      .mockResolvedValueOnce(secondSnapshot)
+    const { result } = renderHook(() => useViewer())
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull())
+    await waitFor(() => expect(connectViewerStream).toHaveBeenCalledOnce())
+
+    act(() => emitStreamEvent({
+      type: 'glucose',
+      streamId: 'test-stream',
+      revision: 2,
+      serverTimeMs: rawSnapshot.server_time_ms + 1_000,
+      latestReadingAtMs: rawSnapshot.current_glucose.measured_at_ms,
+    }))
+
+    await waitFor(() => expect(result.current.snapshot?.currentGlucose?.glucoseMgDl).toBe(144))
+    expect(result.current.snapshot?.glucoseRevision).toBe(2)
+    expect(result.current.connectionState).toBe('online')
+    expect(fetchSnapshot).toHaveBeenCalledTimes(2)
+  })
+
+  it('coalesces events during a fetch and catches up without letting an older watermark win', async () => {
+    const revisionTwo = deferred<typeof secondSnapshot>()
+    const revisionThree = normalizeSnapshot({
+      ...rawSnapshot,
+      glucose_revision: 3,
+      current_glucose: { ...rawSnapshot.current_glucose, glucose_mg_dl: 155 },
+    })
+    vi.mocked(getSession).mockResolvedValueOnce({ authenticated: true, accessMode: 'public', expiresAtMs: null })
+    vi.mocked(fetchSnapshot)
+      .mockResolvedValueOnce(firstSnapshot)
+      .mockReturnValueOnce(revisionTwo.promise)
+      .mockResolvedValueOnce(revisionThree)
+    const { result } = renderHook(() => useViewer())
+    await waitFor(() => expect(result.current.snapshot?.glucoseRevision).toBe(1))
+
+    act(() => emitStreamEvent({
+      type: 'glucose', streamId: 'test-stream', revision: 2,
+      serverTimeMs: 1_801_000, latestReadingAtMs: 1_500_000,
+    }))
+    await waitFor(() => expect(fetchSnapshot).toHaveBeenCalledTimes(2))
+    act(() => emitStreamEvent({
+      type: 'glucose', streamId: 'test-stream', revision: 3,
+      serverTimeMs: 1_802_000, latestReadingAtMs: 1_501_000,
+    }))
+
+    await act(async () => revisionTwo.resolve(secondSnapshot))
+    await waitFor(() => expect(result.current.snapshot?.glucoseRevision).toBe(3))
+    expect(result.current.snapshot?.currentGlucose?.glucoseMgDl).toBe(155)
+    expect(fetchSnapshot).toHaveBeenCalledTimes(3)
+  })
+
+  it('uses heartbeats for liveness and server time without refetching an unchanged revision', async () => {
+    vi.mocked(getSession).mockResolvedValueOnce({ authenticated: true, accessMode: 'public', expiresAtMs: null })
+    vi.mocked(fetchSnapshot).mockResolvedValue(firstSnapshot)
+    const { result } = renderHook(() => useViewer())
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull())
+
+    act(() => emitStreamEvent({
+      type: 'heartbeat',
+      streamId: 'test-stream',
+      revision: 1,
+      serverTimeMs: 2_000_000,
+      latestReadingAtMs: 1_500_000,
+    }))
+
+    expect(result.current.connectionState).toBe('online')
+    expect(result.current.serverNowMs).toBeGreaterThanOrEqual(2_000_000)
+    expect(fetchSnapshot).toHaveBeenCalledOnce()
+  })
+
+  it('marks a broken stream as reconnecting, reconciles over HTTP, and closes it on unmount', async () => {
+    vi.mocked(getSession).mockResolvedValueOnce({ authenticated: true, accessMode: 'public', expiresAtMs: null })
+    vi.mocked(fetchSnapshot).mockResolvedValue(firstSnapshot)
+    const { result, unmount } = renderHook(() => useViewer())
+    await waitFor(() => expect(connectViewerStream).toHaveBeenCalledOnce())
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull())
+
+    await act(async () => {
+      if (!streamHandlers) throw new Error('stream is not connected')
+      streamHandlers.onError()
+    })
+
+    expect(result.current.connectionState).toBe('reconnecting')
+    await waitFor(() => expect(fetchSnapshot).toHaveBeenCalledTimes(2))
+    unmount()
+    expect(closeStream).toHaveBeenCalledOnce()
   })
 
   it('does not expose an older private cache while public access is being resolved', async () => {
@@ -172,7 +284,7 @@ describe('useViewer request ordering', () => {
     const { result } = renderHook(() => useViewer())
     await waitFor(() => expect(result.current.authState).toBe('unauthenticated'))
 
-    let refresh!: Promise<void>
+    let refresh!: Promise<boolean>
     act(() => { refresh = result.current.refresh() })
     await act(async () => { await result.current.logoutAndClear() })
     await act(async () => {

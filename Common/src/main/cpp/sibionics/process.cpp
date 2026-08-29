@@ -89,7 +89,8 @@ void logbytes(std::string_view text,const uint8_t *value,int vallen) {
 #endif
 #define saveSi3(sens, index,eventTime, save, value, temp, last)
 
-jlong SiContext::processData(SensorGlucoseData *sens,time_t nowsecs,int8_t *data,int totlen,int sensorindex) {
+jlong SiContext::processData(SensorGlucoseData *sens,time_t nowsecs,
+        int8_t *data,int totlen,int sensorindex,uint32_t *persistedTime) {
    logbytes("SIprocess",(uint8_t*)data,totlen);
    if(data[2] != 9||data[0] != -86 || data[1] != 85) {
       static constexpr const int8_t  doauth[]={(int8_t)0x23,(int8_t)0xF7,(int8_t)0x6F,(int8_t)0xD9,(int8_t)0xF4};
@@ -186,7 +187,9 @@ jlong SiContext::processData(SensorGlucoseData *sens,time_t nowsecs,int8_t *data
                             uint32_t starttime=sens->getinfo()->starttime;
                             uint32_t warminutes=sens->getinfo()->manualwarmup;
                             uint32_t endwarmup=starttime+warminutes*60;
-                            if(eventTime>endwarmup) {
+                             if(eventTime>endwarmup) {
+                                  if(persistedTime)
+                                      *persistedTime=eventTime;
                                   auto res=glucoseback(eventTime,mgdL,change,sens);
                                   backup->wakebackup(wakestream);
                                   extern void wakewithcurrent();

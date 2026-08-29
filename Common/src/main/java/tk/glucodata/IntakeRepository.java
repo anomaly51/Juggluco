@@ -66,6 +66,24 @@ public final class IntakeRepository {
         void onIntakeEventsChanged(List<IntakeEvent> events);
     }
 
+    /** One indivisible endpoint/credential identity for a network operation. */
+    static final class BackendIdentity {
+        final String url;
+        final String token;
+        final long generation;
+
+        BackendIdentity(String url, String token, long generation) {
+            this.url = normalizeBackendUrl(url);
+            this.token = IntakeEvent.clean(token);
+            this.generation = generation;
+        }
+
+        boolean sameAs(BackendIdentity other) {
+            return other != null && generation == other.generation
+                    && url.equals(other.url) && token.equals(other.token);
+        }
+    }
+
     interface Cancellable {
         void cancel();
     }
@@ -119,15 +137,45 @@ public final class IntakeRepository {
         return current;
     }
 
-    public String backendUrl() {
+    public synchronized String backendUrl() {
         return preferences.getString(KEY_URL, DEFAULT_BACKEND_URL);
     }
 
-    public String backendToken() {
+    public synchronized String backendToken() {
         return preferences.getString(KEY_TOKEN, "");
     }
 
-    public boolean configure(String url, String token) {
+    synchronized BackendIdentity backendIdentity() {
+        return new BackendIdentity(
+                preferences.getString(KEY_URL, DEFAULT_BACKEND_URL),
+                preferences.getString(KEY_TOKEN, ""),
+                configurationGeneration);
+    }
+
+    /**
+     * Registers a configuration observer and captures the identity in one
+     * configure()-exclusive operation. The caller therefore either observes
+     * the old identity and the subsequent notification, or starts with the
+     * new identity; it can never miss a configure between those two actions.
+     */
+    synchronized BackendIdentity registerConfigurationListener(
+            Runnable listener) {
+        if (listener != null) {
+            configurationListeners.addIfAbsent(listener);
+        }
+        return backendIdentity();
+    }
+
+    /** Runs an acknowledgement only if configure() cannot have intervened. */
+    synchronized boolean runIfCurrentBackend(BackendIdentity expected,
+            Runnable acknowledgement) {
+        BackendIdentity current = backendIdentity();
+        if (!current.sameAs(expected)) return false;
+        acknowledgement.run();
+        return true;
+    }
+
+    public synchronized boolean configure(String url, String token) {
         String normalized = normalizeBackendUrl(url);
         String cleanToken = IntakeEvent.clean(token);
         boolean backendChanged = !normalized.equals(backendUrl())
@@ -268,7 +316,7 @@ public final class IntakeRepository {
         listeners.remove(listener);
     }
 
-    void addConfigurationListener(Runnable listener) {
+    synchronized void addConfigurationListener(Runnable listener) {
         if (listener != null) {
             configurationListeners.addIfAbsent(listener);
         }
@@ -359,8 +407,9 @@ public final class IntakeRepository {
     Cancellable sendIntakeChat(String sessionId, String clientTurnId,
             long occurredAtMs, String text, File audio, List<File> photos,
             Callback<IntakeChatTurn> callback) {
-        final long generation = configurationGeneration;
-        final IntakeApiClient api = client();
+        final BackendIdentity identity = backendIdentity();
+        final long generation = identity.generation;
+        final IntakeApiClient api = client(identity);
         // The composer clears its attachment model after a completed turn.
         // Snapshot it before the work is queued so another UI action cannot
         // mutate the multipart payload while this serialized executor waits.
@@ -527,8 +576,9 @@ public final class IntakeRepository {
     }
 
     Cancellable transcribeAudio(File audio, Callback<String> callback) {
-        final long generation = configurationGeneration;
-        final IntakeApiClient api = client();
+        final BackendIdentity identity = backendIdentity();
+        final long generation = identity.generation;
+        final IntakeApiClient api = client(identity);
         final IntakeApiClient.RequestCancellation cancellation =
                 new IntakeApiClient.RequestCancellation();
         transcriptionExecutor.submit(() -> {
@@ -762,8 +812,9 @@ public final class IntakeRepository {
     }
 
     private void synchronizePendingCreates() {
-        final long generation = configurationGeneration;
-        final IntakeApiClient api = client();
+        final BackendIdentity identity = backendIdentity();
+        final long generation = identity.generation;
+        final IntakeApiClient api = client(identity);
         while (generation == configurationGeneration) {
             PendingIntakeOperation operation;
             synchronized (this) {
@@ -848,8 +899,8 @@ public final class IntakeRepository {
         replaceEvents(remaining);
     }
 
-    private IntakeApiClient client() {
-        return new IntakeApiClient(backendUrl(), backendToken());
+    private static IntakeApiClient client(BackendIdentity identity) {
+        return new IntakeApiClient(identity.url, identity.token);
     }
 
     private interface BackendWork<T> {
@@ -863,8 +914,9 @@ public final class IntakeRepository {
 
     private <T> void executeForCurrentBackend(ExecutorService workExecutor,
             Callback<T> callback, BackendWork<T> work) {
-        final long generation = configurationGeneration;
-        final IntakeApiClient api = client();
+        final BackendIdentity identity = backendIdentity();
+        final long generation = identity.generation;
+        final IntakeApiClient api = client(identity);
         workExecutor.execute(() -> {
             try {
                 T result = work.run(api);

@@ -24,8 +24,10 @@ export function dateTime(value: number): string {
 }
 
 export function relativeAge(value: number, now = Date.now()): string {
-  const minutes = Math.max(0, Math.round((now - value) / 60_000))
-  if (minutes < 1) return 'только что'
+  const seconds = Math.max(0, Math.floor((now - value) / 1_000))
+  if (seconds < 10) return 'только что'
+  if (seconds < 60) return `${seconds} сек назад`
+  const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes} мин назад`
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return `${hours} ч назад`

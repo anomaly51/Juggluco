@@ -493,6 +493,7 @@ private void initializeNet() {
         public void onAvailable(@NonNull Network network) {
            hasonAvailable=true;
            {if(doLog) {Log.i(LOG_ID, "network: onAvailable(" + network+")");};};
+           ForecastRepository.retryPendingLiveReading(Applic.app);
            if(useWearos()||hasip()) {
              Natives.networkpresent();
              MessageSender.reinit();

@@ -436,6 +436,108 @@ public class ForecastAndroidContractTest {
     }
 
     @Test
+    public void liveTimestampResolutionSurvivesTheJniSecondBoundary() {
+        long callbackSecond = 1_800_000_000_000L;
+        assertEquals(callbackSecond, ForecastRepository
+                .canonicalReadingTimestamp(callbackSecond + 987L));
+        assertEquals(callbackSecond, ForecastRepository
+                .canonicalReadingTimestamp(callbackSecond));
+        assertEquals(0L, ForecastRepository.canonicalReadingTimestamp(0L));
+
+        ForecastReading prior = ForecastReading.historical(
+                callbackSecond - 1_000L, 117, .1f);
+        ForecastReading following = ForecastReading.historical(
+                callbackSecond + 1_000L, 119, .2f);
+        ForecastReading tieWinner = ForecastRepository.nearestReading(
+                Arrays.asList(prior, following), callbackSecond, 2_000L);
+        assertNotNull(tieWinner);
+        // Java captures time immediately before the JNI parser. On an exact
+        // tie, prefer the later native second and preserve its real identity.
+        assertEquals(following.measuredAtMs, tieWinner.measuredAtMs);
+        assertEquals(following.readingId, tieWinner.readingId);
+
+        ForecastReading inclusiveBoundary = ForecastReading.historical(
+                callbackSecond + 2_000L, 121, .3f);
+        assertSame(inclusiveBoundary, ForecastRepository.nearestReading(
+                Collections.singletonList(inclusiveBoundary), callbackSecond,
+                2_000L));
+        ForecastReading outsideBoundary = ForecastReading.historical(
+                callbackSecond + 2_001L, 122, .4f);
+        assertEquals(null, ForecastRepository.nearestReading(
+                Collections.singletonList(outsideBoundary), callbackSecond,
+                2_000L));
+    }
+
+    @Test
+    public void liveRetryBackoffIsBoundedAndDeterministic() {
+        assertEquals(1_000L, ForecastRepository.liveRetryDelayMs(-1));
+        assertEquals(1_000L, ForecastRepository.liveRetryDelayMs(0));
+        assertEquals(2_000L, ForecastRepository.liveRetryDelayMs(1));
+        assertEquals(4_000L, ForecastRepository.liveRetryDelayMs(2));
+        assertEquals(32_000L, ForecastRepository.liveRetryDelayMs(5));
+        assertEquals(60_000L, ForecastRepository.liveRetryDelayMs(6));
+        assertEquals(60_000L, ForecastRepository.liveRetryDelayMs(100));
+    }
+
+    @Test
+    public void backendIdentityIncludesUrlTokenAndGeneration() {
+        IntakeRepository.BackendIdentity identity =
+                new IntakeRepository.BackendIdentity(
+                        "https://one.example", "token-a", 7L);
+        assertTrue(identity.sameAs(new IntakeRepository.BackendIdentity(
+                "https://one.example/", "token-a", 7L)));
+        assertFalse(identity.sameAs(new IntakeRepository.BackendIdentity(
+                "https://two.example", "token-a", 7L)));
+        assertFalse(identity.sameAs(new IntakeRepository.BackendIdentity(
+                "https://one.example", "token-b", 7L)));
+        assertFalse(identity.sameAs(new IntakeRepository.BackendIdentity(
+                "https://one.example", "token-a", 8L)));
+    }
+
+    @Test
+    public void staleBackendIdentityCannotRunAnAcknowledgement() {
+        IntakeRepository repository = IntakeRepository.get(
+                RuntimeEnvironment.getApplication());
+        IntakeRepository.BackendIdentity current =
+                repository.backendIdentity();
+        boolean[] acknowledged = {false};
+        assertTrue(repository.runIfCurrentBackend(current,
+                () -> acknowledged[0] = true));
+        assertTrue(acknowledged[0]);
+
+        IntakeRepository.BackendIdentity stale =
+                new IntakeRepository.BackendIdentity(current.url,
+                        current.token, current.generation - 1L);
+        acknowledged[0] = false;
+        assertFalse(repository.runIfCurrentBackend(stale,
+                () -> acknowledged[0] = true));
+        assertFalse(acknowledged[0]);
+    }
+
+    @Test
+    public void configurationListenerRegistrationReturnsItsAtomicSnapshot() {
+        IntakeRepository repository = IntakeRepository.get(
+                RuntimeEnvironment.getApplication());
+        IntakeRepository.BackendIdentity original =
+                repository.backendIdentity();
+        boolean[] notified = {false};
+        Runnable listener = () -> notified[0] = true;
+        IntakeRepository.BackendIdentity registered =
+                repository.registerConfigurationListener(listener);
+        assertTrue(registered.sameAs(repository.backendIdentity()));
+        try {
+            assertTrue(repository.configure(
+                    "http://127.0.0.1:8765/atomic-listener-test",
+                    original.token + "-listener-test"));
+            assertTrue(notified[0]);
+            assertFalse(registered.sameAs(repository.backendIdentity()));
+        } finally {
+            repository.removeConfigurationListener(listener);
+            repository.configure(original.url, original.token);
+        }
+    }
+
+    @Test
     public void historyLookaheadAndOverlapCutoffAreDeterministic() {
         long first = 1_800_000_000_000L;
         long[] raw = new long[1_001 * 3];
@@ -659,10 +761,130 @@ public class ForecastAndroidContractTest {
     }
 
     @Test
+    public void everyLocalBleFamilyUsesTheCommonNonblockingLiveHook()
+            throws Exception {
+        String common = source("SuperGattCallback.java");
+        String handler = between(common,
+                "protected void handleGlucoseResult",
+                "public void searchforDeviceAddress");
+        assertTrue(handler.contains(
+                "ForecastRepository.enqueueLiveReading(Applic.app"));
+        assertTrue(handler.contains(
+                "ForecastRepository.canonicalReadingTimestamp"));
+        assertTrue(handler.indexOf("enqueueLiveReading")
+                < handler.indexOf("dowithglucose"));
+        assertFalse(handler.contains("uploadReadings"));
+        assertFalse(handler.contains("currentForecast"));
+        assertFalse(handler.contains("forecastStatus"));
+
+        String[][] sensorFamilies = {
+                {"main", "Libre2GattCallback.java"},
+                {"libre3", "Libre3GattCallback.java"},
+                {"dex", "DexGattCallback.java"},
+                {"dex", "AidexXGattCallback.java"},
+                {"dex", "AirGattCallback.java"},
+                {"dex", "AccuGattCallback.java"},
+                {"mobileSi", "SiGattCallback.java"},
+                {"mobileSi", "Si3GattCallback.java"}
+        };
+        for (String[] family : sensorFamilies) {
+            String implementation = variantSource(family[0], family[1]);
+            assertTrue(family[1],
+                    implementation.contains("extends SuperGattCallback"));
+            assertTrue(family[1],
+                    implementation.contains("handleGlucoseResult("));
+        }
+    }
+
+    @Test
+    public void delayedAccuAndLegacySiUseThePersistedNativeTimestamp()
+            throws Exception {
+        String accu = variantSource("dex", "AccuGattCallback.java");
+        assertTrue(accu.contains("long[] persistedTimeMs={timmsec}"));
+        assertTrue(accu.contains(
+                "accuProcessData(dataptr, value,persistedTimeMs)"));
+        assertTrue(accu.contains(
+                "handleGlucoseResult(res,persistedTimeMs[0])"));
+        String accuNative = cppPathSource("accu", "java.cpp");
+        assertTrue(accuNative.contains("*persistedTime=eventTime"));
+        assertTrue(accuNative.contains(
+                "SetLongArrayRegion(persistedTimeMs,0,1"));
+
+        String si = variantSource("mobileSi", "SiGattCallback.java");
+        assertTrue(si.contains("long[] persistedTimeMs={timmsec}"));
+        assertTrue(si.contains(
+                "SIprocessData(dataptr, value,persistedTimeMs)"));
+        assertTrue(si.contains(
+                "handleGlucoseResult(res,persistedTimeMs[0])"));
+        String siNative = cppPathSource("sibionics", "process.cpp");
+        assertTrue(siNative.contains("*persistedTime=eventTime"));
+        String siBridge = cppPathSource("sibionics", "start.cpp");
+        assertTrue(siBridge.contains(
+                "SetLongArrayRegion(persistedTimeMs,0,1"));
+    }
+
+    @Test
+    public void failedOrUncommittedLiveRowsRemainPendingForRetry()
+            throws Exception {
+        String repository = source("ForecastRepository.java");
+        String delivery = between(repository, "LiveUpload recordLiveReading",
+                "private void refresh");
+        String notCommitted = between(delivery,
+                "ForecastReading reading = nearestNativeReading",
+                "if (generation != configurationGeneration)");
+        assertTrue(notCommitted.contains("if (reading == null)"));
+        assertTrue(notCommitted.contains("return null"));
+        String networkFailure = between(delivery,
+                "api.uploadReadings(Collections.singletonList(reading))",
+                "return new LiveUpload");
+        assertTrue(networkFailure.contains("catch (Exception error)"));
+        assertTrue(networkFailure.contains("return null"));
+
+        String drain = between(repository,
+                "private static long drainLiveReadings",
+                "private static long nextLiveRetryDelayMs");
+        assertTrue(drain.contains(
+                "if (uploaded == null) return nextLiveRetryDelayMs()"));
+        assertTrue(drain.indexOf("recordLiveReading(measuredAtMs")
+                < drain.indexOf(
+                        "LIVE_PENDING_MS.compareAndSet(measuredAtMs, 0L)"));
+        assertTrue(drain.indexOf("if (uploaded == null)")
+                < drain.indexOf("clearPersistedLivePending(measuredAtMs)"));
+        assertTrue(repository.contains("restoreLivePending()"));
+        assertTrue(repository.contains("LIVE_RETRY_MAX_MS = 60_000L"));
+    }
+
+    @Test
+    public void networkReconnectImmediatelyWakesOnlyPendingLiveDelivery()
+            throws Exception {
+        String applic = source("Applic.java");
+        String onAvailable = between(applic,
+                "public void onAvailable(@NonNull Network network)",
+                "public void onUnavailable");
+        assertTrue(onAvailable.contains(
+                "ForecastRepository.retryPendingLiveReading(Applic.app)"));
+
+        String repository = source("ForecastRepository.java");
+        String reconnect = between(repository,
+                "static void retryPendingLiveReading",
+                "/** Native stream timestamps have one-second precision");
+        assertTrue(reconnect.contains("LIVE_PENDING_MS.get() <= 0L"));
+        assertTrue(reconnect.contains("LIVE_PENDING_TIMESTAMP_MS"));
+        assertTrue(reconnect.contains("return;"));
+        assertTrue(reconnect.contains("LIVE_RETRY_ATTEMPT.set(0)"));
+        assertTrue(reconnect.contains("restoreLivePending()"));
+        assertTrue(reconnect.contains("scheduleLiveDrain(application, 0L)"));
+        assertFalse(reconnect.contains("uploadReadings"));
+        assertFalse(reconnect.contains("backendUrl"));
+        assertFalse(reconnect.contains("backendToken"));
+    }
+
+    @Test
     public void forecastTransportUsesOnlyConfiguredBackendAndPreviewNeverUploads()
             throws Exception {
         String client = source("ForecastApiClient.java");
         String repository = source("ForecastRepository.java");
+        String intake = source("IntakeRepository.java");
         String applic = source("Applic.java");
         String natives = source("Natives.java");
         String nativeBridge = cppSource("javacurve.cpp");
@@ -676,6 +898,28 @@ public class ForecastAndroidContractTest {
         assertTrue(client.contains("reading.toJson(includeReadingUtcOffsets)"));
         assertTrue(client.contains("Authorization\", \"Bearer \" + token"));
         assertFalse(client.toLowerCase().contains("openrouter"));
+        assertTrue(intake.contains("static final class BackendIdentity"));
+        assertTrue(intake.contains(
+                "synchronized BackendIdentity backendIdentity()"));
+        assertTrue(intake.contains(
+                "synchronized boolean runIfCurrentBackend"));
+        String atomicRegistration = between(intake,
+                "synchronized BackendIdentity registerConfigurationListener",
+                "/** Runs an acknowledgement");
+        assertTrue(atomicRegistration.contains(
+                "configurationListeners.addIfAbsent(listener)"));
+        assertTrue(atomicRegistration.indexOf(
+                "configurationListeners.addIfAbsent(listener)")
+                < atomicRegistration.indexOf("return backendIdentity()"));
+        assertTrue(repository.contains(
+                ".registerConfigurationListener(configurationListener)"));
+        assertFalse(repository.contains(
+                "addConfigurationListener(configurationListener)"));
+        assertTrue(intake.contains(
+                "public synchronized boolean configure"));
+        assertTrue(repository.contains("client(identity)"));
+        assertFalse(repository.contains(
+                "new ForecastApiClient(intakeRepository.backendUrl()"));
         assertTrue(repository.contains("Natives.forecastReadings"));
         assertTrue(repository.contains("Natives.setForecast"));
         assertTrue(repository.contains(
@@ -685,21 +929,23 @@ public class ForecastAndroidContractTest {
         assertTrue(nativeBridge.contains(
                 "setForecastActivitiesRangedSampled)(JNIEnv*"));
         assertTrue(repository.contains("HISTORY_CURSOR_PREFIX"));
-        assertTrue(repository.contains("historyCursor(generation)"));
+        assertTrue(repository.contains("historyCursor(generation, identity)"));
         assertTrue(repository.contains("storeHistoryCursor(generation"));
         assertTrue(repository.contains("MessageDigest.getInstance(\"SHA-256\")"));
         assertTrue(repository.contains("remote.readingCount == 0L"));
         assertTrue(repository.contains("initialRemote.serverInstanceId"));
         assertTrue(repository.contains("SERVER_INSTANCE_PREFIX"));
-        assertTrue(repository.contains("clearHistoryCursor(generation)"));
+        assertTrue(repository.contains(
+                "clearHistoryCursor(generation, identity)"));
         String emptyNative = between(repository,
                 "if (raw == null || raw.length < 3)", "long cutoffMs");
         assertFalse(emptyNative.contains("storeHistoryCursor"));
         assertFalse(emptyNative.contains("uploadReadings"));
-        String liveSync = between(repository, "void recordLiveReading",
+        String liveSync = between(repository, "LiveUpload recordLiveReading",
                 "private void refresh");
         assertFalse(liveSync.contains("storeHistoryCursor"));
-        assertTrue(liveSync.contains("exactNativeReading(measuredAtMs)"));
+        assertTrue(liveSync.contains("nearestNativeReading(measuredAtMs)"));
+        assertTrue(liveSync.contains("LIVE_NATIVE_MATCH_TOLERANCE_MS"));
         assertFalse(liveSync.contains("ForecastReading.live"));
         assertTrue(liveSync.contains("activeSensorCount() > 1"));
         assertTrue(liveSync.contains(
@@ -715,20 +961,92 @@ public class ForecastAndroidContractTest {
         assertFalse(preview.contains("uploadReadings"));
         assertFalse(preview.contains("ForecastReading."));
         assertTrue(applic.contains("ForecastRepository.enqueueLiveReading(app"));
-        assertTrue(repository.contains("LIVE_ENTRY_EXECUTOR.execute"));
-        assertTrue(repository.contains("LIVE_PENDING_MS.getAndSet(0L)"));
-        assertTrue(repository.contains("LIVE_DRAIN_SCHEDULED.compareAndSet"));
         assertTrue(repository.contains(
-                "wakeLock.acquire(LIVE_WAKE_LOCK_TIMEOUT_MS)"));
+                "ScheduledExecutorService LIVE_ENTRY_EXECUTOR"));
+        assertTrue(repository.contains("LIVE_ENTRY_EXECUTOR.schedule"));
+        assertTrue(repository.contains("LIVE_PENDING_TIMESTAMP_MS"));
+        assertTrue(repository.contains("restoreLivePending()"));
+        assertFalse(repository.contains("LIVE_PENDING_MS.getAndSet"));
+        assertTrue(repository.contains("wakeLock.acquire(timeoutMs)"));
+        assertTrue(repository.contains(
+                "LIVE_HANDOFF_WAKE_LOCK_TIMEOUT_MS = 10_000L"));
         assertFalse(liveSync.contains("executor.execute"));
         assertFalse(liveSync.contains("operationSequence"));
         assertFalse(liveSync.contains("LIVE_HIGH_WATER_MS"));
 
+        String missingNative = between(liveSync,
+                "ForecastReading reading = nearestNativeReading",
+                "if (generation != configurationGeneration)");
+        assertTrue(missingNative.contains("if (reading == null)"));
+        assertTrue(missingNative.contains("return null"));
+        String uploadAttempt = between(liveSync,
+                "api.uploadReadings(Collections.singletonList(reading))",
+                "return new LiveUpload");
+        assertTrue(uploadAttempt.contains("catch (Exception error)"));
+        assertTrue(uploadAttempt.contains("return null"));
+        assertTrue(liveSync.contains("return new LiveUpload"));
+        String livePostOnly = between(liveSync,
+                "LiveUpload recordLiveReading",
+                "private void scheduleLiveForecastFetch");
+        assertFalse(livePostOnly.contains("fetchAndPublish"));
+        String deferredForecast = between(repository,
+                "private void scheduleLiveForecastFetch",
+                "private static ForecastReading nearestNativeReading");
+        assertTrue(deferredForecast.contains(
+                "liveForecastExecutor.execute"));
+        assertTrue(deferredForecast.contains("fetchAndPublish"));
+
         String drain = between(repository,
-                "private static void drainLiveReadings", "State snapshot()");
+                "private static long drainLiveReadings",
+                "private static long nextLiveRetryDelayMs");
         assertFalse(drain.contains("while ("));
-        assertEquals(1, occurrences(drain,
-                "LIVE_PENDING_MS.getAndSet(0L)"));
+        assertTrue(drain.contains("persistLivePending(measuredAtMs)"));
+        assertTrue(drain.indexOf("persistLivePending(measuredAtMs)")
+                < drain.indexOf("recordLiveReading(measuredAtMs"));
+        assertTrue(drain.contains(
+                "if (uploaded == null) return nextLiveRetryDelayMs()"));
+        assertTrue(drain.contains(
+                "LIVE_PENDING_MS.compareAndSet(measuredAtMs, 0L)"));
+        assertTrue(drain.indexOf("recordLiveReading(measuredAtMs")
+                < drain.indexOf(
+                        "LIVE_PENDING_MS.compareAndSet(measuredAtMs, 0L)"));
+        assertTrue(drain.indexOf("if (uploaded == null)")
+                < drain.indexOf("clearPersistedLivePending(measuredAtMs)"));
+        assertTrue(drain.contains("runIfCurrentBackend(identity"));
+        assertTrue(drain.indexOf("runIfCurrentBackend(identity")
+                < drain.indexOf("clearPersistedLivePending(measuredAtMs)"));
+        assertTrue(drain.indexOf("clearPersistedLivePending(measuredAtMs)")
+                < drain.indexOf("scheduleLiveForecastFetch(uploaded)"));
+
+        String scheduling = between(repository,
+                "private static void scheduleLiveDrain",
+                "private static PowerManager.WakeLock acquireLiveWakeLock");
+        assertTrue(scheduling.contains("TimeUnit.MILLISECONDS"));
+        assertTrue(scheduling.contains("ForecastLiveHandoff"));
+        assertTrue(scheduling.contains("LIVE_HANDOFF_WAKE_LOCK_TIMEOUT_MS"));
+        assertTrue(scheduling.contains("releaseLiveWakeLock(wakeLock)"));
+        assertTrue(scheduling.contains("retryDelayMs"));
+        String liveFinally = scheduling.substring(
+                scheduling.indexOf("} finally {"));
+        assertTrue(liveFinally.indexOf("synchronized (LIVE_SCHEDULE_LOCK)")
+                < liveFinally.indexOf("liveDrainRunning = false"));
+        assertTrue(liveFinally.indexOf("liveDrainRunning = false")
+                < liveFinally.indexOf("scheduleLiveDrain(application"));
+        assertTrue(liveFinally.indexOf("scheduleLiveDrain(application")
+                < liveFinally.indexOf("releaseLiveWakeLock(wakeLock)"));
+        String persistence = between(repository,
+                "private boolean persistLivePending", "State snapshot()");
+        assertTrue(persistence.contains(".commit()"));
+        assertTrue(persistence.contains(
+                ".remove(LIVE_PENDING_TIMESTAMP_MS).commit()"));
+        String configurationChange = between(repository,
+                "private void onBackendConfigurationChanged",
+                "/** Keeps the deterministic graph preview");
+        assertTrue(configurationChange.contains(
+                "configurationGeneration = identity.generation"));
+        assertTrue(configurationChange.contains("LIVE_PENDING_MS"));
+        assertTrue(configurationChange.contains(
+                "scheduleLiveDrain(application, 0L)"));
 
         assertTrue(repository.contains(
                 "AtomicLong forecastPublicationSequence"));
@@ -736,7 +1054,7 @@ public class ForecastAndroidContractTest {
         assertTrue(repository.contains("lastAcceptedForecastGeneratedAtMs"));
 
         String fetch = between(repository, "private void fetchAndPublish",
-                "private ForecastApiClient client");
+                "private static ForecastApiClient client");
         assertTrue(fetch.indexOf("acceptForecast(")
                 < fetch.indexOf("api.forecastStatus()"));
         String accept = between(repository,
@@ -769,16 +1087,6 @@ public class ForecastAndroidContractTest {
                 < doglucose.indexOf("wakelock.release()"));
         assertFalse(doglucose.contains("uploadReadings"));
         assertFalse(doglucose.contains("currentForecast"));
-    }
-
-    private static int occurrences(String value, String needle) {
-        int count = 0;
-        int offset = 0;
-        while ((offset = value.indexOf(needle, offset)) >= 0) {
-            count++;
-            offset += needle.length();
-        }
-        return count;
     }
 
     private static String between(String value, String start, String end) {
@@ -819,8 +1127,23 @@ public class ForecastAndroidContractTest {
         return new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
     }
 
+    private static String variantSource(String variant, String name)
+            throws Exception {
+        Path path = Paths.get("src", variant, "java", "tk", "glucodata",
+                name);
+        if (!Files.exists(path)) path = Paths.get("Common").resolve(path);
+        return new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
+    }
+
     private static String cppSource(String name) throws Exception {
         Path path = Paths.get("src", "main", "cpp", "curve", name);
+        if (!Files.exists(path)) path = Paths.get("Common").resolve(path);
+        return new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
+    }
+
+    private static String cppPathSource(String directory, String name)
+            throws Exception {
+        Path path = Paths.get("src", "main", "cpp", directory, name);
         if (!Files.exists(path)) path = Paths.get("Common").resolve(path);
         return new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
     }

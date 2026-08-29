@@ -806,7 +806,8 @@ public static native void setHostDeactivated(int pos,boolean val);
 //public static native int getSIindex(long dataptr);
 public static native void siSaveDeviceName(long dataptr,String deviceName);
 public static native String siGetDeviceName(long dataptr);
-public static native long SIprocessData(long dataptr, byte[] bluetoothdata,long mmsec);
+public static native long SIprocessData(long dataptr, byte[] bluetoothdata,
+        long[] persistedTimeMs);
 public static native String getSiBluetoothNum(long dataptr);
 public static native byte[] siAsknewdata(long dataptr);
 public static native String addSIscangetName(String jgegs,int[] indexptr);
@@ -951,7 +952,8 @@ public static native String sensorptr2str(long sensorptr);
 public static native void watchBluetooth(String name,boolean sensor,boolean watch);
 public static native long getnumlasttime( );
 public static native byte[] accuAskValues(long dataptr);
-public static native long accuProcessData(long dataptr,byte[] value,long mmsec);
+public static native long accuProcessData(long dataptr, byte[] value,
+        long[] persistedTimeMs);
 public static native void accuSetStartTime(long dataptr,byte[] value);
 public static native void updateUsedSensors();
 public static native byte[] careSenseTimeCMD();

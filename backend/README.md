@@ -184,11 +184,25 @@ gateways should additionally rate-limit failed session exchanges.
   CGM graph);
 - `event_limit`: 1-500, default 100.
 
+`GET /v1/viewer/stream` is the same-origin live channel. It uses Server-Sent
+Events with the same viewer cookie/public authorization as the snapshot, sends
+an initial `ready` event, a `glucose` event immediately after every durable CGM
+mutation, and a `heartbeat` every 15 seconds. Every payload contains
+`stream_id`, the monotonic `revision`, and `server_time_ms`; glucose events also
+contain `latest_reading_at_ms`. The stream never carries source reading IDs,
+sensor identity, glucose values, credentials, or forecast details. The browser
+uses it as an invalidation signal and reconciles through the bounded snapshot.
+Subscriber queues retain only the newest revision, so a suspended client cannot
+create an unbounded backlog. Browser session streams close at signed-cookie
+expiry and reconnect authentication is checked normally.
+
 The response has stable, explicit fields:
 
 ```json
 {
   "api_version": "v1",
+  "stream_id": "7a9f6ed8-73e6-47dd-9427-a07dbe75fdad",
+  "glucose_revision": 42,
   "server_time_ms": 1787212800000,
   "from_ms": 1787126400000,
   "to_ms": 1787212800000,
@@ -274,6 +288,15 @@ snapshot rather than treating page cursors as change cursors. The service
 worker caches only the application shell, never `/v1/*` responses. Android
 incremental synchronization continues to use
 `GET /v1/intakes?after_sync_version=...` unchanged.
+
+`glucose_revision` is a durable change watermark, unlike the browsing cursors.
+The snapshot reads it before querying glucose rows, so a concurrent commit can
+only make the watermark conservatively older than the returned data, never newer.
+`stream_id` is process-local; a changed value after restart tells the PWA to
+replace rather than merge its in-memory snapshot. SSE is intentionally
+process-local because the production SQLite deployment has one replica and one
+Uvicorn worker. A future multi-replica database deployment must replace the hub
+with a shared pub/sub transport.
 
 ### Health
 

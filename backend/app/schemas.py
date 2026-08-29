@@ -1029,6 +1029,8 @@ class ViewerSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     api_version: Literal["v1"] = "v1"
+    stream_id: str = Field(min_length=1, max_length=64)
+    glucose_revision: int = Field(ge=0)
     server_time_ms: int = Field(gt=0)
     from_ms: int = Field(ge=0)
     to_ms: int = Field(gt=0)

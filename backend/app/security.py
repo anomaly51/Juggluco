@@ -20,6 +20,7 @@ PUBLIC_VIEWER_PATHS = frozenset(
     {
         "/v1/viewer/snapshot",
         "/v1/viewer/glucose",
+        "/v1/viewer/stream",
     }
 )
 

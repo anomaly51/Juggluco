@@ -1,5 +1,5 @@
-import { mmol, relativeAge, trend } from '../format'
-import { effectiveServerNow, forecastIsCurrent } from '../freshness'
+import { dateTime, mmol, relativeAge, trend } from '../format'
+import { forecastIsCurrentAt } from '../freshness'
 import type { RangeHours, ViewerSnapshot } from '../types'
 import { GlucoseChart } from './GlucoseChart'
 import { Icon } from './Icon'
@@ -7,6 +7,7 @@ import { Icon } from './Icon'
 interface DashboardProps {
   snapshot: ViewerSnapshot
   savedAt: number | null
+  serverNowMs: number
   range: RangeHours
   onRangeChange: (range: RangeHours) => void
 }
@@ -17,15 +18,14 @@ function glucoseState(value: number, low: number, high: number) {
   return { label: 'В цели', tone: 'target' }
 }
 
-export function DashboardView({ snapshot, savedAt, range, onRangeChange }: DashboardProps) {
+export function DashboardView({ snapshot, savedAt, serverNowMs, range, onRangeChange }: DashboardProps) {
   const current = snapshot.currentGlucose ?? snapshot.glucoseHistory.at(-1) ?? null
-  const effectiveNow = effectiveServerNow(snapshot, savedAt)
   const readingTrend = current ? trend(current) : null
   const state = current
     ? glucoseState(current.glucoseMgDl, snapshot.targetRange.lowMgDl, snapshot.targetRange.highMgDl)
     : null
   const forecastPoint = snapshot.forecast.points.at(-1)
-  const currentForecast = forecastIsCurrent(snapshot, savedAt)
+  const currentForecast = forecastIsCurrentAt(snapshot, serverNowMs)
   const forecastStart = snapshot.forecast.points.at(0)?.medianMgDl ?? current?.glucoseMgDl ?? null
   const forecastDelta = forecastPoint && forecastStart != null
     ? forecastPoint.medianMgDl - forecastStart
@@ -42,6 +42,11 @@ export function DashboardView({ snapshot, savedAt, range, onRangeChange }: Dashb
       <div className="dashboard-glance-row">
         <section className={`glucose-glance ${state?.tone ?? 'empty'}`} aria-labelledby="current-heading">
           <h2 id="current-heading" className="sr-only">Текущий сахар</h2>
+          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {current
+              ? `Новое показание сахара: ${mmol(current.glucoseMgDl)} миллимоль на литр, ${readingTrend!.label}, измерено ${dateTime(current.measuredAtMs)}`
+              : 'Новых показаний сахара нет'}
+          </span>
           {current ? (
             <>
               <div className="glucose-glance-value">
@@ -51,7 +56,9 @@ export function DashboardView({ snapshot, savedAt, range, onRangeChange }: Dashb
               </div>
               <div className="glucose-glance-meta">
                 <span className={`state-pill ${state!.tone}`}>{state!.label}</span>
-                <span>{relativeAge(current.measuredAtMs, effectiveNow)}</span>
+                <time dateTime={new Date(current.measuredAtMs).toISOString()} title={dateTime(current.measuredAtMs)}>
+                  {relativeAge(current.measuredAtMs, serverNowMs)}
+                </time>
               </div>
             </>
           ) : (
@@ -75,7 +82,7 @@ export function DashboardView({ snapshot, savedAt, range, onRangeChange }: Dashb
       </div>
 
       <div className="dashboard-chart-stage">
-        <GlucoseChart snapshot={snapshot} savedAt={savedAt} range={range} onRangeChange={onRangeChange} />
+        <GlucoseChart snapshot={snapshot} savedAt={savedAt} serverNowMs={serverNowMs} range={range} onRangeChange={onRangeChange} />
       </div>
     </div>
   )

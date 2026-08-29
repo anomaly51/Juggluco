@@ -105,6 +105,7 @@ from .openrouter import (
     OpenRouterMealChatAnalyzer,
 )
 from .pwa import mount_viewer_pwa
+from .realtime import GlucoseUpdateHub
 from .request_limits import ViewerSessionBodyLimitMiddleware
 from .schemas import (
     AnalysisResponse,
@@ -2480,10 +2481,16 @@ def create_app(
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     database = Database(settings.database_path)
+    glucose_updates = GlucoseUpdateHub()
     analyzer = analyzer or OpenRouterMealAnalyzer(settings)
     chat_analyzer = chat_analyzer or OpenRouterMealChatAnalyzer(settings)
     transcriber = transcriber or analyzer
     forecast_service = forecast_service or ForecastService()
+    configure_glucose_listener = getattr(
+        forecast_service, "set_glucose_commit_listener", None
+    )
+    if callable(configure_glucose_listener):
+        configure_glucose_listener(glucose_updates.publish_threadsafe)
     intake_chat_analyzer = intake_chat_analyzer or OpenRouterIntakeChatAnalyzer(
         settings
     )
@@ -2491,7 +2498,9 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         database.create_all()
+        glucose_updates.start()
         yield
+        await glucose_updates.close()
         await application.state.analyzer.aclose()
         if application.state.chat_analyzer is not application.state.analyzer:
             await application.state.chat_analyzer.aclose()
@@ -2524,6 +2533,7 @@ def create_app(
     # cursors without requiring a user-visible viewer credential.
     application.state.viewer_public_cursor_key = secrets.token_bytes(32)
     application.state.database = database
+    application.state.glucose_updates = glucose_updates
     application.state.analyzer = analyzer
     application.state.chat_analyzer = chat_analyzer
     application.state.transcriber = transcriber
@@ -2563,7 +2573,12 @@ def create_app(
             )
         else:
             response = await call_next(request)
-        if request.url.path.startswith("/v1/viewer/"):
+        if request.url.path == "/v1/viewer/stream":
+            # Prevent reverse proxies from buffering or transforming the live
+            # event stream while retaining the viewer's private no-store rule.
+            response.headers["Cache-Control"] = "no-store, no-transform, private"
+            response.headers["Vary"] = "Authorization, Cookie"
+        elif request.url.path.startswith("/v1/viewer/"):
             # Viewer responses contain health data and may traverse a remote
             # reverse proxy.  Explicitly forbid both shared and private caches
             # and keep credential-dependent representations separated.

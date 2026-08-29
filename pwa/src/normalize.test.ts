@@ -7,6 +7,7 @@ describe('normalizeSnapshot', () => {
     const result = normalizeSnapshot(rawSnapshot)
 
     expect(result.targetRange).toEqual({ lowMgDl: 75.6, highMgDl: 162, lowMmolL: 4.2, highMmolL: 9 })
+    expect(result).toMatchObject({ streamId: 'test-stream', glucoseRevision: 1 })
     expect(result.glucoseHistory.map((item) => item.readingId)).toEqual(['old', 'new'])
     expect(result.forecast.points.map((item) => item.atMs)).toEqual([2_100_000, 2_400_000])
     expect(result.intakeEvents.map((item) => item.kind)).toEqual(['meal', 'rapid'])
@@ -14,6 +15,11 @@ describe('normalizeSnapshot', () => {
       { occurredAtMs: 750_000, insulinUnits: 12, insulinType: 'long', insulinName: 'Tresiba' },
       { occurredAtMs: 1_200_000, insulinUnits: 5, insulinType: 'rapid', insulinName: 'NovoRapid' },
     ])
+  })
+
+  it('keeps a pre-stream offline snapshot renderable but uncaught-up', () => {
+    const result = normalizeSnapshot({ ...rawSnapshot, stream_id: undefined, glucose_revision: undefined })
+    expect(result).toMatchObject({ streamId: null, glucoseRevision: 0 })
   })
 
   it('treats an explicit empty insulin list as authoritative', () => {

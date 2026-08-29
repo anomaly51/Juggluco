@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { relativeAge } from './format'
-import { effectiveServerNow } from './freshness'
+import { readingIsStaleAt } from './freshness'
 import { useInstall } from './hooks/useInstall'
 import { usePwaUpdate } from './hooks/usePwaUpdate'
 import { useTheme } from './hooks/useTheme'
@@ -37,13 +37,7 @@ export default function App() {
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const publicViewer = viewer.accessMode === 'public'
 
-  const stale = useMemo(() => {
-    if (!viewer.snapshot) return false
-    const current = viewer.snapshot.currentGlucose ?? viewer.snapshot.glucoseHistory.at(-1)
-    if (!current) return true
-    const effectiveNow = effectiveServerNow(viewer.snapshot, viewer.savedAt)
-    return current.isStale === true || effectiveNow - current.measuredAtMs > 15 * 60_000
-  }, [viewer.snapshot, viewer.savedAt])
+  const stale = viewer.snapshot ? readingIsStaleAt(viewer.snapshot, viewer.serverNowMs) : false
 
   const openPanel = (nextPanel: AppPanel, trigger: HTMLElement) => {
     returnFocusRef.current = trigger
@@ -145,11 +139,8 @@ export default function App() {
           </div>
           <div className="header-controls">
             <DataStatus
-              state={viewer.syncState}
+              state={viewer.connectionState}
               stale={stale}
-              savedAt={viewer.savedAt}
-              refreshing={viewer.refreshing}
-              onRefresh={() => void viewer.refresh()}
             />
             {!publicViewer && (
               <button
@@ -206,6 +197,7 @@ export default function App() {
         <DashboardView
           snapshot={snapshot}
           savedAt={viewer.savedAt}
+          serverNowMs={viewer.serverNowMs}
           range={range}
           onRangeChange={setRange}
         />

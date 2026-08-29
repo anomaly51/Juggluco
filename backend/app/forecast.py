@@ -8,7 +8,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass, replace
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 from uuid import UUID, uuid4
 
 import numpy as np
@@ -205,6 +205,17 @@ class _EffectiveActionEstimate:
     overlap_count: int
     contribution_values: np.ndarray | None = None
     activity_values: np.ndarray | None = None
+
+
+def glucose_source_revision(session: Session) -> int:
+    """Return the durable monotonic revision for viewer reconciliation."""
+
+    value = session.scalar(
+        select(cast(BackendMetadataRecord.value_text, Integer)).where(
+            BackendMetadataRecord.key == GLUCOSE_SOURCE_REVISION_METADATA_KEY
+        )
+    )
+    return int(value or 0)
 
 
 def _now_ms() -> int:
@@ -3248,8 +3259,18 @@ def _fit_contextual_network(
 
 
 class ForecastService:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        glucose_commit_listener: Callable[[int, int | None], None] | None = None,
+    ) -> None:
         self._training_lock = threading.Lock()
+        self._glucose_commit_listener = glucose_commit_listener
+
+    def set_glucose_commit_listener(
+        self,
+        listener: Callable[[int, int | None], None] | None,
+    ) -> None:
+        self._glucose_commit_listener = listener
 
     @staticmethod
     def _stored_static_model_is_valid(
@@ -3667,6 +3688,8 @@ class ForecastService:
         context_updated = 0
         source_mutated = False
         corrected_ids: list[str] = []
+        committed_revision: int | None = None
+        latest_at: int | None = None
         now = _now_ms()
         unique_payload: dict[str, Any] = {}
         for reading in payload.readings:
@@ -3770,12 +3793,31 @@ class ForecastService:
                         ForecastScoreRecord.reading_id.in_(corrected_ids)
                     )
                 )
+            if source_mutated:
+                # ``autoflush`` is deliberately disabled for this database.
+                # Flush before reading the watermark/latest row, then notify
+                # listeners only after the transaction is durably committed.
+                session.flush()
+                committed_revision = glucose_source_revision(session)
+                latest_at = session.scalar(
+                    select(func.max(GlucoseReadingRecord.measured_at_ms))
+                )
             session.commit()
         except IntegrityError as error:
             session.rollback()
             raise ValueError("a reading identity conflicted during ingestion") from error
 
-        latest_at = session.scalar(select(func.max(GlucoseReadingRecord.measured_at_ms)))
+        if committed_revision is not None and self._glucose_commit_listener is not None:
+            try:
+                self._glucose_commit_listener(committed_revision, latest_at)
+            except Exception:
+                # A disconnected viewer can never make the authoritative phone
+                # ingestion fail after its SQLite transaction has committed.
+                logger.exception("could not publish durable glucose update")
+        if latest_at is None:
+            latest_at = session.scalar(
+                select(func.max(GlucoseReadingRecord.measured_at_ms))
+            )
         if inserted or updated or context_updated:
             try:
                 self.score_available(session)

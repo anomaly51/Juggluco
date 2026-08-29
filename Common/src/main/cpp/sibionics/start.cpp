@@ -469,11 +469,15 @@ SiContext::~SiContext() {
     };
 
 
-extern "C" JNIEXPORT jlong JNICALL   fromjava(SIprocessData)(JNIEnv *envin, jclass cl,jlong dataptr, jbyteArray bluetoothdata,jlong mmsec) {
-if(!dataptr) {
+extern "C" JNIEXPORT jlong JNICALL fromjava(SIprocessData)(JNIEnv *envin,
+        jclass cl,jlong dataptr,jbyteArray bluetoothdata,
+        jlongArray persistedTimeMs) {
+if(!dataptr||!persistedTimeMs||envin->GetArrayLength(persistedTimeMs)<1) {
    LOGAR("SIprocessData dataptr==null");
    return 0LL;
     }
+ jlong mmsec=0;
+ envin->GetLongArrayRegion(persistedTimeMs,0,1,&mmsec);
  sistream *sdata=reinterpret_cast<sistream *>(dataptr);
 
   SensorGlucoseData *sens=sdata->hist;
@@ -500,7 +504,14 @@ if(!dataptr) {
        }
    else   
    {
-         const jlong res= sdata->sicontext.processData(sens,timsec,bluedata->data(),bluedata->size(),sdata->sensorindex);
+         uint32_t persistedTime=0;
+         const jlong res=sdata->sicontext.processData(sens,timsec,
+                 bluedata->data(),bluedata->size(),sdata->sensorindex,
+                 &persistedTime);
+         if(persistedTime) {
+             const jlong output=static_cast<jlong>(persistedTime)*1000LL;
+             envin->SetLongArrayRegion(persistedTimeMs,0,1,&output);
+             }
          LOGGER("processData=%lld\n",res);
          return res;
      }

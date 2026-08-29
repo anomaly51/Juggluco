@@ -299,7 +299,8 @@ private void  sendtime() {
 
 private void   processchanged(byte[] value) {
    long timmsec=System.currentTimeMillis();
-  long res=Natives.SIprocessData(dataptr, value,timmsec);
+  long[] persistedTimeMs={timmsec};
+  long res=Natives.SIprocessData(dataptr, value,persistedTimeMs);
   if(res==10L) {
        tryer(()->writeReset());
        Natives.setResetSibionics2(dataptr,false);
@@ -368,7 +369,7 @@ private void   processchanged(byte[] value) {
           askvalues(blue);
       return;
       }
-   handleGlucoseResult(res,timmsec);
+   handleGlucoseResult(res,persistedTimeMs[0]);
    }
 /*
 void testchanged() {

@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -15,7 +16,10 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -27,6 +31,8 @@ final class ForecastRepository {
     private static final String LEGACY_HISTORY_CURSOR_MS = "history_cursor_ms";
     private static final String HISTORY_CURSOR_PREFIX = "history_cursor_ms_";
     private static final String SERVER_INSTANCE_PREFIX = "server_instance_id_";
+    private static final String LIVE_PENDING_TIMESTAMP_MS =
+            "live_pending_timestamp_ms";
     private static final long INITIAL_HISTORY_WINDOW_MS =
             45L * 24L * 60L * 60L * 1000L;
     private static final int HISTORY_BATCH_SIZE = 1_000;
@@ -38,6 +44,11 @@ final class ForecastRepository {
     private static final int MAX_NATIVE_ACTIVITY_SAMPLES_PER_EVENT = 256;
     private static final int MAX_NATIVE_ACTIVITY_TOTAL_SAMPLES = 65_536;
     private static final long LIVE_WAKE_LOCK_TIMEOUT_MS = 120_000L;
+    private static final long LIVE_HANDOFF_WAKE_LOCK_TIMEOUT_MS = 10_000L;
+    private static final long LIVE_RETRY_BASE_MS = 1_000L;
+    private static final long LIVE_RETRY_MAX_MS = 60_000L;
+    private static final long LIVE_NATIVE_MATCH_TOLERANCE_MS = 2_000L;
+    private static final int LIVE_NATIVE_QUERY_SIZE = 8;
 
     interface Listener {
         void onForecastStateChanged(State state);
@@ -141,17 +152,24 @@ final class ForecastRepository {
     }
 
     private static volatile ForecastRepository instance;
-    private static final ExecutorService LIVE_ENTRY_EXECUTOR =
-            Executors.newSingleThreadExecutor();
-    private static final AtomicLong LIVE_HIGH_WATER_MS = new AtomicLong();
+    private static final ScheduledExecutorService LIVE_ENTRY_EXECUTOR =
+            Executors.newSingleThreadScheduledExecutor();
     private static final AtomicLong LIVE_PENDING_MS = new AtomicLong();
-    private static final AtomicBoolean LIVE_DRAIN_SCHEDULED =
-            new AtomicBoolean();
+    private static final AtomicInteger LIVE_RETRY_ATTEMPT =
+            new AtomicInteger();
+    private static final Object LIVE_SCHEDULE_LOCK = new Object();
+    private static ScheduledFuture<?> liveScheduledFuture;
+    private static PowerManager.WakeLock liveScheduledHandoffWakeLock;
+    private static long liveScheduledAtElapsedMs = Long.MAX_VALUE;
+    private static long liveScheduleToken;
+    private static boolean liveDrainRunning;
 
     private final Context application;
     private final SharedPreferences preferences;
     private final IntakeRepository intakeRepository;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService liveForecastExecutor =
+            Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Object predictiveAlertConfigurationLock = new Object();
     private final AtomicLong operationSequence = new AtomicLong();
@@ -176,7 +194,9 @@ final class ForecastRepository {
         preferences = application.getSharedPreferences(PREFS,
                 Context.MODE_PRIVATE);
         intakeRepository = IntakeRepository.get(application);
-        intakeRepository.addConfigurationListener(configurationListener);
+        configurationGeneration = intakeRepository
+                .registerConfigurationListener(configurationListener)
+                .generation;
     }
 
     static ForecastRepository get(Context context) {
@@ -187,6 +207,7 @@ final class ForecastRepository {
                 if (current == null) {
                     current = new ForecastRepository(context);
                     instance = current;
+                    current.restoreLivePending();
                 }
             }
         }
@@ -199,48 +220,177 @@ final class ForecastRepository {
      * behind thousands of older samples.
      */
     static void enqueueLiveReading(Context context, long measuredAtMs) {
+        measuredAtMs = canonicalReadingTimestamp(measuredAtMs);
         if (context == null || Applic.isWearable || measuredAtMs <= 0L) return;
         Context application = context.getApplicationContext();
         long previous;
         do {
-            previous = LIVE_HIGH_WATER_MS.get();
-            if (measuredAtMs <= previous) return;
-        } while (!LIVE_HIGH_WATER_MS.compareAndSet(previous, measuredAtMs));
-        long pending;
-        do {
-            pending = LIVE_PENDING_MS.get();
-            if (measuredAtMs <= pending) break;
-        } while (!LIVE_PENDING_MS.compareAndSet(pending, measuredAtMs));
-        scheduleLiveDrain(application);
+            previous = LIVE_PENDING_MS.get();
+            if (measuredAtMs <= previous) break;
+        } while (!LIVE_PENDING_MS.compareAndSet(previous, measuredAtMs));
+        if (measuredAtMs > previous) {
+            // apply() updates the in-process preference immediately and moves
+            // the disk write off the sensor callback. The drain synchronously
+            // confirms the same value off-thread before doing network I/O, so
+            // a process restart can recover it without ever storing a bearer
+            // token or glucose body.
+            application.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit().putLong(LIVE_PENDING_TIMESTAMP_MS, measuredAtMs)
+                    .apply();
+            LIVE_RETRY_ATTEMPT.set(0);
+        }
+        // A repeated callback for the same timestamp is also allowed to pull a
+        // delayed retry forward. Idempotent cgm-{timestamp} identities make the
+        // duplicate attempt harmless.
+        scheduleLiveDrain(application, 0L);
     }
 
-    private static void scheduleLiveDrain(Context application) {
-        if (!LIVE_DRAIN_SCHEDULED.compareAndSet(false, true)) return;
-        // Acquire before returning to doglucose(), while its sensor wake lock
-        // is still held. Acquiring only inside the executor leaves a small but
-        // real suspend gap between the sensor callback and network work.
-        PowerManager.WakeLock wakeLock = acquireLiveWakeLock(application);
+    /** Pulls a persisted/backed-off delivery forward on network recovery. */
+    static void retryPendingLiveReading(Context context) {
+        if (context == null || Applic.isWearable) return;
         try {
-            LIVE_ENTRY_EXECUTOR.execute(
-                    () -> drainLiveReadings(application, wakeLock));
-        } catch (RuntimeException error) {
+            Context application = context.getApplicationContext();
+            if (LIVE_PENDING_MS.get() <= 0L
+                    && application.getSharedPreferences(PREFS,
+                            Context.MODE_PRIVATE).getLong(
+                                    LIVE_PENDING_TIMESTAMP_MS, 0L) <= 0L) {
+                return;
+            }
+            LIVE_RETRY_ATTEMPT.set(0);
+            ForecastRepository repository = get(application);
+            repository.restoreLivePending();
+            if (LIVE_PENDING_MS.get() > 0L) {
+                scheduleLiveDrain(application, 0L);
+            }
+        } catch (Throwable error) {
+            if (Log.doLog) Log.e("ForecastRepository",
+                    "forecast reconnect retry skipped: "
+                            + error.getClass().getSimpleName());
+        }
+    }
+
+    /** Native stream timestamps have one-second precision on every sensor path. */
+    static long canonicalReadingTimestamp(long measuredAtMs) {
+        return measuredAtMs <= 0L ? 0L : measuredAtMs / 1_000L * 1_000L;
+    }
+
+    /** Deterministic exponential retry capped at one minute. */
+    static long liveRetryDelayMs(int failedAttempts) {
+        int shift = Math.max(0, Math.min(16, failedAttempts));
+        long delay = LIVE_RETRY_BASE_MS << shift;
+        return Math.min(delay, LIVE_RETRY_MAX_MS);
+    }
+
+    private void restoreLivePending() {
+        long stored = preferences.getLong(LIVE_PENDING_TIMESTAMP_MS, 0L);
+        if (stored <= 0L) return;
+        long previous;
+        do {
+            previous = LIVE_PENDING_MS.get();
+            if (stored <= previous) break;
+        } while (!LIVE_PENDING_MS.compareAndSet(previous, stored));
+        scheduleLiveDrain(application, 0L);
+    }
+
+    private static void scheduleLiveDrain(Context application, long delayMs) {
+        long delay = Math.max(0L, delayMs);
+        long now = SystemClock.elapsedRealtime();
+        long due = delay > Long.MAX_VALUE - now ? Long.MAX_VALUE : now + delay;
+        synchronized (LIVE_SCHEDULE_LOCK) {
+            if (liveDrainRunning) return;
+            if (liveScheduledFuture != null && !liveScheduledFuture.isDone()) {
+                if (liveScheduledAtElapsedMs <= due) {
+                    if (delay == 0L
+                            && liveScheduledHandoffWakeLock == null) {
+                        liveScheduledHandoffWakeLock = acquireLiveWakeLock(
+                                application, "Juggluco::ForecastLiveHandoff",
+                                LIVE_HANDOFF_WAKE_LOCK_TIMEOUT_MS);
+                    }
+                    return;
+                }
+                if (!liveScheduledFuture.cancel(false)) {
+                    if (delay == 0L
+                            && liveScheduledHandoffWakeLock == null) {
+                        liveScheduledHandoffWakeLock = acquireLiveWakeLock(
+                                application, "Juggluco::ForecastLiveHandoff",
+                                LIVE_HANDOFF_WAKE_LOCK_TIMEOUT_MS);
+                    }
+                    return;
+                }
+                releaseLiveWakeLock(liveScheduledHandoffWakeLock);
+                liveScheduledHandoffWakeLock = null;
+            }
+            long token = ++liveScheduleToken;
+            liveScheduledAtElapsedMs = due;
+            liveScheduledHandoffWakeLock = delay == 0L
+                    ? acquireLiveWakeLock(application,
+                            "Juggluco::ForecastLiveHandoff",
+                            LIVE_HANDOFF_WAKE_LOCK_TIMEOUT_MS) : null;
+            try {
+                liveScheduledFuture = LIVE_ENTRY_EXECUTOR.schedule(
+                        () -> startLiveDrain(application, token), delay,
+                        TimeUnit.MILLISECONDS);
+            } catch (RuntimeException error) {
+                liveScheduledFuture = null;
+                liveScheduledAtElapsedMs = Long.MAX_VALUE;
+                releaseLiveWakeLock(liveScheduledHandoffWakeLock);
+                liveScheduledHandoffWakeLock = null;
+                if (Log.doLog) Log.e("ForecastRepository",
+                        "forecast live scheduling skipped: "
+                                + error.getClass().getSimpleName());
+            }
+        }
+    }
+
+    private static void startLiveDrain(Context application, long token) {
+        PowerManager.WakeLock handoffWakeLock;
+        synchronized (LIVE_SCHEDULE_LOCK) {
+            if (token != liveScheduleToken) return;
+            liveScheduledFuture = null;
+            liveScheduledAtElapsedMs = Long.MAX_VALUE;
+            handoffWakeLock = liveScheduledHandoffWakeLock;
+            liveScheduledHandoffWakeLock = null;
+            liveDrainRunning = true;
+        }
+        // Every immediate attempt and every delayed retry gets a fresh bounded
+        // wake lock. A backoff never holds a wake lock while it is waiting.
+        PowerManager.WakeLock wakeLock = acquireLiveWakeLock(application,
+                "Juggluco::ForecastLive", LIVE_WAKE_LOCK_TIMEOUT_MS);
+        releaseLiveWakeLock(handoffWakeLock);
+        long retryDelayMs = -1L;
+        try {
+            retryDelayMs = drainLiveReadings(application);
+        } catch (Throwable error) {
+            retryDelayMs = nextLiveRetryDelayMs();
+            if (Log.doLog) Log.e("ForecastRepository",
+                    "forecast live drain skipped: "
+                            + error.getClass().getSimpleName());
+        } finally {
+            // Publish the idle state and, when a callback raced this drain,
+            // acquire/schedule its immediate handoff while the full attempt
+            // wake lock is still held. This closes the last suspend window
+            // without holding a lock during an intentional delayed backoff.
+            synchronized (LIVE_SCHEDULE_LOCK) {
+                liveDrainRunning = false;
+                if (LIVE_PENDING_MS.get() > 0L) {
+                    scheduleLiveDrain(application,
+                            retryDelayMs < 0L ? 0L : retryDelayMs);
+                }
+            }
             releaseLiveWakeLock(wakeLock);
-            LIVE_DRAIN_SCHEDULED.set(false);
-            throw error;
         }
     }
 
     private static PowerManager.WakeLock acquireLiveWakeLock(
-            Context application) {
+            Context application, String tag, long timeoutMs) {
         try {
             PowerManager manager = (PowerManager) application.getSystemService(
                     Context.POWER_SERVICE);
             if (manager == null) return null;
             PowerManager.WakeLock wakeLock = manager.newWakeLock(
-                    PowerManager.PARTIAL_WAKE_LOCK,
-                    "Juggluco::ForecastLive");
+                    PowerManager.PARTIAL_WAKE_LOCK, tag);
             wakeLock.setReferenceCounted(false);
-            wakeLock.acquire(LIVE_WAKE_LOCK_TIMEOUT_MS);
+            wakeLock.acquire(timeoutMs);
             return wakeLock;
         } catch (RuntimeException error) {
             if (Log.doLog) Log.e("ForecastRepository",
@@ -261,26 +411,71 @@ final class ForecastRepository {
         }
     }
 
-    private static void drainLiveReadings(Context application,
-            PowerManager.WakeLock wakeLock) {
-        try {
-            ForecastRepository repository = ForecastRepository.get(application);
-            // Exactly one latest value is handled under this bounded wake
-            // lock. A value arriving during network work is rescheduled below
-            // and receives a fresh timeout of its own.
-            long measuredAtMs = LIVE_PENDING_MS.getAndSet(0L);
-            if (measuredAtMs > 0L) {
-                repository.recordLiveReading(measuredAtMs);
-            }
-        } catch (Throwable error) {
-            if (Log.doLog) Log.e("ForecastRepository",
-                    "forecast live drain skipped: "
-                            + error.getClass().getSimpleName());
-        } finally {
-            releaseLiveWakeLock(wakeLock);
-            LIVE_DRAIN_SCHEDULED.set(false);
-            if (LIVE_PENDING_MS.get() > 0L) scheduleLiveDrain(application);
+    private static long drainLiveReadings(Context application) {
+        ForecastRepository repository = ForecastRepository.get(application);
+        long measuredAtMs = LIVE_PENDING_MS.get();
+        if (measuredAtMs <= 0L) return -1L;
+        IntakeRepository.BackendIdentity identity =
+                repository.intakeRepository.backendIdentity();
+        if (identity.generation != repository.configurationGeneration) {
+            return nextLiveRetryDelayMs();
         }
+        if (!repository.persistLivePending(measuredAtMs)) {
+            return nextLiveRetryDelayMs();
+        }
+        LiveUpload uploaded = repository.recordLiveReading(measuredAtMs,
+                identity);
+        if (uploaded == null) return nextLiveRetryDelayMs();
+
+        final boolean[] retryImmediately = {false};
+        boolean acknowledged = repository.intakeRepository
+                .runIfCurrentBackend(identity, () -> {
+            // configure() holds the same monitor. It cannot change endpoint or
+            // credentials between this identity check and the durable clear.
+            LIVE_RETRY_ATTEMPT.set(0);
+            if (!LIVE_PENDING_MS.compareAndSet(measuredAtMs, 0L)) {
+                repository.persistLivePending(LIVE_PENDING_MS.get());
+                retryImmediately[0] = true;
+                return;
+            }
+            repository.clearPersistedLivePending(measuredAtMs);
+            long racedPending = LIVE_PENDING_MS.get();
+            if (racedPending > 0L) {
+                repository.persistLivePending(racedPending);
+                retryImmediately[0] = true;
+            }
+        });
+        if (!acknowledged) {
+            // The POST belonged to the old immutable identity. Keep the sample
+            // pending so the newly configured backend receives its own copy.
+            LIVE_RETRY_ATTEMPT.set(0);
+            return 0L;
+        }
+        repository.scheduleLiveForecastFetch(uploaded);
+        return retryImmediately[0] ? 0L : -1L;
+    }
+
+    private static long nextLiveRetryDelayMs() {
+        int attempt = LIVE_RETRY_ATTEMPT.getAndUpdate(
+                value -> value >= 30 ? 30 : value + 1);
+        return liveRetryDelayMs(attempt);
+    }
+
+    private boolean persistLivePending(long measuredAtMs) {
+        if (measuredAtMs <= 0L) return false;
+        long stored = preferences.getLong(LIVE_PENDING_TIMESTAMP_MS, 0L);
+        if (stored > measuredAtMs) return true;
+        // commit() is deliberately retained for an equal in-memory value: it
+        // waits behind an enqueue-time apply(), confirming durability before
+        // the POST begins while remaining off the sensor callback.
+        return preferences.edit().putLong(LIVE_PENDING_TIMESTAMP_MS,
+                measuredAtMs).commit();
+    }
+
+    private boolean clearPersistedLivePending(long uploadedAtMs) {
+        long stored = preferences.getLong(LIVE_PENDING_TIMESTAMP_MS, 0L);
+        if (stored > uploadedAtMs) return true;
+        return preferences.edit().remove(LIVE_PENDING_TIMESTAMP_MS).commit();
     }
 
     State snapshot() {
@@ -319,11 +514,28 @@ final class ForecastRepository {
         if (foreground) refresh(false, true);
     }
 
-    /** Called from the sensor callback; all disk/network work remains off-thread. */
-    void recordLiveReading(long measuredAtMs) {
-        if (Applic.isWearable || measuredAtMs <= 0L) return;
-        final long generation = configurationGeneration;
+    private static final class LiveUpload {
+        final ForecastApiClient api;
+        final long generation;
+        final long successVersionAtStart;
+
+        LiveUpload(ForecastApiClient api, long generation,
+                long successVersionAtStart) {
+            this.api = api;
+            this.generation = generation;
+            this.successVersionAtStart = successVersionAtStart;
+        }
+    }
+
+    /** Performs only the time-critical POST on the dedicated live executor. */
+    LiveUpload recordLiveReading(long measuredAtMs,
+            IntakeRepository.BackendIdentity identity) {
+        if (Applic.isWearable || measuredAtMs <= 0L || identity == null) {
+            return null;
+        }
+        final long generation = identity.generation;
         final long successVersionAtStart = forecastPublicationSequence.get();
+        final ForecastApiClient api;
         try {
             // During a sensor handover the native timestamp winner can change
             // from the older sensor to the newer one. Let history publish the
@@ -331,41 +543,64 @@ final class ForecastRepository {
             // same immutable cgm-{timestamp} identity.
             if (activeSensorCount() > 1) {
                 invalidateForUnresolvedReading(generation, measuredAtMs);
-                return;
+                return null;
             }
             // doglucose() can expose a display-calibrated value. The backend
             // identity must instead use the immutable raw sample that history
-            // backfill will send later. If native storage has not committed
-            // this timestamp yet, leave it for the next backfill rather than
-            // uploading a conflicting fallback.
-            ForecastReading reading = exactNativeReading(measuredAtMs);
+            // backfill will send later. If native storage has not committed a
+            // nearby canonical row yet, keep the pending timestamp for a
+            // retry rather than uploading a conflicting fallback.
+            ForecastReading reading = nearestNativeReading(measuredAtMs);
             if (reading == null) {
                 invalidateForUnresolvedReading(generation, measuredAtMs);
-                return;
+                return null;
             }
-            if (generation != configurationGeneration) return;
-            ForecastApiClient api = client();
+            if (generation != configurationGeneration) return null;
+            api = client(identity);
             api.uploadReadings(Collections.singletonList(reading));
-            if (generation != configurationGeneration) return;
-            // Do not abandon this valid response merely because another sample
-            // was enqueued. The lexicographic forecast gate below makes the
-            // eventual publications race-safe, while the next sample remains
-            // coalesced in LIVE_PENDING_MS.
-            fetchAndPublish(api, generation, 0L);
         } catch (Exception error) {
             publishLiveError(generation, successVersionAtStart, error);
+            return null;
+        }
+
+        return new LiveUpload(api, generation, successVersionAtStart);
+    }
+
+    /** Forecast reads are never allowed to hold up ACK or the next live POST. */
+    private void scheduleLiveForecastFetch(LiveUpload uploaded) {
+        if (uploaded == null) return;
+        try {
+            liveForecastExecutor.execute(() -> {
+                if (uploaded.generation != configurationGeneration) return;
+                try {
+                    fetchAndPublish(uploaded.api, uploaded.generation, 0L);
+                } catch (Exception error) {
+                    publishLiveError(uploaded.generation,
+                            uploaded.successVersionAtStart, error);
+                }
+            });
+        } catch (RuntimeException error) {
+            publishLiveError(uploaded.generation,
+                    uploaded.successVersionAtStart, error);
         }
     }
 
-    private static ForecastReading exactNativeReading(long measuredAtMs) {
+    private static ForecastReading nearestNativeReading(long measuredAtMs) {
         final long[] raw;
         try {
-            raw = Natives.forecastReadings(Math.max(0L, measuredAtMs - 1L),
-                    4);
+            // Java captures the callback time immediately before a native
+            // parser that stores time(NULL). Crossing a second boundary in
+            // that JNI call can therefore move the immutable row by one
+            // second. Query a deliberately narrow window and upload the row's
+            // actual native timestamp rather than inventing Java precision.
+            long afterMs = Math.max(0L, measuredAtMs
+                    - LIVE_NATIVE_MATCH_TOLERANCE_MS - 1L);
+            raw = Natives.forecastReadings(afterMs, LIVE_NATIVE_QUERY_SIZE);
         } catch (UnsatisfiedLinkError error) {
             return null;
         }
-        return exactReading(decodeNativeReadings(raw), measuredAtMs);
+        return nearestReading(decodeNativeReadings(raw), measuredAtMs,
+                LIVE_NATIVE_MATCH_TOLERANCE_MS);
     }
 
     /**
@@ -404,18 +639,43 @@ final class ForecastRepository {
         return null;
     }
 
+    /** Finds the immutable native row nearest a pre-JNI callback timestamp. */
+    static ForecastReading nearestReading(List<ForecastReading> readings,
+            long measuredAtMs, long toleranceMs) {
+        if (readings == null || measuredAtMs <= 0L || toleranceMs < 0L) {
+            return null;
+        }
+        ForecastReading nearest = null;
+        long nearestDistance = Long.MAX_VALUE;
+        for (ForecastReading reading : readings) {
+            if (reading == null) continue;
+            long distance = Math.abs(reading.measuredAtMs - measuredAtMs);
+            if (distance > toleranceMs) continue;
+            if (distance < nearestDistance || (distance == nearestDistance
+                    && nearest != null
+                    && reading.measuredAtMs > nearest.measuredAtMs)) {
+                nearest = reading;
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
     private void refresh(boolean backfill, boolean force) {
         long now = System.currentTimeMillis();
         synchronized (this) {
             if (!force && now - lastPassRequestedMs < PASS_THROTTLE_MS) return;
             lastPassRequestedMs = now;
         }
-        final long generation = configurationGeneration;
+        final IntakeRepository.BackendIdentity identity =
+                intakeRepository.backendIdentity();
+        final long generation = identity.generation;
+        if (generation != configurationGeneration) return;
         final long operationId = operationSequence.incrementAndGet();
         final long successVersionAtStart = forecastPublicationSequence.get();
         final ForecastApiClient api;
         try {
-            api = client();
+            api = client(identity);
         } catch (IllegalArgumentException error) {
             publishRefreshError(generation, operationId,
                     successVersionAtStart, error);
@@ -428,7 +688,7 @@ final class ForecastRepository {
                 // History upload always completes. Forecast responses from this
                 // executor and the live executor are ordered by their payload
                 // keys, never by which request happened to start last.
-                if (backfill) uploadNativeHistory(api, generation);
+                if (backfill) uploadNativeHistory(api, generation, identity);
                 if (generation != configurationGeneration) return;
                 fetchAndPublish(api, generation, operationId);
             } catch (Exception error) {
@@ -438,14 +698,14 @@ final class ForecastRepository {
         });
     }
 
-    private void uploadNativeHistory(ForecastApiClient api, long generation)
-            throws Exception {
+    private void uploadNativeHistory(ForecastApiClient api, long generation,
+            IntakeRepository.BackendIdentity identity) throws Exception {
         ForecastModelStatus initialRemote = api.forecastStatus();
         if (generation != configurationGeneration) return;
-        synchronizeServerInstance(generation,
+        synchronizeServerInstance(generation, identity,
                 initialRemote.serverInstanceId);
         if (generation != configurationGeneration) return;
-        long afterMs = historyCursor(generation);
+        long afterMs = historyCursor(generation, identity);
         boolean resetAttempted = false;
         for (int batch = 0; batch < MAX_HISTORY_BATCHES_PER_PASS; batch++) {
             if (generation != configurationGeneration) return;
@@ -467,7 +727,7 @@ final class ForecastRepository {
                     ForecastModelStatus remote = api.forecastStatus();
                     if (generation != configurationGeneration) return;
                     if (remote.readingCount == 0L) {
-                        clearHistoryCursor(generation);
+                        clearHistoryCursor(generation, identity);
                         afterMs = initialHistoryCursor();
                         resetAttempted = true;
                         batch--;
@@ -488,7 +748,7 @@ final class ForecastRepository {
             api.uploadReadings(upload.readings, upload.complete);
             if (generation != configurationGeneration) return;
             afterMs = upload.cursorMs;
-            storeHistoryCursor(generation, afterMs);
+            storeHistoryCursor(generation, identity, afterMs);
             if (upload.complete) return;
         }
     }
@@ -660,14 +920,15 @@ final class ForecastRepository {
                 && candidateGeneratedAtMs >= previousGeneratedAtMs);
     }
 
-    private ForecastApiClient client() {
-        return new ForecastApiClient(intakeRepository.backendUrl(),
-                intakeRepository.backendToken());
+    private static ForecastApiClient client(
+            IntakeRepository.BackendIdentity identity) {
+        return new ForecastApiClient(identity.url, identity.token);
     }
 
-    private long historyCursor(long generation) {
+    private long historyCursor(long generation,
+            IntakeRepository.BackendIdentity identity) {
         if (generation != configurationGeneration) return 0L;
-        String key = historyCursorKey();
+        String key = historyCursorKey(identity);
         if (generation != configurationGeneration) return 0L;
         long stored = preferences.getLong(key, 0L);
         return stored > 0L ? stored : initialHistoryCursor();
@@ -678,32 +939,35 @@ final class ForecastRepository {
                 System.currentTimeMillis() - INITIAL_HISTORY_WINDOW_MS);
     }
 
-    private void storeHistoryCursor(long generation, long value) {
+    private void storeHistoryCursor(long generation,
+            IntakeRepository.BackendIdentity identity, long value) {
         if (generation != configurationGeneration) return;
-        String key = historyCursorKey();
+        String key = historyCursorKey(identity);
         if (generation != configurationGeneration) return;
         preferences.edit().putLong(key,
                 Math.max(0L, value)).apply();
     }
 
-    private void clearHistoryCursor(long generation) {
+    private void clearHistoryCursor(long generation,
+            IntakeRepository.BackendIdentity identity) {
         if (generation != configurationGeneration) return;
-        String key = historyCursorKey();
+        String key = historyCursorKey(identity);
         if (generation != configurationGeneration) return;
         preferences.edit().remove(key).apply();
     }
 
     private void synchronizeServerInstance(long generation,
+            IntakeRepository.BackendIdentity identity,
             String remoteInstanceId) {
         if (generation != configurationGeneration) return;
         String remote = remoteInstanceId == null
                 ? "" : remoteInstanceId.trim();
         if (remote.isEmpty()) return; // Compatibility with an older backend.
-        String key = serverInstanceKey();
+        String key = serverInstanceKey(identity);
         if (generation != configurationGeneration) return;
         String stored = preferences.getString(key, "");
         if (!serverInstanceChanged(stored, remote)) return;
-        clearHistoryCursor(generation);
+        clearHistoryCursor(generation, identity);
         if (generation != configurationGeneration) return;
         preferences.edit().putString(key, remote).apply();
     }
@@ -715,17 +979,19 @@ final class ForecastRepository {
     }
 
     /** A token is never stored in the preference key; only its SHA-256 digest is. */
-    private String historyCursorKey() {
-        return HISTORY_CURSOR_PREFIX + backendPreferenceSuffix();
+    private static String historyCursorKey(
+            IntakeRepository.BackendIdentity identity) {
+        return HISTORY_CURSOR_PREFIX + backendPreferenceSuffix(identity);
     }
 
-    private String serverInstanceKey() {
-        return SERVER_INSTANCE_PREFIX + backendPreferenceSuffix();
+    private static String serverInstanceKey(
+            IntakeRepository.BackendIdentity identity) {
+        return SERVER_INSTANCE_PREFIX + backendPreferenceSuffix(identity);
     }
 
-    private String backendPreferenceSuffix() {
-        String identity = intakeRepository.backendUrl() + "\n"
-                + intakeRepository.backendToken();
+    private static String backendPreferenceSuffix(
+            IntakeRepository.BackendIdentity backend) {
+        String identity = backend.url + "\n" + backend.token;
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(
                     identity.getBytes(StandardCharsets.UTF_8));
@@ -842,8 +1108,10 @@ final class ForecastRepository {
     }
 
     private void onBackendConfigurationChanged() {
+        IntakeRepository.BackendIdentity identity =
+                intakeRepository.backendIdentity();
         synchronized (predictiveAlertConfigurationLock) {
-            configurationGeneration++;
+            configurationGeneration = identity.generation;
             operationSequence.incrementAndGet();
             forecastPublicationSequence.incrementAndGet();
             currentForecastGate.reset();
@@ -861,6 +1129,20 @@ final class ForecastRepository {
         if (!previewProjection) clearNativeForecast();
         for (Listener listener : listeners) {
             listener.onForecastStateChanged(state);
+        }
+        // A request already in flight belongs to the captured old backend and
+        // cannot clear this timestamp after the generation change. Retry it
+        // immediately with the explicitly selected identity.
+        long storedPending = preferences.getLong(
+                LIVE_PENDING_TIMESTAMP_MS, 0L);
+        long previous;
+        do {
+            previous = LIVE_PENDING_MS.get();
+            if (storedPending <= previous) break;
+        } while (!LIVE_PENDING_MS.compareAndSet(previous, storedPending));
+        LIVE_RETRY_ATTEMPT.set(0);
+        if (LIVE_PENDING_MS.get() > 0L) {
+            scheduleLiveDrain(application, 0L);
         }
         if (foreground) refresh(true, true);
     }

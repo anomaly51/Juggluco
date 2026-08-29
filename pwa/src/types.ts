@@ -2,6 +2,7 @@ export type Tab = 'glucose' | 'events' | 'settings'
 export type RangeHours = 3 | 6 | 8 | 12 | 24
 export type ThemeMode = 'system' | 'dark' | 'light'
 export type SyncState = 'loading' | 'fresh' | 'offline' | 'error'
+export type ConnectionState = 'connecting' | 'online' | 'reconnecting' | 'offline'
 export type AuthState = 'checking' | 'authenticated' | 'unauthenticated' | 'offline-cache' | 'logout-pending'
 export type LogoutState = 'idle' | 'deleting' | 'failed'
 export type ViewerAccessMode = 'public' | 'session'
@@ -87,6 +88,8 @@ export interface ViewerInsulinEvent {
 
 export interface ViewerSnapshot {
   apiVersion: 'v1'
+  streamId: string | null
+  glucoseRevision: number
   serverTimeMs: number
   fromMs: number
   toMs: number

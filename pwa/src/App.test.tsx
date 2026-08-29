@@ -30,8 +30,10 @@ function publicViewerState(): ReturnType<typeof useViewer> {
     localDataCleared: false,
     refreshing: false,
     offlineCopyPaused: false,
+    connectionState: 'online',
+    serverNowMs: rawSnapshot.server_time_ms,
     login: vi.fn(async () => undefined),
-    refresh: vi.fn(async () => undefined),
+    refresh: vi.fn(async () => true),
     logoutAndClear: vi.fn(async () => undefined),
     clearOfflineCopy: vi.fn(async () => undefined),
   }
@@ -66,6 +68,8 @@ describe('App public viewer', () => {
     expect(screen.getByTestId('insulin-marker-long')).toHaveAttribute('data-insulin-name', 'Tresiba')
     expect(screen.queryByRole('navigation', { name: 'Основная навигация' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'События' })).not.toBeInTheDocument()
+    expect(screen.getByText('Онлайн')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Обновить данные' })).not.toBeInTheDocument()
 
     const settingsButton = screen.getByRole('button', { name: 'Настройки' })
     await user.click(settingsButton)

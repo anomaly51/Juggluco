@@ -189,6 +189,14 @@ export function normalizeSnapshot(value: unknown): ViewerSnapshot {
 
   return {
     apiVersion: 'v1',
+    // Older offline snapshots predate the live stream watermark. They remain
+    // renderable, but a null stream id forces a network reconciliation before
+    // any streamed revision is considered caught up.
+    streamId: optionalText(pick(source, 'stream_id', 'streamId')),
+    glucoseRevision: (() => {
+      const revision = optionalFinite(pick(source, 'glucose_revision', 'glucoseRevision'))
+      return revision !== null && Number.isSafeInteger(revision) && revision >= 0 ? revision : 0
+    })(),
     serverTimeMs: finite(pick(source, 'server_time_ms', 'serverTimeMs'), 'server_time_ms'),
     fromMs: finite(pick(source, 'from_ms', 'fromMs'), 'from_ms'),
     toMs: finite(pick(source, 'to_ms', 'toMs'), 'to_ms'),

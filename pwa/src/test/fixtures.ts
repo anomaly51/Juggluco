@@ -1,5 +1,7 @@
 export const rawSnapshot = {
   api_version: 'v1',
+  stream_id: 'test-stream',
+  glucose_revision: 1,
   server_time_ms: 1_800_000,
   from_ms: 0,
   to_ms: 1_800_000,
