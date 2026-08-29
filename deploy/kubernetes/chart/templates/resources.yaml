@@ -1,0 +1,190 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: juggluco-data
+  labels:
+    app.kubernetes.io/name: juggluco
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.persistence.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: juggluco
+  labels:
+    app.kubernetes.io/name: juggluco
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: juggluco
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: juggluco
+  labels:
+    app.kubernetes.io/name: juggluco
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ .Values.route.gatewayName }}
+      namespace: {{ .Values.route.gatewayNamespace }}
+      sectionName: {{ .Values.route.gatewaySectionName }}
+  hostnames:
+    - {{ .Values.route.hostname | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: juggluco
+          port: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: juggluco
+  labels:
+    app.kubernetes.io/name: juggluco
+spec:
+  replicas: {{ .Values.replicas }}
+  revisionHistoryLimit: 2
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: juggluco
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: juggluco
+    spec:
+      serviceAccountName: juggluco
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: APP_VERSION
+              value: {{ .Values.image.tag | quote }}
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: JUGGLUCO_DATABASE_PATH
+              value: {{ .Values.config.databasePath | quote }}
+            - name: JUGGLUCO_ALLOWED_HOSTS
+              value: {{ .Values.route.hostname | quote }}
+            - name: JUGGLUCO_VIEWER_PUBLIC
+              value: {{ .Values.config.viewerPublic | quote }}
+            - name: JUGGLUCO_VIEWER_TRUSTED_PROXY_CIDRS
+              value: {{ .Values.config.trustedProxyCidrs | quote }}
+            - name: OPENROUTER_AUDIO_LANGUAGE
+              value: {{ .Values.config.openrouterAudioLanguage | quote }}
+            - name: JUGGLUCO_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: juggluco-env
+                  key: JUGGLUCO_API_TOKEN
+            - name: JUGGLUCO_VIEWER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: juggluco-env
+                  key: JUGGLUCO_VIEWER_TOKEN
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: juggluco-env
+                  key: OPENROUTER_API_KEY
+          ports:
+            - name: http
+              containerPort: 8765
+          startupProbe:
+            httpGet:
+              path: /v1/ready
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ .Values.route.hostname | quote }}
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 40
+          readinessProbe:
+            httpGet:
+              path: /v1/ready
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ .Values.route.hostname | quote }}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ .Values.route.hostname | quote }}
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: juggluco-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 512Mi

@@ -1,32 +1,61 @@
 # Kubernetes deployment
 
-This deployment runs one backend replica and keeps its SQLite database on a
-`ReadWriteOnce` persistent volume. The service is intentionally `ClusterIP`; expose it
-only through an authenticated TLS gateway or a trusted tunnel.
+The production chart in `deploy/kubernetes/chart` runs one FastAPI replica and serves
+the React PWA from the same image. SQLite stores its data on a retained `ReadWriteOnce`
+volume.
 
-The optional workflow template at
-`deploy/github-actions/backend-container.yml` tests the backend and publishes the image
-to `ghcr.io/anomaly51/juggluco-backend:latest`. To activate it, copy it to
-`.github/workflows/backend-container.yml` using Git credentials authorized to update
-GitHub Actions workflows.
+## Delivery flow
 
-The image can also be built and published manually:
+`.github/workflows/backend-container.yml` checks the PWA, backend, and combined image
+on pull requests. A push to `primary` runs the same checks, publishes
+`ghcr.io/anomaly51/juggluco-backend:sha-<commit>`, and tests an anonymous image pull.
 
-```bash
-docker build -f backend/Dockerfile -t ghcr.io/anomaly51/juggluco-backend:latest .
-docker push ghcr.io/anomaly51/juggluco-backend:latest
-```
+After those checks pass, the workflow copies the tested chart to the `deploy` branch,
+writes the immutable tag to `deploy/kubernetes/chart/values.yaml`, and commits the
+promotion. The Argo CD application in `anomaly51/general-1-argocd` tracks that branch
+and syncs it into the `juggluco` namespace. The workflow uses its repository
+`GITHUB_TOKEN` and needs no Actions secrets.
 
-## Install
+GitHub creates a new GHCR package with private visibility. After the first publish,
+set `juggluco-backend` to Public in the package settings and rerun the workflow. The
+anonymous pull check blocks promotion until the cluster can fetch the image.
 
-Generate a distinct backend bearer token and keep it together with the OpenRouter key
-outside Git and shell history. One option is to create a local ignored env file and
-load it into the Kubernetes Secret:
+The copy under `deploy/github-actions/` mirrors the active workflow for forks that
+cannot commit `.github/workflows/` during setup.
+
+## Runtime secrets
+
+The chart asks Vault Secrets Operator for these keys from `kv/apps/juggluco`:
+
+- `JUGGLUCO_API_TOKEN`: Android writer and admin API token, at least 32 characters.
+- `JUGGLUCO_VIEWER_TOKEN`: read-only PWA token, 32 to 512 URL-safe ASCII characters.
+- `OPENROUTER_API_KEY`: server-side audio forecast key.
+
+Create a Kubernetes-auth Vault role named `juggluco` for the
+`juggluco/juggluco` service account and grant it read access to that path. Keep all
+three values out of Git,
+container build arguments, and GitHub Actions. Revoke any OpenRouter key exposed in a
+chat or shell history before adding a replacement to Vault.
+
+## Production URLs
+
+- API: `https://juggluco-general1.api-api-api.com/v1/`
+- Health: `https://juggluco-general1.api-api-api.com/v1/health`
+- Installed PWA: `https://juggluco-general1.api-api-api.com/viewer/`
+
+Set the Android backend URL to `https://juggluco-general1.api-api-api.com` and enter
+the `JUGGLUCO_API_TOKEN` in the app settings. Enter the viewer token only in the PWA.
+
+## Local or standalone cluster
+
+The Kustomize manifests beside this README remain available for a cluster that does
+not use the production Argo CD chart. Do not apply them to General-1; Argo CD owns that
+cluster.
 
 ```bash
 kubectl apply -f deploy/kubernetes/namespace.yaml
 cp backend/.env.example backend/.env
-# Edit backend/.env with newly generated values, then:
+# Edit backend/.env, then create the standalone-cluster Secret.
 kubectl -n juggluco create secret generic juggluco-backend-secrets \
   --from-env-file=backend/.env \
   --dry-run=client -o yaml | kubectl apply -f -
@@ -34,46 +63,17 @@ kubectl apply -k deploy/kubernetes
 kubectl -n juggluco rollout status deployment/juggluco-backend
 ```
 
-`secret.example.yaml` documents the required keys but is not included by
-`kustomization.yaml`, so placeholder or real credentials cannot be deployed by
-accident.
-
-Use two different random credentials: `JUGGLUCO_API_TOKEN` for the Android
-writer/admin API and `JUGGLUCO_VIEWER_TOKEN` for the GET-only installed PWA.
-The viewer token must contain 32–512 URL-safe ASCII characters; the admin token
-must contain at least 32 characters. Never enter the writer/admin token in
-the PWA.
-
-If link-only access is deliberately preferred, set
-`JUGGLUCO_VIEWER_PUBLIC=true` in the Secret and omit the optional
-`JUGGLUCO_VIEWER_TOKEN`. It defaults to `false`. This makes current/historical
-glucose and a sanitized forecast readable by every client that can reach the
-viewer URL; meals, insulin, sensor identity, write, and admin APIs stay private.
-
-For remote PWA access, place the service behind a valid HTTPS gateway or trusted
-tunnel and add its public host name to `JUGGLUCO_ALLOWED_HOSTS` in
-`deployment.yaml`. The included `ClusterIP` service is intentionally not an
-Internet-facing endpoint.
-
-The application rejects non-loopback HTTP for `/viewer/*` and `/v1/viewer/*`.
-If the gateway terminates TLS, set `JUGGLUCO_VIEWER_TRUSTED_PROXY_CIDRS` to the
-gateway's exact source IP/CIDR (never `0.0.0.0/0` or `::/0`), and have the
-gateway overwrite the original `X-Forwarded-Proto` with `https` and rate-limit
-failed `POST /v1/viewer/session` attempts. Requests with that header from any
-unconfigured source remain rejected.
-
-For a private, temporary connection from the same computer:
+`secret.example.yaml` lists the required keys but `kustomization.yaml` excludes it.
+For a private USB test, forward the service and connect the phone to the same port:
 
 ```bash
 kubectl -n juggluco port-forward service/juggluco-backend 8765:8765
+adb reverse tcp:8765 tcp:8765
 ```
-
-The Android backend URL is then `http://127.0.0.1:8765`. For a physical Android device
-connected by USB, also run `adb reverse tcp:8765 tcp:8765`.
 
 ## Data and backups
 
-The database lives at `/data/juggluco.db` on `juggluco-backend-data`. Keep the
-deployment at one replica: SQLite is not a multi-pod database. Back up the PVC or make
-a transactionally consistent SQLite backup before cluster migration. Do not commit a
-database snapshot: it contains health-adjacent records.
+Keep one replica because SQLite cannot coordinate writes from multiple pods. The
+production chart uses node-local storage because SQLite WAL cannot run safely on NFS.
+Back up the PVC or run a transactionally consistent SQLite backup before moving the
+workload. Database snapshots contain health records and must stay outside Git.

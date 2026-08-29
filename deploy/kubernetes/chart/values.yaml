@@ -1,0 +1,37 @@
+replicas: 1
+
+image:
+  repository: ghcr.io/anomaly51/juggluco-backend
+  tag: sha-28438e58475a
+  pullPolicy: IfNotPresent
+
+vault:
+  mount: kv
+  authMount: kubernetes
+  role: juggluco
+  path: apps/juggluco
+  refreshAfter: 1m
+
+route:
+  gatewayName: public
+  gatewayNamespace: networking
+  gatewaySectionName: https
+  hostname: juggluco-general1.api-api-api.com
+
+persistence:
+  storageClassName: local-path
+  size: 2Gi
+
+config:
+  databasePath: /data/juggluco.db
+  viewerPublic: false
+  trustedProxyCidrs: 10.42.0.0/16
+  openrouterAudioLanguage: ru
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
