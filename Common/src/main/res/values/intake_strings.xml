@@ -67,7 +67,7 @@
     <string name="intake_backend_settings_title">Food analysis service</string>
     <string name="intake_backend_settings_summary">Local service for food analysis and intake records</string>
     <string name="intake_backend_url">Service URL</string>
-    <string name="intake_backend_url_hint">http://127.0.0.1:8765</string>
+    <string name="intake_backend_url_hint">https://juggluco-general1.api-api-api.com</string>
     <string name="intake_backend_token">Service access token</string>
     <string name="intake_backend_token_hint">Local service token only</string>
     <string name="intake_backend_test">Test connection</string>

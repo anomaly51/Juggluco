@@ -2,7 +2,7 @@
  * This file is part of Juggluco.
  *
  * The redesigned intake flow deliberately keeps its data contract separate
- * from the legacy NumberView/Numdata editor. The localhost backend is the
+ * from the legacy NumberView/Numdata editor. The configured backend is the
  * source of truth; this class is only the immutable presentation model used by
  * the phone UI and graph overlay.
  */

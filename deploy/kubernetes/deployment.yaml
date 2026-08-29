@@ -17,10 +17,12 @@ spec:
       securityContext:
         fsGroup: 10001
         fsGroupChangePolicy: OnRootMismatch
+      imagePullSecrets:
+        - name: juggluco-registry
       containers:
         - name: backend
-          image: ghcr.io/anomaly51/juggluco-backend:latest
-          imagePullPolicy: Always
+          image: harbor.internal.api-api-api.com/applications/juggluco:sha-186534b8c114
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8765

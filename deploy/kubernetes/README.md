@@ -44,17 +44,20 @@ chat or shell history before adding a replacement to Vault.
 - Health: `https://juggluco-general1.api-api-api.com/v1/health`
 - Installed PWA: `https://juggluco-general1.api-api-api.com/viewer/`
 
-Set the Android backend URL to `https://juggluco-general1.api-api-api.com` and enter
-the `JUGGLUCO_API_TOKEN` in the app settings. Enter the viewer token only in the PWA.
+Fresh Android installs default to `https://juggluco-general1.api-api-api.com`. Enter
+the `JUGGLUCO_API_TOKEN` in the app settings; it is deliberately not compiled into
+the APK. Enter the viewer token only in the PWA.
 
 ## Local or standalone cluster
 
 The Kustomize manifests beside this README remain available for a cluster that does
 not use the production Argo CD chart. Do not apply them to General-1; Argo CD owns that
-cluster.
+cluster. They reference a tested image in the private General-1 Harbor, so create the
+`juggluco-registry` pull secret in the standalone namespace before applying them.
 
 ```bash
 kubectl apply -f deploy/kubernetes/namespace.yaml
+# Provision the juggluco-registry dockerconfigjson Secret from your secret manager.
 cp backend/.env.example backend/.env
 # Edit backend/.env, then create the standalone-cluster Secret.
 kubectl -n juggluco create secret generic juggluco-backend-secrets \

@@ -268,6 +268,22 @@ public class IntakeSeparatedFlowsContractTest {
     }
 
     @Test
+    public void productionBackendIsTheCredentialFreeDefault()
+            throws Exception {
+        String endpoint = "https://juggluco-general1.api-api-api.com";
+        String repository = mainJava("tk/glucodata/IntakeRepository.java");
+        String english = read(commonPath(Paths.get("src", "main", "res",
+                "values", "intake_strings.xml")));
+        String russian = read(commonPath(Paths.get("src", "main", "res",
+                "values-ru", "intake_strings.xml")));
+
+        assertTrue(repository.contains('"' + endpoint + '"'));
+        assertTrue(repository.contains("getString(KEY_TOKEN, \"\")"));
+        assertTrue(english.contains(endpoint));
+        assertTrue(russian.contains(endpoint));
+    }
+
+    @Test
     public void backendSourceContainsNoEmbeddedProviderSecret()
             throws Exception {
         Path root = projectPath(Paths.get("backend", "app"));

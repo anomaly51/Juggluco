@@ -67,7 +67,7 @@
     <string name="intake_backend_settings_title">Сервис анализа еды</string>
     <string name="intake_backend_settings_summary">Локальный сервис анализа еды и хранения событий</string>
     <string name="intake_backend_url">Адрес сервиса</string>
-    <string name="intake_backend_url_hint">http://127.0.0.1:8765</string>
+    <string name="intake_backend_url_hint">https://juggluco-general1.api-api-api.com</string>
     <string name="intake_backend_token">Токен доступа к сервису</string>
     <string name="intake_backend_token_hint">Только локальный токен сервиса</string>
     <string name="intake_backend_test">Проверить соединение</string>

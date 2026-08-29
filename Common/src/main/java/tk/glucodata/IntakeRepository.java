@@ -33,7 +33,8 @@ import java.util.concurrent.Executors;
  * server-confirmed item without creating a duplicate.</p>
  */
 public final class IntakeRepository {
-    public static final String DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
+    public static final String DEFAULT_BACKEND_URL =
+            "https://juggluco-general1.api-api-api.com";
     private static final String PREFS = "intake_backend";
     private static final String KEY_URL = "url";
     private static final String KEY_TOKEN = "token";

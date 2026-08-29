@@ -294,6 +294,41 @@ public class IntakeChatTransportContractTest {
     }
 
     @Test
+    public void freshInstallUsesProductionBackendWithoutACompiledToken()
+            throws Exception {
+        Context context = RuntimeEnvironment.getApplication();
+        resetRepository(context);
+        try {
+            IntakeRepository repository = IntakeRepository.get(context);
+            assertEquals("https://juggluco-general1.api-api-api.com",
+                    repository.backendUrl());
+            assertEquals("", repository.backendToken());
+        } finally {
+            resetRepository(context);
+        }
+    }
+
+    @Test
+    public void explicitlySavedBackendIdentityOverridesTheDefault()
+            throws Exception {
+        Context context = RuntimeEnvironment.getApplication();
+        resetRepository(context);
+        SharedPreferences preferences = context.getSharedPreferences(
+                "intake_backend", Context.MODE_PRIVATE);
+        preferences.edit()
+                .putString("url", "http://127.0.0.1:8765")
+                .putString("token", "local-development-token")
+                .commit();
+        try {
+            IntakeRepository repository = IntakeRepository.get(context);
+            assertEquals("http://127.0.0.1:8765", repository.backendUrl());
+            assertEquals("local-development-token", repository.backendToken());
+        } finally {
+            resetRepository(context);
+        }
+    }
+
+    @Test
     public void backendIdentityChangeWaitsForPendingTurnResolution()
             throws Exception {
         Context context = RuntimeEnvironment.getApplication();

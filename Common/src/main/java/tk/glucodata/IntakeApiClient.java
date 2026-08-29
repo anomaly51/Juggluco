@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** Small dependency-free HTTP client for the user-owned localhost backend. */
+/** Small dependency-free HTTP client for the configured Juggluco backend. */
 final class IntakeApiClient {
     private static final int CONNECT_TIMEOUT_MS = 6_000;
     private static final int REQUEST_TIMEOUT_MS = 20_000;
