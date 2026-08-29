@@ -1,4 +1,4 @@
-name: Backend container CI/CD
+name: Backend container CI
 
 on:
   push:
@@ -13,9 +13,6 @@ concurrency:
 
 permissions:
   contents: read
-
-env:
-  IMAGE_NAME: ghcr.io/anomaly51/juggluco-backend
 
 jobs:
   validate:
@@ -111,133 +108,3 @@ jobs:
               raise RuntimeError("viewer index does not reference a JavaScript asset")
           fetch(asset.group(0))
           PY
-
-  publish-and-deploy:
-    name: Publish image and update GitOps
-    if: >-
-      github.ref == 'refs/heads/primary' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: write
-      packages: write
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-
-      - name: Derive immutable image tag
-        id: image
-        shell: bash
-        run: echo "tag=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-
-      - name: Sign in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and publish combined backend and PWA image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: backend/Dockerfile
-          push: true
-          tags: ${{ env.IMAGE_NAME }}:${{ steps.image.outputs.tag }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha,scope=juggluco-backend
-          cache-to: type=gha,mode=max,scope=juggluco-backend
-
-      - name: Verify the image is publicly pullable
-        env:
-          IMAGE_TAG: ${{ steps.image.outputs.tag }}
-        shell: bash
-        run: |
-          docker logout ghcr.io
-          if ! docker pull "$IMAGE_NAME:$IMAGE_TAG"; then
-            echo "::error::Set the GHCR package visibility to Public, then rerun this workflow"
-            exit 1
-          fi
-
-      - name: Check whether this source commit is current
-        id: current
-        shell: bash
-        run: |
-          git fetch origin primary
-          if [ "$(git rev-parse origin/primary)" = "$GITHUB_SHA" ]; then
-            echo "value=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=false" >> "$GITHUB_OUTPUT"
-            echo "A newer primary commit will publish its own image"
-          fi
-
-      - name: Promote the tested chart to the deployment branch
-        if: steps.current.outputs.value == 'true'
-        shell: bash
-        run: |
-          if git fetch origin deploy; then
-            git switch --force-create deploy FETCH_HEAD
-          else
-            git switch --orphan deploy
-          fi
-          git checkout --no-overlay "$GITHUB_SHA" -- deploy/kubernetes/chart
-
-      - name: Update GitOps image tag
-        if: steps.current.outputs.value == 'true'
-        uses: mikefarah/yq@c14f446382944492701b16c1ddb48bb9dbe683e3 # v4.53.6
-        env:
-          IMAGE_TAG: ${{ steps.image.outputs.tag }}
-        with:
-          cmd: yq --inplace '.image.tag = strenv(IMAGE_TAG)' deploy/kubernetes/chart/values.yaml
-
-      - name: Commit the verified deployment
-        if: steps.current.outputs.value == 'true'
-        env:
-          IMAGE_TAG: ${{ steps.image.outputs.tag }}
-        shell: bash
-        run: |
-          git diff --check
-          git add deploy/kubernetes/chart
-          git diff --cached --check
-          if git diff --cached --quiet -- deploy/kubernetes/chart; then
-            echo "GitOps already points to $IMAGE_TAG"
-            exit 0
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit --message "chore(deploy): $IMAGE_TAG"
-          git push origin HEAD:deploy
-
-      - name: Verify the deployed version over HTTPS
-        if: steps.current.outputs.value == 'true'
-        env:
-          EXPECTED_VERSION: ${{ steps.image.outputs.tag }}
-          DEPLOYMENT_URL: https://juggluco-general1.api-api-api.com
-        shell: bash
-        run: |
-          ready=false
-          for attempt in $(seq 1 60); do
-            health="$(curl --fail --silent "$DEPLOYMENT_URL/v1/ready" 2>/dev/null || true)"
-            if jq --exit-status --arg expected "$EXPECTED_VERSION" \
-              '.status == "ok" and .database == "ok" and .auth_configured and .viewer_auth_configured and .ai_configured and .version == $expected' \
-              <<<"$health" >/dev/null 2>&1; then
-              ready=true
-              break
-            fi
-            sleep 10
-          done
-          test "$ready" = true
-          curl --fail --silent --show-error "$DEPLOYMENT_URL/viewer/" >/dev/null
-          curl --fail --silent --show-error "$DEPLOYMENT_URL/viewer/manifest.webmanifest" >/dev/null
-          curl --fail --silent --show-error "$DEPLOYMENT_URL/viewer/sw.js" >/dev/null

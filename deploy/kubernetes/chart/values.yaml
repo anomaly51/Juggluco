@@ -1,9 +1,13 @@
 replicas: 1
 
 image:
-  repository: ghcr.io/anomaly51/juggluco-backend
+  repository: harbor.internal.api-api-api.com/applications/juggluco
   tag: sha-28438e58475a
   pullPolicy: IfNotPresent
+
+registry:
+  server: harbor.internal.api-api-api.com
+  vaultPath: apps/registry
 
 vault:
   mount: kv

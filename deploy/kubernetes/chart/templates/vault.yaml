@@ -49,3 +49,35 @@ spec:
   rolloutRestartTargets:
     - kind: Deployment
       name: juggluco
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: juggluco-registry
+  labels:
+    app.kubernetes.io/name: juggluco
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+    juggluco.dev/registry: {{ .Values.registry.server | quote }}
+spec:
+  vaultAuthRef: juggluco
+  mount: {{ .Values.vault.mount }}
+  type: kv-v2
+  path: {{ .Values.registry.vaultPath }}
+  refreshAfter: 1h
+  destination:
+    create: true
+    name: juggluco-registry
+    type: kubernetes.io/dockerconfigjson
+    transformation:
+      excludes:
+        - .*
+      templates:
+        .dockerconfigjson:
+          text: |
+            {{ `{{- $registry := get .Annotations "juggluco.dev/registry" -}}` }}
+            {{ `{{- $credentials := dict "username" (get .Secrets "username") "password" (get .Secrets "password") -}}` }}
+            {{ `{{- dict "auths" (dict $registry $credentials) | mustToJson -}}` }}
+  rolloutRestartTargets:
+    - kind: Deployment
+      name: juggluco

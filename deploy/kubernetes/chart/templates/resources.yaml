@@ -80,6 +80,8 @@ spec:
     spec:
       serviceAccountName: juggluco
       automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: juggluco-registry
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:

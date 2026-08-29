@@ -6,21 +6,22 @@ volume.
 
 ## Delivery flow
 
-`.github/workflows/backend-container.yml` checks the PWA, backend, and combined image
-on pull requests. A push to `primary` runs the same checks, publishes
-`ghcr.io/anomaly51/juggluco-backend:sha-<commit>`, and tests an anonymous image pull.
+`.github/workflows/backend-container.yml` checks the PWA, backend, chart, and combined
+image on GitHub-hosted runners. After a successful push check on `primary`,
+`.github/workflows/backend-deploy.yml` runs only on the restricted
+`juggluco-deploy` runner inside Kubernetes. Its local BuildKit publishes
+`harbor.internal.api-api-api.com/applications/juggluco:sha-<commit>` to the private
+Harbor instance in General-1. Pull requests never run on the cluster runner.
 
-After those checks pass, the workflow copies the tested chart to the `deploy` branch,
-writes the immutable tag to `deploy/kubernetes/chart/values.yaml`, and commits the
-promotion. The Argo CD application in `anomaly51/general-1-argocd` tracks that branch
-and syncs it into the `juggluco` namespace. The workflow uses its repository
-`GITHUB_TOKEN` and needs no Actions secrets.
+The deployment workflow copies the tested chart to the `deploy` branch, writes the
+immutable tag to `deploy/kubernetes/chart/values.yaml`, and commits the promotion.
+The Argo CD application in `anomaly51/general-1-argocd` tracks that branch and syncs
+it into the `juggluco` namespace. `GITHUB_TOKEN` writes the deployment branch.
+`HARBOR_USERNAME` and `HARBOR_PASSWORD` hold the scoped Harbor push account. The
+workload gets its registry credential from `kv/apps/registry` through Vault Secrets
+Operator.
 
-GitHub creates a new GHCR package with private visibility. After the first publish,
-set `juggluco-backend` to Public in the package settings and rerun the workflow. The
-anonymous pull check blocks promotion until the cluster can fetch the image.
-
-The copy under `deploy/github-actions/` mirrors the active workflow for forks that
+The copies under `deploy/github-actions/` mirror both active workflows for forks that
 cannot commit `.github/workflows/` during setup.
 
 ## Runtime secrets
@@ -32,8 +33,8 @@ The chart asks Vault Secrets Operator for these keys from `kv/apps/juggluco`:
 - `OPENROUTER_API_KEY`: server-side audio forecast key.
 
 Create a Kubernetes-auth Vault role named `juggluco` for the
-`juggluco/juggluco` service account and grant it read access to that path. Keep all
-three values out of Git,
+`juggluco/juggluco` service account. Grant it read access to `kv/apps/juggluco` and
+`kv/apps/registry`. Keep all three runtime values out of Git,
 container build arguments, and GitHub Actions. Revoke any OpenRouter key exposed in a
 chat or shell history before adding a replacement to Vault.
 
