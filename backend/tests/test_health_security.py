@@ -22,6 +22,43 @@ def test_health_is_public_but_does_not_expose_secrets(client):
     assert response.headers["x-request-id"]
 
 
+def test_readiness_requires_database_auth_viewer_auth_and_ai(client):
+    response = client.get("/v1/ready")
+    assert response.status_code == 503
+    body = response.json()
+    assert body == {
+        "status": "degraded",
+        "api_version": "v1",
+        "version": "dev",
+        "database": "ok",
+        "auth_configured": True,
+        "viewer_auth_configured": False,
+        "ai_configured": False,
+    }
+
+
+def test_readiness_succeeds_with_all_production_dependencies(tmp_path):
+    settings = make_settings(
+        tmp_path,
+        openrouter_api_key="test-openrouter-key",
+        viewer_token="viewer-token-with-at-least-32-characters",
+    )
+    application = create_app(settings, analyzer=FakeAnalyzer())
+    with TestClient(application) as local_client:
+        response = local_client.get("/v1/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "api_version": "v1",
+        "version": "dev",
+        "database": "ok",
+        "auth_configured": True,
+        "viewer_auth_configured": True,
+        "ai_configured": True,
+    }
+
+
 def test_protected_routes_require_the_exact_bearer_token(client):
     missing = client.get("/v1/intakes")
     assert missing.status_code == 401

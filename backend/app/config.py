@@ -92,6 +92,7 @@ class Settings:
     allowed_hosts: tuple[str, ...]
     max_image_bytes: int
     max_audio_bytes: int
+    app_version: str = "dev"
     openrouter_audio_language: str | None = None
     openrouter_meal_chat_model: str = "qwen/qwen3-vl-8b-instruct"
     meal_chat_max_photos: int = 24
@@ -203,6 +204,7 @@ class Settings:
             max_audio_bytes=_positive_int(
                 "JUGGLUCO_MAX_AUDIO_BYTES", 15 * 1024 * 1024
             ),
+            app_version=os.getenv("APP_VERSION", "dev"),
             openrouter_audio_language=os.getenv(
                 "OPENROUTER_AUDIO_LANGUAGE"
             ),

@@ -22,6 +22,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
     status,
 )
@@ -920,6 +921,8 @@ def _store_intake(
     payload: IntakeCreate,
     session: Session,
     originating_chat_session_id: str | None = None,
+    *,
+    commit_transaction: bool = True,
 ) -> IntakeEvent:
     reserved_chat = session.scalar(
         select(MealChatSessionRecord).where(
@@ -1002,7 +1005,8 @@ def _store_intake(
         session.add(change)
         session.flush()
         record.sync_version = change.id
-        session.commit()
+        if commit_transaction:
+            session.commit()
     except IntegrityError as error:
         session.rollback()
         raced = session.scalar(
@@ -2610,6 +2614,33 @@ def create_app(
         return HealthResponse(
             status="ok" if ready else "degraded",
             api_version="v1",
+            version=current_settings.app_version,
+            database=database_state,
+            auth_configured=current_settings.auth_configured,
+            viewer_auth_configured=current_settings.viewer_auth_configured,
+            ai_configured=current_settings.openrouter_configured,
+        )
+
+    @application.get(
+        "/v1/ready",
+        response_model=HealthResponse,
+        responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"model": HealthResponse}},
+    )
+    def readiness(request: Request, response: Response) -> HealthResponse:
+        current_settings: Settings = request.app.state.settings
+        database_state = "ok" if request.app.state.database.ping() else "error"
+        ready = (
+            database_state == "ok"
+            and current_settings.auth_configured
+            and current_settings.viewer_auth_configured
+            and current_settings.openrouter_configured
+        )
+        if not ready:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return HealthResponse(
+            status="ok" if ready else "degraded",
+            api_version="v1",
+            version=current_settings.app_version,
             database=database_state,
             auth_configured=current_settings.auth_configured,
             viewer_auth_configured=current_settings.viewer_auth_configured,
@@ -5595,6 +5626,7 @@ def create_app(
             payload,
             session,
             originating_chat_session_id=chat_record.id,
+            commit_transaction=False,
         )
         chat_record.confirmed_intake_id = str(event.id)
         chat_record.status = "confirmed"

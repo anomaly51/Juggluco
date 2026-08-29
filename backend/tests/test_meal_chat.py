@@ -7,6 +7,7 @@ from threading import Barrier
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 from app.main import create_app
 from app.schemas import MealChatModelResult
@@ -424,6 +425,36 @@ def test_time_update_and_confirm_are_serialized_without_timestamp_divergence(
     assert final_session.json()["occurred_at_ms"] == confirmed.json()["occurred_at_ms"]
     if moved.status_code == 200:
         assert confirmed.json()["occurred_at_ms"] == moved_time
+
+
+def test_confirmation_commits_intake_and_chat_session_atomically(
+    client, app, auth_headers
+):
+    chat, _ = create_session(client, auth_headers)
+    turn = client.post(
+        f"/v1/meal-chat/sessions/{chat['id']}/messages",
+        headers=auth_headers,
+        data={"text": "A rice bowl"},
+    )
+    assert turn.status_code == 200, turn.text
+
+    commits = 0
+
+    def count_commit(_connection):
+        nonlocal commits
+        commits += 1
+
+    event.listen(app.state.database.engine, "commit", count_commit)
+    try:
+        confirmed = client.post(
+            f"/v1/meal-chat/sessions/{chat['id']}/confirm",
+            headers=auth_headers,
+        )
+    finally:
+        event.remove(app.state.database.engine, "commit", count_commit)
+
+    assert confirmed.status_code == 200, confirmed.text
+    assert commits == 1
 
 
 def test_ready_proposal_can_be_revised_repeatedly_and_only_latest_is_confirmed(

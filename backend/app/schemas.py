@@ -680,6 +680,7 @@ class IntakeChatUndoResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     api_version: str
+    version: str
     database: str
     auth_configured: bool
     viewer_auth_configured: bool = False
