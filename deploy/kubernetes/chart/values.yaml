@@ -1,7 +1,7 @@
 replicas: 1
 image:
   repository: harbor.internal.api-api-api.com/applications/juggluco
-  tag: sha-cdc429bbf69d
+  tag: sha-f1d61e504498
   pullPolicy: IfNotPresent
 registry:
   server: harbor.internal.api-api-api.com
@@ -22,7 +22,9 @@ persistence:
   size: 2Gi
 config:
   databasePath: /data/juggluco.db
-  viewerPublic: false
+  # Anyone with the PWA link can view glucose. Write/admin routes still require
+  # the Android bearer token and are never covered by the public viewer policy.
+  viewerPublic: true
   trustedProxyCidrs: 10.42.0.0/16
   openrouterAudioLanguage: ru
 resources:
