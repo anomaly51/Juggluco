@@ -2108,10 +2108,6 @@ body,
   vector-effect: non-scaling-stroke;
 }
 
-.inspection-line.horizontal {
-  opacity: 0.45;
-}
-
 .inspection-dot {
   fill: var(--surface);
   stroke: var(--green);
@@ -2276,7 +2272,7 @@ body,
   }
 }
 
-@media (max-width: 430px) {
+@media (max-width: 480px) {
   .chart-panel .axis-label {
     font-size: 12px;
   }
@@ -2311,14 +2307,12 @@ body,
     fill: color-mix(in srgb, var(--glucose-high) 3.5%, transparent);
   }
 
-  .inspection-line.horizontal {
-    display: none;
-  }
-
   .insulin-marker-stem {
     opacity: 0.3;
   }
+}
 
+@media (max-width: 430px) {
   .compact-brand strong {
     position: absolute;
     width: 1px;

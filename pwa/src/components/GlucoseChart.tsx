@@ -739,9 +739,6 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
               aria-hidden="true"
             >
               <line className="inspection-line" x1={selectedX} x2={selectedX} y1={margin.top} y2={chartHeight - margin.bottom} />
-              {!selectedIsInsulin && (
-                <line className="inspection-line horizontal" x1={margin.left} x2={chartWidth - margin.right} y1={selectedY} y2={selectedY} />
-              )}
               <circle
                 className={`inspection-dot${selectedPoint.glucoseZone ? ` glucose-${selectedPoint.glucoseZone}` : ''}`}
                 cx={selectedX}

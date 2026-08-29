@@ -221,6 +221,7 @@ describe('GlucoseChart', () => {
       clientY: Number(forecastEndpoint.getAttribute('cy')),
     }))
     expect(screen.getByTestId('chart-inspector')).toHaveAttribute('data-point-kind', 'forecast')
+    expect(chart.querySelector('.inspection-line.horizontal')).not.toBeInTheDocument()
     expect(chart).not.toHaveFocus()
     fireEvent(chart, new MouseEvent('pointercancel', { bubbles: true }))
     expect(screen.queryByTestId('chart-inspector')).not.toBeInTheDocument()
