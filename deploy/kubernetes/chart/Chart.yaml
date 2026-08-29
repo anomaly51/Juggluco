@@ -1,0 +1,5 @@
+apiVersion: v2
+name: juggluco
+description: Juggluco FastAPI backend and PWA served from one container image.
+type: application
+version: 0.1.0

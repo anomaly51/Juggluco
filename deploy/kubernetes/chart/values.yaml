@@ -1,0 +1,34 @@
+replicas: 1
+image:
+  repository: harbor.internal.api-api-api.com/applications/juggluco
+  tag: sha-186534b8c114
+  pullPolicy: IfNotPresent
+registry:
+  server: harbor.internal.api-api-api.com
+  vaultPath: apps/registry
+vault:
+  mount: kv
+  authMount: kubernetes
+  role: juggluco
+  path: apps/juggluco
+  refreshAfter: 1m
+route:
+  gatewayName: public
+  gatewayNamespace: networking
+  gatewaySectionName: https
+  hostname: juggluco-general1.api-api-api.com
+persistence:
+  storageClassName: local-path
+  size: 2Gi
+config:
+  databasePath: /data/juggluco.db
+  viewerPublic: false
+  trustedProxyCidrs: 10.42.0.0/16
+  openrouterAudioLanguage: ru
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
