@@ -1622,6 +1622,250 @@ def test_active_comparator_pin_change_aborts_training_freeze(
         assert session.get(ForecastModelRecord, version) is None
 
 
+def test_frozen_source_fingerprint_ignores_only_strictly_future_appends(
+    app, client
+):
+    del client
+    service = app.state.forecast_service
+    cutoff_ms = 1_700_100_000_000
+    historical_reading = GlucoseReadingRecord(
+        reading_id="fingerprint-history",
+        measured_at_ms=cutoff_ms,
+        glucose_mg_dl=120.0,
+        trend_mg_dl_min=0.0,
+        sensor_id="test",
+        sensor_generation="test",
+        quality=1.0,
+        utc_offset_minutes=0,
+        payload_hash="1" * 64,
+        received_at_ms=cutoff_ms + 1_000,
+    )
+    historical_event = IntakeEventRecord(
+        id="00000000-0000-0000-0000-000000000101",
+        client_event_id="10000000-0000-0000-0000-000000000101",
+        occurred_at_ms=cutoff_ms - 60_000,
+        meal_text="meal",
+        carbs_g=20.0,
+        portion_g=100.0,
+        original_portion_g=100.0,
+        original_carbs_g=20.0,
+        carbs_source="manual",
+        payload_hash="2" * 64,
+        created_at_ms=cutoff_ms - 30_000,
+        updated_at_ms=cutoff_ms - 30_000,
+        deleted_at_ms=None,
+        sync_version=1,
+    )
+
+    with app.state.database.session_factory() as session:
+        session.add_all([historical_reading, historical_event])
+        session.commit()
+        frozen = service._frozen_source_fingerprint(
+            session, cutoff_ms=cutoff_ms
+        )
+
+        session.add_all(
+            [
+                GlucoseReadingRecord(
+                    reading_id="fingerprint-future",
+                    measured_at_ms=cutoff_ms + 300_000,
+                    glucose_mg_dl=121.0,
+                    trend_mg_dl_min=0.2,
+                    sensor_id="test",
+                    sensor_generation="test",
+                    quality=1.0,
+                    utc_offset_minutes=0,
+                    payload_hash="3" * 64,
+                    received_at_ms=cutoff_ms + 301_000,
+                ),
+                IntakeEventRecord(
+                    id="00000000-0000-0000-0000-000000000102",
+                    client_event_id="10000000-0000-0000-0000-000000000102",
+                    occurred_at_ms=cutoff_ms + 1,
+                    insulin_units=1.0,
+                    insulin_type="rapid",
+                    insulin_name="NovoRapid",
+                    payload_hash="4" * 64,
+                    created_at_ms=cutoff_ms + 1,
+                    updated_at_ms=cutoff_ms + 1,
+                    deleted_at_ms=None,
+                    sync_version=2,
+                ),
+            ]
+        )
+        session.commit()
+        assert (
+            service._frozen_source_fingerprint(session, cutoff_ms=cutoff_ms)
+            == frozen
+        )
+
+        backfill = GlucoseReadingRecord(
+            reading_id="fingerprint-backfill",
+            measured_at_ms=cutoff_ms - 300_000,
+            glucose_mg_dl=119.0,
+            trend_mg_dl_min=-0.2,
+            sensor_id="test",
+            sensor_generation="test",
+            quality=1.0,
+            utc_offset_minutes=0,
+            payload_hash="5" * 64,
+            received_at_ms=cutoff_ms + 400_000,
+        )
+        session.add(backfill)
+        session.commit()
+        assert (
+            service._frozen_source_fingerprint(session, cutoff_ms=cutoff_ms)
+            != frozen
+        )
+        session.delete(backfill)
+        session.commit()
+
+        historical_reading = session.get(
+            GlucoseReadingRecord, "fingerprint-history"
+        )
+        assert historical_reading is not None
+        historical_reading.glucose_mg_dl = 122.0
+        historical_reading.payload_hash = "6" * 64
+        session.commit()
+        assert (
+            service._frozen_source_fingerprint(session, cutoff_ms=cutoff_ms)
+            != frozen
+        )
+        historical_reading.glucose_mg_dl = 120.0
+        historical_reading.payload_hash = "1" * 64
+        session.commit()
+
+        event_backfill = IntakeEventRecord(
+            id="00000000-0000-0000-0000-000000000103",
+            client_event_id="10000000-0000-0000-0000-000000000103",
+            occurred_at_ms=cutoff_ms - 120_000,
+            insulin_units=2.0,
+            insulin_type="rapid",
+            insulin_name="NovoRapid",
+            payload_hash="7" * 64,
+            # A late receipt must still invalidate the frozen historical
+            # interval even though causal loading would exclude it.
+            created_at_ms=cutoff_ms + 600_000,
+            updated_at_ms=cutoff_ms + 600_000,
+            deleted_at_ms=None,
+            sync_version=4,
+        )
+        session.add(event_backfill)
+        session.commit()
+        assert (
+            service._frozen_source_fingerprint(session, cutoff_ms=cutoff_ms)
+            != frozen
+        )
+        session.delete(event_backfill)
+        session.commit()
+
+        historical_event = session.get(
+            IntakeEventRecord, "00000000-0000-0000-0000-000000000101"
+        )
+        assert historical_event is not None
+        historical_event.meal_text = "edited meal"
+        historical_event.payload_hash = "8" * 64
+        historical_event.updated_at_ms = cutoff_ms + 450_000
+        historical_event.sync_version = 3
+        session.commit()
+        assert (
+            service._frozen_source_fingerprint(session, cutoff_ms=cutoff_ms)
+            != frozen
+        )
+        historical_event.meal_text = "meal"
+        historical_event.payload_hash = "2" * 64
+        historical_event.updated_at_ms = cutoff_ms - 30_000
+        historical_event.sync_version = 1
+        session.commit()
+
+        historical_event.deleted_at_ms = cutoff_ms + 500_000
+        historical_event.updated_at_ms = cutoff_ms + 500_000
+        historical_event.sync_version = 5
+        session.commit()
+        assert (
+            service._frozen_source_fingerprint(session, cutoff_ms=cutoff_ms)
+            != frozen
+        )
+
+
+def test_training_freeze_allows_live_reading_append_strictly_after_cutoff(
+    app, client, monkeypatch
+):
+    del client
+    import app.forecast as forecast_module
+
+    service = app.state.forecast_service
+    version = "static-training-live-append"
+    base_ms = 1_700_006_400_000  # UTC midnight.
+    step_ms = 5 * 60_000
+    reading_count = 17 * 24 * 12
+    cutoff_ms = base_ms + (reading_count - 1) * step_ms
+
+    with app.state.database.session_factory() as session:
+        service._ensure_baseline(session)
+        session.add_all(
+            [
+                GlucoseReadingRecord(
+                    reading_id=f"training-live-{index}",
+                    measured_at_ms=base_ms + index * step_ms,
+                    glucose_mg_dl=120.0,
+                    trend_mg_dl_min=0.0,
+                    sensor_id="test",
+                    sensor_generation="test",
+                    quality=1.0,
+                    utc_offset_minutes=0,
+                    payload_hash=f"{index:064x}"[-64:],
+                    received_at_ms=base_ms + index * step_ms + 1_000,
+                )
+                for index in range(reading_count)
+            ]
+        )
+        session.commit()
+
+        original_fit = forecast_module._fit_network
+        appended = False
+
+        def fit_with_live_append(
+            features,
+            residual,
+            alpha=forecast_module.STATIC_RIDGE_ALPHA,
+        ):
+            nonlocal appended
+            fitted = original_fit(features, residual, alpha)
+            if not appended:
+                session.add(
+                    GlucoseReadingRecord(
+                        reading_id="training-live-future",
+                        measured_at_ms=cutoff_ms + step_ms,
+                        glucose_mg_dl=121.0,
+                        trend_mg_dl_min=0.2,
+                        sensor_id="test",
+                        sensor_generation="test",
+                        quality=1.0,
+                        utc_offset_minutes=0,
+                        payload_hash="f" * 64,
+                        received_at_ms=cutoff_ms + step_ms + 1_000,
+                    )
+                )
+                session.commit()
+                appended = True
+            return fitted
+
+        monkeypatch.setattr(forecast_module, "_fit_network", fit_with_live_append)
+
+        result = service.train_static_model(
+            session,
+            data_cutoff_ms=cutoff_ms,
+            candidate_version=version,
+            stage_pending=True,
+        )
+
+        assert appended is True
+        assert result.metrics.get("source_revision_changed") is None
+        assert result.status in {"pending", "rejected"}
+        assert session.get(ForecastModelRecord, version) is not None
+
+
 def test_display_training_cleanly_rejects_insufficient_receipt_causal_evidence(
     app,
     client,

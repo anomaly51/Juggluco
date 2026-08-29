@@ -3766,6 +3766,95 @@ class ForecastService:
             int(event_count or 0),
             int(glucose_source_revision or 0),
         )
+
+    @staticmethod
+    def _frozen_source_fingerprint(session: Session, *, cutoff_ms: int) -> str:
+        """Hash every source row that belongs to a frozen training interval.
+
+        The global source revision is ideal for viewer reconciliation, but it
+        advances for ordinary live appends after a model's cutoff. A training
+        commit must ignore only those strictly-future rows while still noticing
+        a correction, backfill, tombstone, restore, or deletion anywhere in the
+        historical interval. Hash raw rows rather than only the transformed
+        training objects so excluded tombstones and late historical intakes are
+        covered too. Linked analysis JSON is included because it supplies meal
+        context used by ``_load_events``.
+        """
+
+        digest = hashlib.sha256()
+        digest.update(f"cutoff:{int(cutoff_ms)}\n".encode("ascii"))
+
+        def update_digest(scope: bytes, row: Any) -> None:
+            digest.update(scope)
+            digest.update(
+                json.dumps(
+                    tuple(row),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            )
+            digest.update(b"\n")
+
+        reading_rows = session.execute(
+            select(
+                GlucoseReadingRecord.reading_id,
+                GlucoseReadingRecord.measured_at_ms,
+                GlucoseReadingRecord.glucose_mg_dl,
+                GlucoseReadingRecord.trend_mg_dl_min,
+                GlucoseReadingRecord.sensor_id,
+                GlucoseReadingRecord.sensor_generation,
+                GlucoseReadingRecord.quality,
+                GlucoseReadingRecord.utc_offset_minutes,
+                GlucoseReadingRecord.payload_hash,
+                GlucoseReadingRecord.received_at_ms,
+            )
+            .where(GlucoseReadingRecord.measured_at_ms <= cutoff_ms)
+            .order_by(
+                GlucoseReadingRecord.measured_at_ms,
+                GlucoseReadingRecord.reading_id,
+            )
+        )
+        for row in reading_rows:
+            update_digest(b"reading:", row)
+
+        event_rows = session.execute(
+            select(
+                IntakeEventRecord.id,
+                IntakeEventRecord.client_event_id,
+                IntakeEventRecord.occurred_at_ms,
+                IntakeEventRecord.meal_text,
+                IntakeEventRecord.carbs_g,
+                IntakeEventRecord.portion_g,
+                IntakeEventRecord.original_portion_g,
+                IntakeEventRecord.original_carbs_g,
+                IntakeEventRecord.carbs_source,
+                IntakeEventRecord.insulin_units,
+                IntakeEventRecord.insulin_type,
+                IntakeEventRecord.insulin_name,
+                IntakeEventRecord.analysis_id,
+                IntakeEventRecord.payload_hash,
+                IntakeEventRecord.created_at_ms,
+                IntakeEventRecord.updated_at_ms,
+                IntakeEventRecord.deleted_at_ms,
+                IntakeEventRecord.sync_version,
+                AnalysisRecord.result_json,
+            )
+            .outerjoin(
+                AnalysisRecord,
+                AnalysisRecord.id == IntakeEventRecord.analysis_id,
+            )
+            .where(IntakeEventRecord.occurred_at_ms <= cutoff_ms)
+            .order_by(
+                IntakeEventRecord.occurred_at_ms,
+                IntakeEventRecord.id,
+            )
+        )
+        for row in event_rows:
+            update_digest(b"event:", row)
+
+        return digest.hexdigest()
+
     def _champion(self, session: Session) -> ForecastModelRecord:
         """Return only the explicit valid pin; otherwise fail closed to baseline."""
 
@@ -6341,7 +6430,6 @@ class ForecastService:
             )
         champion = self._champion(session)
         champion_parameters_json = champion.parameters_json
-        source_revision_before = self._source_revision(session)
         latest_available = session.scalar(
             select(func.max(GlucoseReadingRecord.measured_at_ms))
         )
@@ -6374,6 +6462,28 @@ class ForecastService:
                 metrics={},
             )
         cutoff_ms = int(readings[-1].measured_at_ms)
+        frozen_source_fingerprint_before = self._frozen_source_fingerprint(
+            session, cutoff_ms=cutoff_ms
+        )
+        # The first load discovers the concrete cutoff. Reload after freezing
+        # the raw-source fingerprint so any historical write racing either side
+        # of this query is visible at the final guarded commit.
+        readings = self._load_readings(
+            session, through_ms=cutoff_ms, limit=60_000
+        )
+        if not readings or int(readings[-1].measured_at_ms) != cutoff_ms:
+            return ForecastTrainResponse(
+                status="skipped",
+                promoted=False,
+                model_version=champion.version,
+                reason=(
+                    "Source glucose/intake data changed while freezing the training snapshot; "
+                    "retry from a fresh snapshot"
+                ),
+                sample_count=0,
+                metrics={"source_revision_changed": 1},
+            )
+        source_revision_before = self._source_revision(session)
         all_windows = self._training_windows(readings, max_windows=None)
         receipt_causal_windows, receipt_causal_diagnostics = (
             self._prospective_causal_windows(readings)
@@ -7071,8 +7181,10 @@ class ForecastService:
         # observable without blocking mobile ingestion during model fitting.
         session.rollback()
         session.execute(text("BEGIN IMMEDIATE"))
-        source_revision_after = self._source_revision(session)
-        if source_revision_after != source_revision_before:
+        frozen_source_fingerprint_after = self._frozen_source_fingerprint(
+            session, cutoff_ms=cutoff_ms
+        )
+        if frozen_source_fingerprint_after != frozen_source_fingerprint_before:
             session.rollback()
             return ForecastTrainResponse(
                 status="skipped",
