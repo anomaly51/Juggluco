@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from app.database import Database
+from app.forecast_release import FORECAST_RUNTIME_RELEASE_METADATA_KEY
 from app.main import create_app
+from app.models import BackendMetadataRecord
 from conftest import FakeAnalyzer, make_settings
 
 
@@ -57,6 +60,25 @@ def test_readiness_succeeds_with_all_production_dependencies(tmp_path):
         "viewer_auth_configured": True,
         "ai_configured": True,
     }
+
+
+def test_backend_startup_registers_runtime_release_for_forecast_job_fencing(
+    tmp_path,
+):
+    settings = make_settings(tmp_path, app_version="sha-release-b")
+    application = create_app(settings, analyzer=FakeAnalyzer())
+
+    with TestClient(application):
+        pass
+
+    database = Database(settings.database_path)
+    with database.session_factory() as session:
+        marker = session.get(
+            BackendMetadataRecord, FORECAST_RUNTIME_RELEASE_METADATA_KEY
+        )
+        assert marker is not None
+        assert marker.value_text == "sha-release-b"
+    database.dispose()
 
 
 def test_protected_routes_require_the_exact_bearer_token(client):

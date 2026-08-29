@@ -6,11 +6,19 @@ import json
 import os
 import sqlite3
 import stat
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Barrier
 
 from app.database import Database
 from app.forecast import STATIC_DISPLAY_PROTOCOL
-from app.models import ForecastModelRecord, GlucoseReadingRecord, IntakeEventRecord
+from app.forecast_release import register_forecast_runtime_release
+from app.models import (
+    ForecastModelRecord,
+    GlucoseReadingRecord,
+    IntakeEventRecord,
+)
 from app.schemas import (
     ForecastTrainingStatus,
     ForecastTrainResponse,
@@ -119,6 +127,11 @@ def _display_candidate_record(
         ),
         decision_reason="display bootstrap test fixture",
     )
+
+
+def _register_release(database: Database, release_version: str) -> None:
+    with database.session_factory() as session:
+        register_forecast_runtime_release(session, release_version)
 
 
 def test_export_uses_consistent_snapshot_and_hash_manifest(tmp_path):
@@ -669,6 +682,424 @@ def test_deploy_display_cli_exits_nonzero_when_gitops_requires_activation(
     assert exit_code == 1
     assert output.out == ""
     assert "activation required" in output.err
+
+
+def test_daily_display_version_uses_utc_day_and_bounded_release_identity():
+    local_midnight = datetime(2026, 8, 30, 0, 30, tzinfo=timezone(timedelta(hours=3)))
+
+    assert forecast_admin._daily_display_candidate_version(
+        "sha-a483332c", now_utc=local_midnight
+    ) == "display-sha-a483332c-d20260829"
+
+    try:
+        forecast_admin._daily_display_candidate_version(
+            "x" * 67, now_utc=local_midnight
+        )
+    except ValueError as error:
+        assert "{1,66}" in str(error)
+    else:  # pragma: no cover - documents the persisted version length bound.
+        raise AssertionError("an oversized release identity was accepted")
+
+
+def test_daily_retry_stops_after_current_release_has_active_display_champion(
+    tmp_path,
+):
+    database_path = tmp_path / "daily-active.sqlite"
+    database = Database(database_path)
+    database.create_all()
+    _register_release(database, "sha-current")
+    with database.session_factory() as session:
+        session.add(
+            _display_candidate_record(
+                "display-sha-current-d20260828",
+                status="champion",
+            )
+        )
+        session.commit()
+    database.dispose()
+
+    class NoCallService:
+        def train_static_model(self, *args, **kwargs):
+            raise AssertionError("an active release must stop scheduled training")
+
+        @staticmethod
+        def activate_model(session, version):
+            return session.get(ForecastModelRecord, version)
+
+    result = forecast_admin.execute(
+        [
+            "--database",
+            str(database_path),
+            "retry-display-daily",
+            "--release-version",
+            "sha-current",
+        ],
+        service_factory=NoCallService,
+    )
+
+    assert result["result"]["status"] == "already_active"
+    assert result["result"]["attempts"] == 0
+    assert result["result"]["model_version"] == "display-sha-current-d20260828"
+
+
+def test_daily_retry_does_not_repeat_a_rejected_utc_day(tmp_path):
+    database_path = tmp_path / "daily-rejected.sqlite"
+    database = Database(database_path)
+    database.create_all()
+    _register_release(database, "sha-current")
+    with database.session_factory() as session:
+        assert forecast_admin._claim_daily_display_attempt(
+            session,
+            release_version="sha-current",
+            utc_day="20260829",
+        )
+        forecast_admin._complete_daily_display_attempt(
+            session,
+            release_version="sha-current",
+            utc_day="20260829",
+        )
+        session.add(
+            _display_candidate_record(
+                "display-sha-current-d20260829",
+                status="rejected",
+                accepted=False,
+            )
+        )
+        session.commit()
+
+        class NoCallService:
+            def train_static_model(self, *args, **kwargs):
+                raise AssertionError("a rejected UTC day must not retrain")
+
+            def activate_model(self, *args, **kwargs):
+                raise AssertionError("a rejected UTC day must not activate")
+
+        result = forecast_admin.retry_display_model_daily(
+            NoCallService(),
+            session,
+            release_version="sha-current",
+            now_utc=datetime(2026, 8, 29, 23, 59, tzinfo=timezone.utc),
+        )
+    database.dispose()
+
+    assert result["status"] == "retained"
+    assert result["attempts"] == 0
+    assert result["utc_day"] == "20260829"
+
+
+def test_same_day_postsync_rejection_needs_no_daily_completion_marker(tmp_path):
+    database_path = tmp_path / "postsync-rejected.sqlite"
+    database = Database(database_path)
+    database.create_all()
+    _register_release(database, "sha-current")
+    now_utc = datetime(2026, 8, 29, 20, 0, tzinfo=timezone.utc)
+    with database.session_factory() as session:
+        rejected = _display_candidate_record(
+            "display-sha-current",
+            status="rejected",
+            accepted=False,
+        )
+        rejected.trained_at_ms = int(now_utc.timestamp() * 1_000)
+        session.add(rejected)
+        session.commit()
+
+        class NoCallService:
+            def train_static_model(self, *args, **kwargs):
+                raise AssertionError("same-day PostSync outcome must not retrain")
+
+            def activate_model(self, *args, **kwargs):
+                raise AssertionError("a rejected PostSync model must not activate")
+
+        result = forecast_admin.retry_display_model_daily(
+            NoCallService(),
+            session,
+            release_version="sha-current",
+            now_utc=now_utc,
+        )
+    database.dispose()
+
+    assert result["status"] == "retained"
+    assert result["attempts"] == 0
+    assert result["model_version"] == "display-sha-current"
+
+
+def test_daily_retry_does_not_override_a_later_operator_rollback(tmp_path):
+    database_path = tmp_path / "daily-retired.sqlite"
+    database = Database(database_path)
+    database.create_all()
+    _register_release(database, "sha-current")
+    with database.session_factory() as session:
+        retired = _display_candidate_record(
+            "display-sha-current-d20260828",
+            status="retired",
+        )
+        retired.promoted_at_ms = 123
+        session.add(retired)
+        session.commit()
+
+        class NoCallService:
+            def train_static_model(self, *args, **kwargs):
+                raise AssertionError("a rolled-back release must stay stopped")
+
+            def activate_model(self, *args, **kwargs):
+                raise AssertionError("a rollback must not be overridden")
+
+        result = forecast_admin.retry_display_model_daily(
+            NoCallService(),
+            session,
+            release_version="sha-current",
+            now_utc=datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc),
+        )
+    database.dispose()
+
+    assert result["status"] == "retained"
+    assert "will not override" in result["reason"]
+    assert result["attempts"] == 0
+
+
+def test_daily_retry_uses_existing_deploy_path_and_gate_rejection_is_success(
+    tmp_path, monkeypatch
+):
+    database_path = tmp_path / "daily-gate.sqlite"
+    database = Database(database_path)
+    database.create_all()
+    _register_release(database, "sha-current")
+    calls = []
+
+    def fake_deploy(service, session, **kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "retained",
+            "promoted": False,
+            "model_version": kwargs["candidate_version"],
+            "reason": "Receipt-causal display gates retained the baseline",
+            "attempts": 1,
+            "reused_existing": False,
+        }
+
+    monkeypatch.setattr(forecast_admin, "deploy_display_model", fake_deploy)
+    with database.session_factory() as session:
+        result = forecast_admin.retry_display_model_daily(
+            object(),
+            session,
+            release_version="sha-current",
+            source_change_retries=3,
+            retry_delay_seconds=0.25,
+            now_utc=datetime(2026, 8, 30, 1, 0, tzinfo=timezone.utc),
+        )
+    with database.session_factory() as session:
+        repeated = forecast_admin.retry_display_model_daily(
+            object(),
+            session,
+            release_version="sha-current",
+            source_change_retries=3,
+            retry_delay_seconds=0.25,
+            now_utc=datetime(2026, 8, 30, 23, 0, tzinfo=timezone.utc),
+        )
+    with database.session_factory() as session:
+        next_day = forecast_admin.retry_display_model_daily(
+            object(),
+            session,
+            release_version="sha-current",
+            source_change_retries=3,
+            retry_delay_seconds=0.25,
+            now_utc=datetime(2026, 8, 31, 0, 1, tzinfo=timezone.utc),
+        )
+    database.dispose()
+
+    assert calls == [
+        {
+            "candidate_version": "display-sha-current-d20260830",
+            "source_change_retries": 3,
+            "retry_delay_seconds": 0.25,
+            "require_activation": False,
+            "expected_runtime_release": "sha-current",
+        },
+        {
+            "candidate_version": "display-sha-current-d20260831",
+            "source_change_retries": 3,
+            "retry_delay_seconds": 0.25,
+            "require_activation": False,
+            "expected_runtime_release": "sha-current",
+        },
+    ]
+    assert result["status"] == "retained"
+    assert result["promoted"] is False
+    assert result["utc_day"] == "20260830"
+    assert repeated["status"] == "retained"
+    assert repeated["attempts"] == 0
+    assert "already claimed" in repeated["reason"]
+    assert next_day["utc_day"] == "20260831"
+
+
+def test_daily_retry_cli_exits_zero_when_empty_data_retains_baseline(
+    tmp_path, capsys
+):
+    database_path = tmp_path / "daily-empty.sqlite"
+    database = Database(database_path)
+    database.create_all()
+    _register_release(database, "sha-empty")
+    database.dispose()
+    exit_code = forecast_admin.main(
+        [
+            "--database",
+            str(database_path),
+            "retry-display-daily",
+            "--release-version",
+            "sha-empty",
+            "--retry-delay-seconds",
+            "0",
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert exit_code == 0
+    assert output.err == ""
+    payload = json.loads(output.out)
+    assert payload["command"] == "retry-display-daily"
+    assert payload["result"]["status"] == "retained"
+
+
+def test_daily_attempt_claim_is_atomic_across_two_process_sessions(tmp_path):
+    database_path = tmp_path / "daily-claim-race.sqlite"
+    database = Database(database_path)
+    database.create_all()
+    barrier = Barrier(3)
+
+    def claim() -> str:
+        with database.session_factory() as session:
+            barrier.wait()
+            try:
+                claimed = forecast_admin._claim_daily_display_attempt(
+                    session,
+                    release_version="sha-race",
+                    utc_day="20260830",
+                )
+            except ValueError:
+                return "blocked"
+            return "claimed" if claimed else "completed"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(claim) for _ in range(2)]
+        barrier.wait()
+        results = sorted(future.result() for future in futures)
+    database.dispose()
+
+    assert results == ["blocked", "claimed"]
+
+
+def test_interrupted_daily_attempt_is_not_masked_by_job_retry(
+    tmp_path, monkeypatch, capsys
+):
+    database_path = tmp_path / "daily-interrupted.sqlite"
+    database = Database(database_path)
+    database.create_all()
+    _register_release(database, "sha-interrupted")
+    database.dispose()
+
+    def fail_after_claim(*args, **kwargs):
+        raise ValueError("simulated corrupt model artifact")
+
+    monkeypatch.setattr(forecast_admin, "deploy_display_model", fail_after_claim)
+    argv = [
+        "--database",
+        str(database_path),
+        "retry-display-daily",
+        "--release-version",
+        "sha-interrupted",
+    ]
+
+    assert forecast_admin.main(argv) == 1
+    first = capsys.readouterr()
+    assert "corrupt model artifact" in first.err
+    assert forecast_admin.main(argv) == 1
+    second = capsys.readouterr()
+    assert "already running or was interrupted" in second.err
+
+
+def test_interrupted_daily_candidate_cannot_be_resumed_same_day(tmp_path):
+    database_path = tmp_path / "daily-candidate-interrupted.sqlite"
+    database = Database(database_path)
+    database.create_all()
+    _register_release(database, "sha-candidate")
+    with database.session_factory() as session:
+        assert forecast_admin._claim_daily_display_attempt(
+            session,
+            release_version="sha-candidate",
+            utc_day="20260830",
+        )
+        session.add(
+            _display_candidate_record(
+                "display-sha-candidate-d20260830",
+                status="candidate",
+            )
+        )
+        session.commit()
+
+        try:
+            forecast_admin.retry_display_model_daily(
+                object(),
+                session,
+                release_version="sha-candidate",
+                now_utc=datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc),
+            )
+        except ValueError as error:
+            assert "interrupted attempt" in str(error)
+        else:  # pragma: no cover - documents the fail-closed resume rule.
+            raise AssertionError("an interrupted candidate was resumed same-day")
+    database.dispose()
+
+
+def test_stale_release_cannot_activate_after_new_backend_rollout(tmp_path):
+    database_path = tmp_path / "stale-release.sqlite"
+    database = Database(database_path)
+    database.create_all()
+    _register_release(database, "sha-release-a")
+    candidate_version = "display-sha-release-a-d20260830"
+
+    class ReleaseRaceService:
+        activated = False
+
+        def train_static_model(self, session, **kwargs):
+            session.add(_display_candidate_record(kwargs["candidate_version"]))
+            session.commit()
+            with database.session_factory() as rollout_session:
+                register_forecast_runtime_release(
+                    rollout_session, "sha-release-b"
+                )
+            return ForecastTrainResponse(
+                status="accepted",
+                promoted=False,
+                model_version=kwargs["candidate_version"],
+                reason="Display gates accepted before rollout",
+                sample_count=42,
+                metrics={"accepted": 1},
+            )
+
+        def activate_model(self, session, version):
+            self.activated = True
+            raise AssertionError("a stale release must never reach activation")
+
+    service = ReleaseRaceService()
+    with database.session_factory() as session:
+        try:
+            forecast_admin.deploy_display_model(
+                service,
+                session,
+                candidate_version=candidate_version,
+                expected_runtime_release="sha-release-a",
+            )
+        except ValueError as error:
+            assert "stale forecast job refused" in str(error)
+        else:  # pragma: no cover - documents the release fence.
+            raise AssertionError("stale release activated after rollout")
+    with database.session_factory() as session:
+        candidate = session.get(ForecastModelRecord, candidate_version)
+        assert candidate is not None
+        assert candidate.status == "candidate"
+    database.dispose()
+
+    assert service.activated is False
 
 
 def test_admin_serializes_activation_record_without_parameters():

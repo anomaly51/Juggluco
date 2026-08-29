@@ -27,9 +27,9 @@ persistence:
   size: 2Gi
 
 # One idempotent PostSync attempt per GitOps sync. A rejected/skipped candidate
-# leaves the safe active model pinned and fails the hook so GitOps cannot claim
-# the requested model activated. The version defaults to "display-<image.tag>";
-# a new source-revision suffix is used after a prior terminal decision.
+# leaves the safe active model pinned and lets the application sync complete;
+# the bounded daily retry below waits for more receipt-causal data. The version
+# defaults to "display-<image.tag>".
 forecastBootstrap:
   enabled: true
   candidateVersion: ""
@@ -37,6 +37,30 @@ forecastBootstrap:
   retryDelaySeconds: 2
   backoffLimit: 1
   activeDeadlineSeconds: 1800
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# One attempt per immutable release and UTC day until that release has an active
+# display champion. Gate rejection is a healthy outcome: the alert-disabled
+# baseline remains pinned and the next attempt receives a new UTC-day version.
+forecastRetry:
+  enabled: true
+  releaseVersion: ""
+  schedule: "17 3 * * *"
+  timeZone: Etc/UTC
+  startingDeadlineSeconds: 900
+  sourceChangeRetries: 2
+  retryDelaySeconds: 2
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 172800
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
   resources:
     requests:
       cpu: 100m

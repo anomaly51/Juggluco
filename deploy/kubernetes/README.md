@@ -26,11 +26,20 @@ After the Deployment is healthy, Argo CD runs the values-controlled
 PVC, but receives no API, viewer, or OpenRouter secret. The Job derives a deterministic
 `display-<image-tag>` candidate version, retries bounded source-data races, and explicitly pins
 the candidate only when the display gates accept it. Rejected or insufficient-data runs retain
-the existing safe model and fail the PostSync hook, so GitOps cannot report a false success. A
-new source revision receives a deterministic suffix rather than making rejection sticky.
-Forecast alert approval remains false. Set
-`forecastBootstrap.enabled=false` to omit the hook, or override its version, retry, deadline,
-and resource settings in chart values.
+the existing safe model and finish successfully so a legitimate data gate cannot leave Argo CD
+permanently Failed.
+
+The `juggluco-forecast-retry` CronJob then makes at most one attempt per immutable release and
+UTC day. Its version includes both the image release and UTC date. A same-day rejection is a
+clean no-op on rerun, the following day gets a new deterministic candidate, and all later runs
+stop as soon as that release owns an active display champion. Job history and completed Jobs are
+bounded. A durable runtime-release fence prevents an old Job from activating after a newer backend
+rollout, while an interrupted claim stays failed until the next UTC day instead of being hidden by
+a pod retry. It shares the backend image, service account, hardened security context, and SQLite PVC,
+but receives no runtime secrets. It only calls the existing display deployment path; forecast
+alert approval and dosing use remain false. Set `forecastBootstrap.enabled=false` or
+`forecastRetry.enabled=false` to omit either workload, or override their schedule, version,
+retry, deadline, retention, and resource settings in chart values.
 
 The copies under `deploy/github-actions/` mirror both active workflows for forks that
 cannot commit `.github/workflows/` during setup.

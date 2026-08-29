@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 from .config import Settings, normalize_audio_language
 from .database import Database
 from .forecast import ForecastService
+from .forecast_release import register_forecast_runtime_release
 from .intake_chat import (
     ExplicitInsulinCommand,
     ExplicitInsulinParse,
@@ -2498,6 +2499,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         database.create_all()
+        with database.session_factory() as session:
+            register_forecast_runtime_release(session, settings.app_version)
         glucose_updates.start()
         yield
         await glucose_updates.close()

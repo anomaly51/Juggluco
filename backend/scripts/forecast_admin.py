@@ -12,6 +12,8 @@ import csv
 import hashlib
 import json
 import math
+import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -23,18 +25,24 @@ from typing import Any, Callable, Iterator, Sequence
 from uuid import uuid4
 
 from pydantic import BaseModel
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.config import BACKEND_ROOT, Settings
 from app.database import Database
 from app.forecast import STATIC_DISPLAY_PROTOCOL, ForecastService
-from app.models import ForecastModelRecord
+from app.forecast_release import (
+    FORECAST_RUNTIME_RELEASE_METADATA_KEY,
+    normalize_forecast_runtime_release,
+)
+from app.models import BackendMetadataRecord, ForecastModelRecord
 
 
 EXPORT_SCHEMA_VERSION = 1
 DEFAULT_EXPORT_ROOT = BACKEND_ROOT / "data" / "exports"
 DEFAULT_DISPLAY_SOURCE_CHANGE_RETRIES = 2
 DEFAULT_DISPLAY_RETRY_DELAY_SECONDS = 2.0
+DISPLAY_RETRY_STATE_KEY = "forecast_display_retry_state_v1"
 
 GLUCOSE_COLUMNS = (
     "reading_id",
@@ -291,7 +299,7 @@ def _display_candidate_is_accepted(record: ForecastModelRecord) -> bool:
     evaluation = artifact.get("evaluation")
     approval = artifact.get("approval")
     return bool(
-        record.status in {"candidate", "champion"}
+        record.status in {"candidate", "champion", "retired"}
         and artifact.get("accepted") is True
         and isinstance(evaluation, dict)
         and evaluation.get("accepted") in {1, True}
@@ -345,10 +353,188 @@ def _revisioned_candidate_version(base: str, revision: tuple[int, ...]) -> str:
     return f"{base[: 96 - len(suffix)]}{suffix}"
 
 
+def _display_release_base(release_version: str) -> str:
+    """Return the stable candidate prefix for one immutable application image."""
+
+    normalized = normalize_forecast_runtime_release(release_version)
+    return f"display-{normalized}"
+
+
+def _daily_display_candidate_version(
+    release_version: str, *, now_utc: datetime | None = None
+) -> str:
+    instant = now_utc or datetime.now(timezone.utc)
+    if instant.tzinfo is None:
+        raise ValueError("daily display retry time must be timezone-aware")
+    utc_day = instant.astimezone(timezone.utc).strftime("%Y%m%d")
+    return f"{_display_release_base(release_version)}-d{utc_day}"
+
+
+def _release_candidate_day(version: str, release_base: str) -> str | None:
+    match = re.fullmatch(
+        rf"{re.escape(release_base)}-d(?P<day>[0-9]{{8}})(?:-r[0-9a-f]{{10}})?",
+        version,
+    )
+    return match.group("day") if match is not None else None
+
+
+def _belongs_to_display_release(version: str, release_base: str) -> bool:
+    return bool(
+        re.fullmatch(
+            rf"{re.escape(release_base)}(?:-r[0-9a-f]{{10}}|-d[0-9]{{8}}(?:-r[0-9a-f]{{10}})?)?",
+            version,
+        )
+    )
+
+
+def _record_utc_day(record: ForecastModelRecord, release_base: str) -> str:
+    encoded_day = _release_candidate_day(record.version, release_base)
+    if encoded_day is not None:
+        return encoded_day
+    timestamp_ms = record.trained_at_ms or record.created_at_ms
+    return datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).strftime(
+        "%Y%m%d"
+    )
+
+
+def _claim_daily_display_attempt(
+    session: Session, *, release_version: str, utc_day: str
+) -> bool:
+    """Atomically claim one attempt; an interrupted claim stays visibly failed."""
+
+    session.rollback()
+    session.execute(text("BEGIN IMMEDIATE"))
+    try:
+        marker = session.get(BackendMetadataRecord, DISPLAY_RETRY_STATE_KEY)
+        state: Any = None
+        if marker is not None:
+            try:
+                state = json.loads(marker.value_text)
+            except (TypeError, json.JSONDecodeError):
+                state = None
+        same_attempt = bool(
+            isinstance(state, dict)
+            and state.get("release_version") == release_version
+            and state.get("utc_day") == utc_day
+        )
+        if same_attempt:
+            if state.get("state") == "completed":
+                session.commit()
+                return False
+            raise ValueError(
+                "current release UTC-day display attempt is already running or "
+                "was interrupted; refusing to hide the failed attempt"
+            )
+        value = json.dumps(
+            {
+                "release_version": release_version,
+                "state": "claimed",
+                "utc_day": utc_day,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        if marker is None:
+            session.add(
+                BackendMetadataRecord(key=DISPLAY_RETRY_STATE_KEY, value_text=value)
+            )
+        else:
+            marker.value_text = value
+        session.commit()
+        return True
+    except Exception:
+        session.rollback()
+        raise
+
+
+def _complete_daily_display_attempt(
+    session: Session, *, release_version: str, utc_day: str
+) -> None:
+    """Mark a claimed attempt complete without masking an interrupted process."""
+
+    session.rollback()
+    session.execute(text("BEGIN IMMEDIATE"))
+    try:
+        marker = session.get(BackendMetadataRecord, DISPLAY_RETRY_STATE_KEY)
+        try:
+            state = json.loads(marker.value_text) if marker is not None else None
+        except (TypeError, json.JSONDecodeError):
+            state = None
+        if not (
+            isinstance(state, dict)
+            and state.get("release_version") == release_version
+            and state.get("utc_day") == utc_day
+            and state.get("state") == "claimed"
+        ):
+            raise ValueError("daily display attempt claim changed before completion")
+        state["state"] = "completed"
+        marker.value_text = json.dumps(
+            state, separators=(",", ":"), sort_keys=True
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
+
+def _daily_display_attempt_is_completed(
+    session: Session, *, release_version: str, utc_day: str
+) -> bool:
+    marker = session.get(BackendMetadataRecord, DISPLAY_RETRY_STATE_KEY)
+    try:
+        state = json.loads(marker.value_text) if marker is not None else None
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return bool(
+        isinstance(state, dict)
+        and state.get("release_version") == release_version
+        and state.get("utc_day") == utc_day
+        and state.get("state") == "completed"
+    )
+
+
+def _require_runtime_release(session: Session, expected_release: str) -> str:
+    expected = normalize_forecast_runtime_release(expected_release)
+    current = session.scalar(
+        select(BackendMetadataRecord.value_text).where(
+            BackendMetadataRecord.key == FORECAST_RUNTIME_RELEASE_METADATA_KEY
+        )
+    )
+    if current != expected:
+        raise ValueError(
+            "stale forecast job refused: the shared database belongs to runtime "
+            f"release {current or 'unregistered'}, not {expected}"
+        )
+    return expected
+
+
+def _activate_display_model_fenced(
+    service: ForecastService,
+    session: Session,
+    version: str,
+    *,
+    expected_runtime_release: str | None,
+) -> ForecastModelRecord:
+    """Serialize runtime-release validation and activation in one write lock."""
+
+    if expected_runtime_release is None:
+        return service.activate_model(session, version)
+    session.rollback()
+    session.execute(text("BEGIN IMMEDIATE"))
+    try:
+        _require_runtime_release(session, expected_runtime_release)
+        return service.activate_model(session, version)
+    except Exception:
+        session.rollback()
+        raise
+
+
 def _existing_display_result(
     service: ForecastService,
     session: Session,
     record: ForecastModelRecord,
+    *,
+    expected_runtime_release: str | None = None,
 ) -> dict[str, Any]:
     """Resume or safely no-op a previously attempted deterministic version."""
 
@@ -360,7 +546,12 @@ def _existing_display_result(
             )
         # Re-pin idempotently through the full artifact/checksum/comparator
         # validator; a status string alone is not proof that the model is active.
-        activated = service.activate_model(session, record.version)
+        activated = _activate_display_model_fenced(
+            service,
+            session,
+            record.version,
+            expected_runtime_release=expected_runtime_release,
+        )
         return {
             "status": "already_active",
             "promoted": False,
@@ -386,7 +577,12 @@ def _existing_display_result(
         raise ValueError(
             "existing candidate is not an exploratory display-only, alert-disabled artifact"
         )
-    activated = service.activate_model(session, record.version)
+    activated = _activate_display_model_fenced(
+        service,
+        session,
+        record.version,
+        expected_runtime_release=expected_runtime_release,
+    )
     return {
         "status": "promoted",
         "promoted": True,
@@ -406,15 +602,17 @@ def deploy_display_model(
     source_change_retries: int = DEFAULT_DISPLAY_SOURCE_CHANGE_RETRIES,
     retry_delay_seconds: float = DEFAULT_DISPLAY_RETRY_DELAY_SECONDS,
     require_activation: bool = False,
+    expected_runtime_release: str | None = None,
 ) -> dict[str, Any]:
     """Train once for display, retry source races, then explicitly activate.
 
-    The deterministic version makes Argo hook retries idempotent. Callers may
-    inspect a safe retained result interactively, while GitOps passes
-    ``require_activation=True`` so a reject/skip fails the PostSync hook instead
-    of reporting a false-green model rollout.
+    The deterministic version makes retries idempotent. Callers may inspect a
+    safe retained result while data accrues; strict operator workflows can set
+    ``require_activation=True`` when a reject/skip must fail the command.
     """
 
+    if expected_runtime_release is not None:
+        _require_runtime_release(session, expected_runtime_release)
     base_candidate_version = candidate_version
     current_revision = _current_source_revision(service, session)
     existing = session.get(ForecastModelRecord, candidate_version)
@@ -429,7 +627,12 @@ def deploy_display_model(
         )
         existing = session.get(ForecastModelRecord, candidate_version)
     if existing is not None:
-        result = _existing_display_result(service, session, existing)
+        result = _existing_display_result(
+            service,
+            session,
+            existing,
+            expected_runtime_release=expected_runtime_release,
+        )
         if require_activation and result.get("status") not in {
             "promoted",
             "already_active",
@@ -491,7 +694,12 @@ def deploy_display_model(
             raise ValueError(
                 "accepted display training did not persist an alert-disabled candidate"
             )
-        activated = service.activate_model(session, candidate_version)
+        activated = _activate_display_model_fenced(
+            service,
+            session,
+            candidate_version,
+            expected_runtime_release=expected_runtime_release,
+        )
         return {
             "status": "promoted",
             "promoted": True,
@@ -502,6 +710,179 @@ def deploy_display_model(
             "training": training_result,
             "activation": _jsonable(activated),
         }
+
+
+def retry_display_model_daily(
+    service: ForecastService,
+    session: Session,
+    *,
+    release_version: str,
+    source_change_retries: int = DEFAULT_DISPLAY_SOURCE_CHANGE_RETRIES,
+    retry_delay_seconds: float = DEFAULT_DISPLAY_RETRY_DELAY_SECONDS,
+    now_utc: datetime | None = None,
+) -> dict[str, Any]:
+    """Run at most one display-only model attempt per release and UTC day.
+
+    A release that already owns an accepted active champion is a permanent
+    no-op. A terminal attempt from the same UTC day is also a no-op, so a gate
+    rejection is retried only after new receipt-causal data has had until the
+    next day to accumulate. Promotion remains centralized in
+    :func:`deploy_display_model`; scheduled rejection is an expected success.
+    """
+
+    instant = now_utc or datetime.now(timezone.utc)
+    if instant.tzinfo is None:
+        raise ValueError("daily display retry time must be timezone-aware")
+    utc_day = instant.astimezone(timezone.utc).strftime("%Y%m%d")
+    release_base = _display_release_base(release_version)
+    normalized_release_version = release_base.removeprefix("display-")
+    _require_runtime_release(session, normalized_release_version)
+    candidate_version = _daily_display_candidate_version(
+        normalized_release_version, now_utc=instant
+    )
+    release_records = [
+        record
+        for record in session.scalars(select(ForecastModelRecord)).all()
+        if _belongs_to_display_release(record.version, release_base)
+    ]
+
+    champions = [
+        record for record in release_records if record.status == "champion"
+    ]
+    if champions:
+        if len(champions) != 1:
+            raise ValueError(
+                "current release does not have a unique display champion"
+            )
+        existing = _existing_display_result(
+            service,
+            session,
+            champions[0],
+            expected_runtime_release=normalized_release_version,
+        )
+        return {
+            **existing,
+            "release_version": normalized_release_version,
+            "utc_day": utc_day,
+        }
+
+    prior_activations = [
+        record
+        for record in release_records
+        if record.promoted_at_ms is not None and record.status == "retired"
+    ]
+    if prior_activations:
+        if any(
+            not _display_candidate_is_accepted(record)
+            for record in prior_activations
+        ):
+            raise ValueError(
+                "current release activation history contains an unsafe display artifact"
+            )
+        latest = max(
+            prior_activations,
+            key=lambda record: (int(record.promoted_at_ms or 0), record.version),
+        )
+        return {
+            "status": "retained",
+            "promoted": False,
+            "model_version": latest.version,
+            "release_version": normalized_release_version,
+            "utc_day": utc_day,
+            "reason": (
+                "Current application release activated previously; automatic retry "
+                "will not override a later rollback"
+            ),
+            "attempts": 0,
+            "reused_existing": True,
+        }
+
+    daily_today_records = [
+        record
+        for record in release_records
+        if _release_candidate_day(record.version, release_base) == utc_day
+    ]
+    bootstrap_today_records = [
+        record
+        for record in release_records
+        if _release_candidate_day(record.version, release_base) is None
+        and _record_utc_day(record, release_base) == utc_day
+    ]
+    today_records = daily_today_records + bootstrap_today_records
+    resumable = [record for record in today_records if record.status == "candidate"]
+    if len(resumable) > 1:
+        raise ValueError("multiple resumable display candidates exist for one UTC day")
+    if resumable:
+        raise ValueError(
+            "current release UTC-day display candidate was left by an interrupted "
+            "attempt; refusing an untracked same-day activation"
+        )
+    if daily_today_records:
+        if not _daily_display_attempt_is_completed(
+            session,
+            release_version=normalized_release_version,
+            utc_day=utc_day,
+        ):
+            raise ValueError(
+                "current release UTC-day display record has no completed attempt "
+                "marker; refusing to hide an interrupted job"
+            )
+    if today_records:
+        terminal = max(
+            today_records,
+            key=lambda record: (
+                record.trained_at_ms or record.created_at_ms,
+                record.version,
+            ),
+        )
+        return {
+            "status": "retained",
+            "promoted": False,
+            "model_version": terminal.version,
+            "release_version": normalized_release_version,
+            "utc_day": utc_day,
+            "reason": "Current release already completed its UTC-day display attempt",
+            "attempts": 0,
+            "reused_existing": True,
+        }
+
+    if not _claim_daily_display_attempt(
+        session,
+        release_version=normalized_release_version,
+        utc_day=utc_day,
+    ):
+        return {
+            "status": "retained",
+            "promoted": False,
+            "model_version": candidate_version,
+            "release_version": normalized_release_version,
+            "utc_day": utc_day,
+            "reason": "Current release already claimed its UTC-day display attempt",
+            "attempts": 0,
+            "reused_existing": True,
+        }
+
+    result = deploy_display_model(
+        service,
+        session,
+        candidate_version=candidate_version,
+        source_change_retries=source_change_retries,
+        retry_delay_seconds=retry_delay_seconds,
+        # A development-gate rejection is expected while causal data accrues;
+        # the CronJob must remain healthy and try a new deterministic day later.
+        require_activation=False,
+        expected_runtime_release=normalized_release_version,
+    )
+    _complete_daily_display_attempt(
+        session,
+        release_version=normalized_release_version,
+        utc_day=utc_day,
+    )
+    return {
+        **result,
+        "release_version": normalized_release_version,
+        "utc_day": utc_day,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -563,6 +944,30 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    retry_display = commands.add_parser(
+        "retry-display-daily",
+        help=(
+            "Bounded daily retry for the current immutable app release; stops "
+            "after an alert-disabled display champion activates."
+        ),
+    )
+    retry_display.add_argument(
+        "--release-version",
+        help="Immutable app/image version (defaults to APP_VERSION).",
+    )
+    retry_display.add_argument(
+        "--source-change-retries",
+        type=_nonnegative_int,
+        default=DEFAULT_DISPLAY_SOURCE_CHANGE_RETRIES,
+        help="Bounded retries inside today's attempt after a source-data race.",
+    )
+    retry_display.add_argument(
+        "--retry-delay-seconds",
+        type=_nonnegative_float,
+        default=DEFAULT_DISPLAY_RETRY_DELAY_SECONDS,
+        help="Delay between source-change retries.",
+    )
+
     evaluate = commands.add_parser(
         "evaluate",
         help=(
@@ -614,6 +1019,15 @@ def execute(
                 source_change_retries=args.source_change_retries,
                 retry_delay_seconds=args.retry_delay_seconds,
                 require_activation=args.require_activation,
+                expected_runtime_release=os.getenv("APP_VERSION") or None,
+            )
+        elif args.command == "retry-display-daily":
+            result = retry_display_model_daily(
+                service,
+                session,
+                release_version=args.release_version or os.getenv("APP_VERSION", ""),
+                source_change_retries=args.source_change_retries,
+                retry_delay_seconds=args.retry_delay_seconds,
             )
         elif args.command == "evaluate":
             result = service.evaluate_static_candidate(session, args.version)
