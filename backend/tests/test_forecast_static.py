@@ -14,8 +14,14 @@ from app.forecast import (
     ALERT_VALIDATION_PROTOCOL,
     BASELINE_VERSION,
     FORECAST_ENGINE_VERSION,
+    STATIC_ALERT_SAFETY_ENVELOPE,
+    STATIC_ARTIFACT_VERSION,
     STATIC_BANDS,
     STATIC_DISPLAY_PROTOCOL,
+    STATIC_DISPLAY_SAFETY_ENVELOPE,
+    STATIC_DISPLAY_SIGMA_EXPANSION,
+    STATIC_EVENT_LABELS_CAUSAL,
+    STATIC_EVENT_LABELS_RETROSPECTIVE,
     STATIC_FEATURE_COUNT,
     STATIC_FEATURE_SCHEMA,
     STATIC_INTERVAL_LEVEL,
@@ -23,11 +29,18 @@ from app.forecast import (
     STATIC_NETWORK_KIND,
     STATIC_PERSONAL_ARCHITECTURE,
     STATIC_PROMOTION_GATE_VERSION,
+    STATIC_REFERENCE_KIND,
     STATIC_RIDGE_ALPHA,
     STATIC_RIDGE_ALPHAS,
+    STATIC_HORIZON_SMOOTHNESS,
+    STATIC_SHRINK_KNOT_MINUTES,
+    STATIC_TRAJECTORY_METRICS,
+    STATIC_TREND_DECAY_MINUTES,
+    STATIC_TREND_LOOKBACK_MINUTES,
     STATIC_TRAINING_MODE,
     ForecastService,
     _Event,
+    _apply_static_predictor,
     _artifact_content_hash,
     _alert_episode_metrics,
     _alert_validation_gates,
@@ -35,12 +48,16 @@ from app.forecast import (
     _baseline_parameters,
     _dataset_fingerprint,
     _default_parameters,
+    _event_reference_prediction,
     _finite_sample_quantile_level,
     _model_parameters_hash,
     _static_artifact_is_valid,
     _static_predictor_hash,
     _static_reliability,
+    _static_reference_prediction,
+    _static_shrinkage_curve,
 )
+from app.forecast_events import EventEffectSample, fit_bounded_event_personalization
 from app.models import (
     BackendMetadataRecord,
     ForecastModelRecord,
@@ -83,6 +100,13 @@ def _promotion_metrics(
         "hypo_fpr": 0.10,
         "hypo_missed_episodes": 0.0,
         "low_zone_mae": horizon_mae,
+        "trajectory_max_step_mg_dl": 5.0,
+        "trajectory_p95_step_mg_dl": 3.0,
+        "trajectory_max_curvature_mg_dl": 4.0,
+        "trajectory_p95_curvature_mg_dl": 2.0,
+        "strong_trend_samples": 8.0,
+        "near_flat_strong_trend_rate": 0.0,
+        "strong_trend_direction_agreement": 1.0,
     }
 
 
@@ -93,7 +117,22 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
             "kind": "personalized_static_generic_residual",
             "architecture": STATIC_PERSONAL_ARCHITECTURE,
             "feature_schema": STATIC_FEATURE_SCHEMA,
+            "prediction_reference": STATIC_REFERENCE_KIND,
+            "reference_configuration": {
+                "trend_decay_minutes": STATIC_TREND_DECAY_MINUTES,
+                "trend_lookback_minutes": STATIC_TREND_LOOKBACK_MINUTES,
+                "quality_gated": True,
+            },
             "network_disabled_event_channels": ["meal", "rapid", "long"],
+            "event_personalization": fit_bounded_event_personalization([]),
+            "event_personalization_context": {
+                "label_mode": STATIC_EVENT_LABELS_CAUSAL,
+                "label_cutoff_ms": DATA_CUTOFF_MS,
+                "last_training_target_at_ms": DATA_CUTOFF_MS - 7 * 86_400_000,
+                "first_tuning_anchor_at_ms": DATA_CUTOFF_MS - 6 * 86_400_000,
+                "training_window_count": SAMPLE_COUNT,
+                "training_windows_sha256": "a" * 64,
+            },
         }
     )
     network = {
@@ -102,18 +141,17 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
         "x_mean": [0.0] * STATIC_FEATURE_COUNT,
         "x_scale": [1.0] * STATIC_FEATURE_COUNT,
         "alpha": STATIC_RIDGE_ALPHA,
+        "horizon_smoothness": STATIC_HORIZON_SMOOTHNESS,
         "coefficients": [[0.0] * 24 for _ in range(STATIC_FEATURE_COUNT)],
         "intercept": [0.0] * 24,
     }
     parameter_count = STATIC_FEATURE_COUNT * 24 + 24
-    band_weights = [0.25, 0.50, 0.50, 0.25]
-    blend: list[float] = []
-    band_definitions: list[dict[str, float | int]] = []
-    for (start, end), weight in zip(STATIC_BANDS, band_weights):
-        blend.extend([weight] * (((end - start) // 5) + 1))
-        band_definitions.append(
-            {"start_minutes": start, "end_minutes": end, "weight": weight}
-        )
+    shrink_knots = [1.0, 0.75, 0.50, 0.25]
+    blend = _static_shrinkage_curve(shrink_knots).tolist()
+    shrinkage_knots = [
+        {"minute": minute, "weight": weight}
+        for minute, weight in zip(STATIC_SHRINK_KNOT_MINUTES, shrink_knots)
+    ]
     sigma = [20.0] * 24
     candidate_metrics = _promotion_metrics(
         mae=18.0, rmse=19.0, horizon_mae=9.0, interval_score=35.0
@@ -188,6 +226,8 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
     ):
         for horizon in (5, 15, 30, 60, 120):
             evaluation[f"{prefix}_mae_{horizon}"] = metrics[f"mae_{horizon}"]
+        for metric_name in STATIC_TRAJECTORY_METRICS:
+            evaluation[f"{prefix}_{metric_name}"] = metrics[metric_name]
     for band_index in range(4):
         evaluation[f"candidate_coverage_band_{band_index}"] = candidate_metrics[
             f"coverage_band_{band_index}"
@@ -200,7 +240,7 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
         {
             "network": network,
             "model_selection": {
-                "protocol": "chronological-tuning-only-ridge-grid-v1",
+                "protocol": "chronological-tuning-only-smooth-shrink-ridge-grid-v2",
                 "criterion": "lowest_tuning_mae_then_stronger_regularization",
                 "selected_alpha": STATIC_RIDGE_ALPHA,
                 "selected_tuning_mae": 9.0,
@@ -208,7 +248,7 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
                     {
                         "alpha": alpha,
                         "tuning_mae": 9.0 if alpha == STATIC_RIDGE_ALPHA else 10.0,
-                        "band_weights": band_weights,
+                        "shrink_knots": shrink_knots,
                     }
                     for alpha in STATIC_RIDGE_ALPHAS
                 ],
@@ -220,7 +260,9 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
                 "quantile_method": "exact-order-statistic",
                 "point_bias": "disabled",
                 "low_guard_threshold_mg_dl": STATIC_LOW_GUARD_MG_DL,
-                "safety_envelope": "reference-interval-union-v1",
+                "safety_envelope": STATIC_ALERT_SAFETY_ENVELOPE,
+                "point_low_guard": True,
+                "sigma_expansion": 1.0,
                 "interval_level": STATIC_INTERVAL_LEVEL,
                 "sample_count": 32,
                 "finite_sample_quantile": _finite_sample_quantile_level(32),
@@ -230,11 +272,12 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
                 "reference_sigma_mg_dl": [24.0] * 24,
             },
             "artifact": {
-                "artifact_version": 6,
+                "artifact_version": STATIC_ARTIFACT_VERSION,
                 "engine_version": FORECAST_ENGINE_VERSION,
                 "architecture": STATIC_PERSONAL_ARCHITECTURE,
                 "feature_schema": STATIC_FEATURE_SCHEMA,
                 "network_kind": STATIC_NETWORK_KIND,
+                "reference_kind": STATIC_REFERENCE_KIND,
                 "training_mode": STATIC_TRAINING_MODE,
                 "promotion_gate_version": STATIC_PROMOTION_GATE_VERSION,
                 "accepted": accepted,
@@ -246,7 +289,7 @@ def _static_parameters(version: str, *, accepted: bool = True) -> dict:
                 "dataset_sha256": "d" * 64,
                 "feature_count": STATIC_FEATURE_COUNT,
                 "parameter_count": parameter_count,
-                "band_definitions": band_definitions,
+                "shrinkage_knots": shrinkage_knots,
                 "split": {
                     "train_days": 8,
                     "tuning_days": 1,
@@ -308,7 +351,23 @@ def _static_record(version: str, *, accepted: bool = True) -> ForecastModelRecor
 
 def _display_parameters(version: str) -> dict:
     parameters = _static_parameters(version)
+    parameters["event_personalization_context"]["label_mode"] = (
+        STATIC_EVENT_LABELS_RETROSPECTIVE
+    )
+    parameters["frozen_calibration"].update(
+        {
+            "safety_envelope": STATIC_DISPLAY_SAFETY_ENVELOPE,
+            "point_low_guard": False,
+            "sigma_expansion": STATIC_DISPLAY_SIGMA_EXPANSION,
+        }
+    )
+    parameters["residual_sigma"] = [
+        value * STATIC_DISPLAY_SIGMA_EXPANSION
+        for value in parameters["residual_sigma"]
+    ]
+    parameters["frozen_calibration"]["sigma_mg_dl"] = parameters["residual_sigma"]
     artifact = parameters["artifact"]
+    artifact["predictor_sha256"] = _static_predictor_hash(parameters)
     old_approval = artifact["approval"]
     candidate_metrics = old_approval["candidate_metrics"]
     reference_metrics = old_approval["reference_metrics"]
@@ -334,6 +393,7 @@ def _display_parameters(version: str) -> dict:
             "exploratory": 1,
             "unbiased_holdout": 0,
             "receipt_causal_validation": 0,
+            "receipt_causal_gate_required": 0,
             "prospective_pending": 0,
             "development_only": 0,
             "gate_receipt_causal_evidence_sufficient": 1,
@@ -361,7 +421,10 @@ def _display_parameters(version: str) -> dict:
         reference_horizon_mae=reference_horizon_mae,
     )
     artifact["accepted"] = True
+    artifact.setdefault("snapshot", {})["raw_source_sha256"] = "e" * 64
     artifact["receipt_causal_replay"] = {
+        "role": "historical_availability_diagnostic",
+        "source_snapshot_sha256": "e" * 64,
         "validated_for_activation": False,
         "window_count": 64,
         "local_day_count": 4,
@@ -375,6 +438,8 @@ def _display_parameters(version: str) -> dict:
         "alert_approved": False,
         "unbiased_holdout": False,
         "receipt_causal_validation": False,
+        "validation_clock": "sensor_measured_at",
+        "receipt_causal_evidence_required": False,
         "use_scope": "chart_only_not_for_dosing_or_alerts",
         "approved_model_version": version,
         "evaluated_at_ms": TRAINED_AT_MS,
@@ -502,6 +567,13 @@ def _add_pending_prospective_fixture(
     artifact["accepted"] = False
     artifact["trained_at_ms"] = freeze_time_ms
     artifact["data_cutoff_ms"] = cutoff_ms
+    parameters["event_personalization_context"].update(
+        {
+            "label_cutoff_ms": cutoff_ms,
+            "last_training_target_at_ms": cutoff_ms - 7 * 86_400_000,
+            "first_tuning_anchor_at_ms": cutoff_ms - 6 * 86_400_000,
+        }
+    )
     artifact["dataset_sha256"] = _dataset_fingerprint(training_readings, [])
     artifact["snapshot"] = {
         "last_reading_at_ms": cutoff_ms,
@@ -524,6 +596,8 @@ def _add_pending_prospective_fixture(
         "runtime_dependency_sha256": _model_parameters_hash(_baseline_parameters()),
         "predictor_sha256": artifact["predictor_sha256"],
     }
+    artifact["predictor_sha256"] = _static_predictor_hash(parameters)
+    artifact["approval"]["predictor_sha256"] = artifact["predictor_sha256"]
     artifact["content_sha256"] = _artifact_content_hash(parameters)
     predictor_hash = _static_predictor_hash(parameters)
     pending = ForecastModelRecord(
@@ -1155,11 +1229,21 @@ def test_pending_and_development_artifacts_cannot_activate(app, client):
                 service.activate_model(session, version)
 
 
-def test_display_only_artifact_can_activate_but_never_deliver_alerts(app, client):
+@pytest.mark.parametrize("receipt_windows, receipt_days", [(64, 4), (198, 2), (0, 0)])
+def test_display_only_artifact_can_activate_but_never_deliver_alerts(
+    app, client, receipt_windows, receipt_days,
+):
     del client
     service = app.state.forecast_service
     version = "static-display-only"
     parameters = _display_parameters(version)
+    parameters["artifact"]["receipt_causal_replay"].update(
+        window_count=receipt_windows, local_day_count=receipt_days,
+    )
+    parameters["artifact"]["evaluation"]["gate_receipt_causal_evidence_sufficient"] = int(
+        receipt_windows >= 32 and receipt_days >= 4
+    )
+    parameters["artifact"]["content_sha256"] = _artifact_content_hash(parameters)
     assert _static_artifact_is_valid(parameters) is True
 
     tampered = copy.deepcopy(parameters)
@@ -1868,16 +1952,16 @@ def test_training_freeze_allows_live_reading_append_strictly_after_cutoff(
         assert session.get(ForecastModelRecord, version) is not None
 
 
-def test_display_training_cleanly_rejects_insufficient_receipt_causal_evidence(
+def test_display_training_keeps_receipt_diagnostics_without_bypassing_point_gates(
     app,
     client,
-    monkeypatch,
 ):
     del client
     service = app.state.forecast_service
     version = "static-display-insufficient-causal-replay"
     base_ms = 1_700_006_400_000  # UTC midnight.
     step_ms = 5 * 60_000
+    bulk_received_at_ms = base_ms + 17 * 86_400_000 + 1_000
 
     with app.state.database.session_factory() as session:
         service._ensure_baseline(session)
@@ -1893,31 +1977,12 @@ def test_display_training_cleanly_rejects_insufficient_receipt_causal_evidence(
                     quality=1.0,
                     utc_offset_minutes=0,
                     payload_hash=f"{index:064x}"[-64:],
-                    received_at_ms=base_ms + index * step_ms + 1_000,
+                    received_at_ms=bulk_received_at_ms,
                 )
                 for index in range(17 * 24 * 12)
             ]
         )
         session.commit()
-
-        original_display_gates = service.static_display_gates
-
-        def point_gates_pass(*args, **kwargs):
-            return {**original_display_gates(*args, **kwargs), "accepted": True}
-
-        monkeypatch.setattr(service, "static_display_gates", point_gates_pass)
-        monkeypatch.setattr(
-            service,
-            "_prospective_causal_windows",
-            lambda _readings: (
-                [],
-                {
-                    "causal_history_rejections": 0,
-                    "causal_target_rejections": 1,
-                    "causal_stale_anchor_rejections": 0,
-                },
-            ),
-        )
 
         result = service.train_static_model(
             session,
@@ -1929,7 +1994,23 @@ def test_display_training_cleanly_rejects_insufficient_receipt_causal_evidence(
 
         assert result.status == "rejected"
         assert result.metrics["gate_receipt_causal_evidence_sufficient"] == 0
+        assert result.metrics["receipt_causal_gate_required"] == 0
+        assert result.metrics["candidate_equal_day_mae"] >= (
+            result.metrics["reference_equal_day_mae"] * 0.95
+        )
         assert stored is not None and stored.status == "rejected"
+        parameters = json.loads(stored.parameters_json)
+        source_hash = service._frozen_source_fingerprint(
+            session, cutoff_ms=stored.training_cutoff_ms,
+        )
+        assert parameters["artifact"]["snapshot"]["raw_source_sha256"] == source_hash
+        assert parameters["artifact"]["receipt_causal_replay"]["source_snapshot_sha256"] == source_hash
+        assert parameters["artifact"]["receipt_causal_replay"]["window_count"] == 0
+        assert parameters["artifact"]["receipt_causal_replay"]["local_day_count"] == 0
+        assert all(
+            row.received_at_ms == bulk_received_at_ms
+            for row in service._load_readings(session, through_ms=stored.training_cutoff_ms)
+        )
 
 
 def test_non_finite_artifact_fails_closed_without_raising(app, client):
@@ -2062,3 +2143,309 @@ def test_latest_training_attempt_schema_is_strict():
         ForecastLatestTrainingAttempt(
             **{**payload, "metrics": {"candidate_mae_30": "21.5"}}
         )
+
+
+def test_static_v4_reference_uses_quality_gated_damped_recent_trend() -> None:
+    anchor = 1_900_000_000_000
+    readings = [
+        GlucoseReadingRecord(
+            reading_id=f"trend-reference-{index}",
+            measured_at_ms=anchor - (11 - index) * 5 * 60_000,
+            glucose_mg_dl=100.0 + 3.0 * index,
+            trend_mg_dl_min=0.6,
+            quality=1.0,
+            payload_hash=f"{index:064x}"[-64:],
+            received_at_ms=anchor - (11 - index) * 5 * 60_000,
+        )
+        for index in range(12)
+    ]
+    parameters = _default_parameters()
+
+    persistence = _event_reference_prediction(readings, [], anchor, parameters)
+    trend = _static_reference_prediction(readings, [], anchor, parameters)
+
+    np.testing.assert_array_equal(
+        persistence, np.full(24, readings[-1].glucose_mg_dl)
+    )
+    assert trend[0] > readings[-1].glucose_mg_dl
+    assert trend[-1] > trend[0]
+    assert np.all(np.diff(trend) > 0.0)
+
+
+def test_smooth_shrinkage_removes_the_legacy_thirty_minute_step() -> None:
+    parameters = _static_parameters("smooth-shrink-regression")
+    reference = np.full(24, 120.0)
+    raw = np.linspace(112.0, 92.0, 24)
+    sigma = np.full(24, 20.0)
+    smooth_blend = _static_shrinkage_curve((1.0, 0.25, 0.25, 0.25))
+    parameters["persistence_blend_weights"] = smooth_blend.tolist()
+
+    smooth, _ = _apply_static_predictor(raw, reference, sigma, parameters)
+    legacy_blend = np.asarray([1.0] * 6 + [0.25] * 18, dtype=np.float64)
+    legacy = reference + legacy_blend * (raw - reference)
+
+    legacy_boundary_jump = abs(float(legacy[6] - legacy[5]))
+    smooth_boundary_jump = abs(float(smooth[6] - smooth[5]))
+    assert legacy_boundary_jump > 8.0
+    assert smooth_boundary_jump < 1.0
+    assert np.max(np.abs(np.diff(smooth, n=2))) < np.max(
+        np.abs(np.diff(legacy, n=2))
+    )
+
+
+def test_previous_static_artifact_version_fails_closed_with_fresh_hashes() -> None:
+    parameters = _static_parameters("legacy-static-artifact")
+    parameters["artifact"]["artifact_version"] = STATIC_ARTIFACT_VERSION - 1
+    parameters["artifact"]["predictor_sha256"] = _static_predictor_hash(parameters)
+    parameters["artifact"]["content_sha256"] = _artifact_content_hash(parameters)
+
+    assert _static_artifact_is_valid(parameters) is False
+
+
+def test_chart_calibration_preserves_selected_center_without_alert_guard() -> None:
+    display = _display_parameters("chart-calibration-scope")
+    alert = _static_parameters("alert-calibration-scope")
+    raw = np.linspace(120.0, 160.0, 24)
+    reference = np.linspace(65.0, 85.0, 24)
+    input_sigma = np.full(24, 20.0)
+    expected = reference + np.asarray(display["persistence_blend_weights"]) * (
+        raw - reference
+    )
+
+    chart_point, chart_sigma = _apply_static_predictor(
+        raw, reference, input_sigma, display
+    )
+    alert_point, alert_sigma = _apply_static_predictor(
+        raw, reference, input_sigma, alert
+    )
+    np.testing.assert_allclose(chart_point, expected)
+    np.testing.assert_allclose(chart_sigma, display["residual_sigma"])
+    np.testing.assert_allclose(alert_point, reference)
+    assert np.all(alert_sigma >= chart_sigma)
+
+    batch_point, batch_sigma = _apply_static_predictor(
+        np.vstack([raw, raw]), np.vstack([reference, reference]), input_sigma, display
+    )
+    np.testing.assert_allclose(batch_point, np.vstack([chart_point, chart_point]))
+    np.testing.assert_allclose(batch_sigma, np.vstack([chart_sigma, chart_sigma]))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sigma_expansion", 1.0),
+        ("point_low_guard", True),
+        ("safety_envelope", "unvalidated-envelope"),
+    ],
+)
+def test_chart_calibration_contract_cannot_be_changed_with_fresh_hashes(
+    field: str, value: object
+) -> None:
+    parameters = _display_parameters("chart-calibration-tamper")
+    parameters["frozen_calibration"][field] = value
+    predictor_hash = _static_predictor_hash(parameters)
+    parameters["artifact"]["predictor_sha256"] = predictor_hash
+    parameters["artifact"]["approval"]["predictor_sha256"] = predictor_hash
+    parameters["artifact"]["content_sha256"] = _artifact_content_hash(parameters)
+
+    assert _static_artifact_is_valid(parameters) is False
+
+
+def test_prospective_approval_cannot_use_chart_only_calibration() -> None:
+    parameters = _static_parameters("scope-cannot-escalate")
+    parameters["frozen_calibration"].update(
+        {
+            "safety_envelope": STATIC_DISPLAY_SAFETY_ENVELOPE,
+            "point_low_guard": False,
+            "sigma_expansion": STATIC_DISPLAY_SIGMA_EXPANSION,
+        }
+    )
+    predictor_hash = _static_predictor_hash(parameters)
+    parameters["artifact"]["predictor_sha256"] = predictor_hash
+    parameters["artifact"]["approval"]["predictor_sha256"] = predictor_hash
+    parameters["artifact"]["content_sha256"] = _artifact_content_hash(parameters)
+
+    assert _static_artifact_is_valid(parameters) is False
+
+
+@pytest.mark.parametrize(
+    "section, field, value",
+    [
+        ("approval", "protocol", "retrospective-exploratory-display-v1"),
+        ("approval", "receipt_causal_validation", True),
+        ("approval", "receipt_causal_evidence_required", True),
+        ("approval", "validation_clock", "backend_received_at"),
+        ("approval", "unbiased_holdout", True),
+        ("receipt_causal_replay", "validated_for_activation", True),
+        ("receipt_causal_replay", "role", "activation_requirement"),
+        ("receipt_causal_replay", "window_count", -1),
+        ("receipt_causal_replay", "window_count", True),
+        ("receipt_causal_replay", "local_day_count", 4.5),
+        ("receipt_causal_replay", "local_day_count", 65),
+        ("receipt_causal_replay", "causal_target_rejections", -1),
+        ("receipt_causal_replay", "source_snapshot_sha256", "f" * 64),
+        ("snapshot", "raw_source_sha256", None),
+        ("evaluation", "receipt_causal_gate_required", 1),
+        ("evaluation", "gate_receipt_causal_evidence_sufficient", 0),
+    ],
+)
+def test_sensor_time_display_cannot_falsify_receipt_evidence_after_rehash(
+    section, field, value,
+) -> None:
+    parameters = _display_parameters("receipt-diagnostics-fail-closed")
+    assert _static_artifact_is_valid(parameters)
+    parameters["artifact"][section][field] = value
+    parameters["artifact"]["content_sha256"] = _artifact_content_hash(parameters)
+
+    assert _static_artifact_is_valid(parameters) is False
+
+
+def test_retrospective_event_evidence_cannot_enter_pending_or_alert_scope() -> None:
+    parameters = _static_parameters("retrospective-evidence-cannot-escalate")
+    parameters["event_personalization_context"]["label_mode"] = (
+        STATIC_EVENT_LABELS_RETROSPECTIVE
+    )
+    predictor_hash = _static_predictor_hash(parameters)
+    parameters["artifact"]["predictor_sha256"] = predictor_hash
+    parameters["artifact"]["approval"]["predictor_sha256"] = predictor_hash
+    parameters["artifact"]["content_sha256"] = _artifact_content_hash(parameters)
+
+    assert _static_artifact_is_valid(parameters, require_approved=False) is False
+    assert _static_artifact_is_valid(parameters) is False
+
+
+def test_learned_event_amplitude_requires_joint_validation_even_with_fresh_hashes() -> None:
+    parameters = _display_parameters("event-joint-evidence-required")
+    effect = np.asarray([20.0, 40.0, 60.0, 80.0])
+    event_artifact = fit_bounded_event_personalization(
+        [
+            EventEffectSample(
+                event_id=f"meal-{index}",
+                kind="meal",
+                occurred_at_ms=DATA_CUTOFF_MS - (20 - index) * 86_400_000,
+                population_effect_mg_dl=effect,
+                observed_residual_mg_dl=effect * 2.0,
+            )
+            for index in range(10)
+        ]
+    )
+    assert event_artifact["kinds"]["meal"]["accepted"] is True
+    parameters["event_personalization"] = event_artifact
+    predictor_hash = _static_predictor_hash(parameters)
+    parameters["artifact"]["predictor_sha256"] = predictor_hash
+    parameters["artifact"]["approval"]["predictor_sha256"] = predictor_hash
+    parameters["artifact"]["content_sha256"] = _artifact_content_hash(parameters)
+
+    assert _static_artifact_is_valid(parameters, require_approved=False) is False
+    assert _static_artifact_is_valid(parameters) is False
+
+
+def test_event_training_targets_cannot_overlap_tuning_partition() -> None:
+    parameters = _display_parameters("event-target-partition-boundary")
+    context = parameters["event_personalization_context"]
+    context["last_training_target_at_ms"] = context["first_tuning_anchor_at_ms"]
+    predictor_hash = _static_predictor_hash(parameters)
+    parameters["artifact"]["predictor_sha256"] = predictor_hash
+    parameters["artifact"]["approval"]["predictor_sha256"] = predictor_hash
+    parameters["artifact"]["content_sha256"] = _artifact_content_hash(parameters)
+
+    assert _static_artifact_is_valid(parameters, require_approved=False) is False
+
+
+def test_display_gate_does_not_claim_alert_safety_from_sparse_episode_evidence() -> None:
+    candidate = _promotion_metrics(
+        mae=18.0, rmse=19.0, horizon_mae=9.0, interval_score=35.0
+    )
+    reference = _promotion_metrics(
+        mae=20.0, rmse=22.0, horizon_mae=10.0, interval_score=40.0
+    )
+    candidate.update(
+        {
+            "hypo_low_episodes": 3.0,
+            "hypo_low_days": 3.0,
+            "hypo_recall": 0.50,
+            "hypo_fpr": 0.30,
+            "hypo_missed_episodes": 2.0,
+            "near_flat_strong_trend_rate": 0.40,
+            "strong_trend_direction_agreement": 0.60,
+        }
+    )
+    days = [
+        {"candidate_mae": 18.0, "reference_mae": 20.0, "pinned_mae": 20.0}
+        for _ in range(4)
+    ]
+    display = ForecastService.static_display_gates(
+        candidate, reference, reference, days, test_day_count=4
+    )
+    prospective = ForecastService.static_promotion_gates(
+        candidate, reference, reference, days, test_day_count=4
+    )
+
+    assert display["accepted"] is True
+    assert display["low_zone_display_safe"] is True
+    assert display["hypo_evidence_sufficient"] is False
+    assert display["hypo_safe"] is False
+    assert display["strong_trend_preserved"] is False
+    assert prospective["accepted"] is False
+
+    for metric, value in (
+        ("low_zone_mae", 12.0),
+        ("trajectory_max_curvature_mg_dl", 20.0),
+        ("coverage_band_0", 0.60),
+    ):
+        unsafe = {**candidate, metric: value}
+        assert ForecastService.static_display_gates(
+            unsafe, reference, reference, days, test_day_count=4
+        )["accepted"] is False
+
+
+def test_pending_prospective_evaluation_rejects_chart_only_calibration(app, client):
+    del client
+    service = app.state.forecast_service
+    version = "pending-chart-scope"
+    with app.state.database.session_factory() as session:
+        _add_pending_prospective_fixture(session, service, version)
+        pending = session.get(ForecastModelRecord, version)
+        assert pending is not None
+        parameters = json.loads(pending.parameters_json)
+        parameters["event_personalization_context"]["label_mode"] = (
+            STATIC_EVENT_LABELS_RETROSPECTIVE
+        )
+        parameters["frozen_calibration"].update(
+            {
+                "safety_envelope": STATIC_DISPLAY_SAFETY_ENVELOPE,
+                "point_low_guard": False,
+                "sigma_expansion": STATIC_DISPLAY_SIGMA_EXPANSION,
+            }
+        )
+        predictor_hash = _static_predictor_hash(parameters)
+        parameters["artifact"]["predictor_sha256"] = predictor_hash
+        parameters["artifact"]["approval"]["predictor_sha256"] = predictor_hash
+        parameters["artifact"]["content_sha256"] = _artifact_content_hash(parameters)
+        pending.parameters_json = json.dumps(parameters, separators=(",", ":"))
+        session.commit()
+
+        result = service.evaluate_static_candidate(session, version)
+        assert result.status == "rejected"
+        assert "prospective protocol" in result.reason
+
+
+@pytest.mark.parametrize("kind", ["rapid", "long"])
+def test_static_activity_timing_is_not_mislabeled_as_personalized(kind: str) -> None:
+    parameters = _static_parameters("static-activity-prior")
+    parameters["evidence_counts"][kind] = 30
+    event = _Event(
+        event_id="b620e0e2-2217-4c99-afbe-954e1256c737",
+        occurred_at_ms=TRAINED_AT_MS,
+        kind=kind,
+        label="test insulin",
+        amount=5.0,
+    )
+    activities = ForecastService()._activities(
+        [event], TRAINED_AT_MS, parameters
+    )
+
+    assert len(activities) == 1
+    assert activities[0].profile_source == "population_prior"
+    assert activities[0].identifiability == "not_identifiable"
+    assert activities[0].action_model in {"population_prior", "basal_depot"}

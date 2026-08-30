@@ -596,24 +596,52 @@ metadata keeps older clients compatible while making uncertainty explicit: `onse
 `peak_low_ms`, `peak_high_ms`, `end_low_ms`, `end_high_ms`, `attribution_confidence`,
 `identifiability`, `action_model`, and `overlap_count`. `peak_ms` and `end_ms` remain the
 central representatives; the interval fields must be used whenever they are available.
-The active static predictor deliberately keeps meal, NovoRapid, and Tresiba on bounded
-population-prior curves. The available event records are too few and too overlapped to identify
-separate personal action profiles safely. Simultaneous records remain separate, every overlap
-reduces attribution confidence, meal contribution is non-negative, insulin contribution is
-non-positive, and no event contributes before it starts. These curves are explanatory model
-estimates, not causal measurements, pharmacokinetic claims, or dosing recommendations.
+Static activity timing remains a population-prior estimate: sparse intake records cannot
+identify personal pharmacokinetics. The forecast can learn only a small per-kind amplitude
+correction around those priors. It uses only training-partition targets, keeps every
+meal/injection as one group, and excludes same-kind overlap per horizon. Prospective builds
+require events known at each historical anchor. Chart-only builds may additionally use
+late-imported training labels present in the frozen snapshot; that retrospective label mode,
+snapshot cutoff, training-window hash/count, and final training-target timestamp are recorded
+and cannot enter prospective staging. Tuning, calibration, and evaluation keep their causal
+event inputs. Horizons affected by a subsequent recorded intake of any kind are excluded from
+amplitude fitting, so the earlier event does not get credit for a later intervention.
+At least eight independent groups (six fit, two chronological validation) and twelve
+prior-equivalent groups of shrinkage are required. Meal/rapid scales stay within 0.65–1.35
+with a 30 mg/dL aggregate correction cap; long-insulin scales stay within 0.80–1.20 with a
+12 mg/dL cap. Held-out event-group and low-zone noninferiority checks assess the exact capped
+runtime transform. A second joint check tests the sum of proposed corrections on windows
+containing only held-out learned-channel event groups, with the same per-kind caps and final
+clipping as inference. At least two held-out groups per accepted kind must remain, and both
+group-balanced error and low-zone noninferiority must pass. This prevents meal and insulin
+corrections from independently explaining the same residual twice. Unsupported or jointly
+rejected kinds retain their prior. The nested artifact records group counts, split hashes,
+scales, separate event-validation metrics, and `alert_approved=false`. Overall chart-selection
+metrics do not establish personal event sensitivity when the causal test days lack intake logs.
+Simultaneous records remain separate, every overlap reduces attribution confidence, and no
+event contributes before it starts. These are explanatory estimates, not causal measurements,
+pharmacokinetic claims, or dosing recommendations.
 
-The manually trained model is a dependency-light NumPy linear ridge residual head with 24
-direct horizons. Its 138 causal inputs contain glucose deltas and quality masks from the
+The v8 manually trained model combines a quality-gated, damped recent trend and bounded event
+reference with a dependency-light NumPy ridge residual head for 24 direct horizons. Its 138
+causal inputs contain glucose deltas and quality masks from the
 detailed two-hour trace, progressively coarser samples through 72 hours,
 variability/dynamics summaries, daily harmonics, weekday phase, and current state. It receives
-no learned meal/rapid/long channels. A fixed chronological tuning day selects regularization
-from the checksummed `10, 30, 100, 300, 1000` grid and independently selects four horizon-band
-shrinkage weights. Neither choice sees calibration or retrospective selection days. The
-residual is added to event-aware persistence, then those weights can shrink it back toward the
-safe reference.
+no flexible learned meal/rapid/long channels; the bounded event correction is in the reference.
+A fixed chronological tuning day selects regularization from the checksummed
+`10, 30, 100, 300, 1000` grid and non-increasing shrinkage knots at 5/30/60/120 minutes.
+Interpolating those knots and smoothing residual targets across horizons removes the former
+30-minute band jumps. Neither choice sees calibration or retrospective selection days.
+
 Point-bias calibration is disabled. Exact finite-sample split-conformal 80% intervals and
-their order-statistic rank are frozen inside the checksummed artifact. The one-shot prospective
+their order-statistic rank are frozen inside the checksummed artifact. Chart-only models use
+`chart-only-conformal-v1`: their selected center is not clamped to the reference, and their
+frozen sigma includes a code-owned 1.05 finite-sample margin. Prospective/alert models retain
+`reference-interval-union-v1` and the low-glucose point guard. A chart envelope cannot be
+registered or approved as an alert predictor. Chart selection still requires independent-day
+improvement, horizon/low-zone noninferiority, coverage, interval score, and continuity; sparse
+episode recall and reference-trend agreement remain diagnostics, not alert-safety claims.
+The one-shot prospective
 approval may replace only the evaluation/reliability envelope; it never updates weights, blend,
 or calibration. Once that decision is final, later CGM values are monitoring scores only and
 never update confidence or the active version. Live sensor-quality and meal uncertainty may
@@ -696,6 +724,17 @@ exit code so a PostSync hook cannot claim deployment success. The stored approva
 keeps `alert_approved=false`; this command cannot enable forecast notifications. Re-running the
 same source revision resumes an accepted-but-not-yet-activated candidate or safely no-ops an
 already decided version; a changed source revision can use a deterministic suffixed attempt.
+
+The chart protocol is `retrospective-sensor-time-display-v2`: evaluation is explicitly indexed
+by sensor measurement time, so a historical backfill can be used without pretending it arrived
+live. Receipt-causal replay counts and rejections are retained as internally checked diagnostics,
+not as chart activation requirements. They bind to the frozen raw-source SHA-256, which includes
+actual receipt timestamps as well as sensor and intake data. The artifact states `validation_clock=sensor_measured_at`,
+`receipt_causal_evidence_required=false`, `receipt_causal_validation=false`, and
+`validated_for_activation=false` for that replay. Four independent retrospective selection days
+and all chart point/interval/continuity gates remain required. Prospective evaluation still uses
+real receipt timestamps and the full frozen fourteen-day protocol; this display exception cannot
+approve alerts or dosing.
 
 This remains an experimental conditional visualization. It does not calculate a dose and
 assumes no unrecorded food, insulin, exercise, illness, or sensor error.

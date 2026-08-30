@@ -224,6 +224,13 @@ def _promotion_metrics(
         "hypo_fpr": 0.10,
         "hypo_missed_episodes": hypo_missed_episodes,
         "low_zone_mae": short_mae,
+        "trajectory_max_step_mg_dl": 5.0,
+        "trajectory_p95_step_mg_dl": 3.0,
+        "trajectory_max_curvature_mg_dl": 4.0,
+        "trajectory_p95_curvature_mg_dl": 2.0,
+        "strong_trend_samples": 8.0,
+        "near_flat_strong_trend_rate": 0.0,
+        "strong_trend_direction_agreement": 1.0,
     }
 
 
@@ -399,6 +406,33 @@ def test_promotion_gate_rejects_hypo_or_day_regression_vs_pinned_model() -> None
     )
     assert day_result["no_day_regression_over_2pct"] is False
     assert day_result["accepted"] is False
+
+
+def test_promotion_gate_rejects_discontinuous_forecast_trajectory() -> None:
+    candidate, reference, day_results = _safe_gate_inputs()
+    candidate["trajectory_max_curvature_mg_dl"] = 20.0
+    candidate["trajectory_p95_curvature_mg_dl"] = 12.0
+
+    result = ForecastService.static_promotion_gates(
+        candidate, reference, reference, day_results, test_day_count=4
+    )
+
+    assert result["trajectory_continuity_safe"] is False
+    assert result["accepted"] is False
+
+
+def test_promotion_gate_rejects_flattening_of_observed_strong_trend() -> None:
+    candidate, reference, day_results = _safe_gate_inputs()
+    candidate["near_flat_strong_trend_rate"] = 0.50
+    candidate["strong_trend_direction_agreement"] = 0.50
+
+    result = ForecastService.static_promotion_gates(
+        candidate, reference, reference, day_results, test_day_count=4
+    )
+
+    assert result["strong_trend_evidence_sufficient"] is True
+    assert result["strong_trend_preserved"] is False
+    assert result["accepted"] is False
 
 
 def test_static_validator_rejects_nonzero_point_bias_even_with_fresh_hash() -> None:

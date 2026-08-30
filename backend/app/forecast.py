@@ -8,6 +8,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass, replace
+from itertools import product
 from typing import Any, Callable, Sequence
 from uuid import UUID, uuid4
 
@@ -16,6 +17,15 @@ from sqlalchemy import Integer, and_, cast, delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .forecast_events import (
+    EVENT_KINDS,
+    EventEffectSample,
+    EventResponseWindow,
+    apply_bounded_event_personalization,
+    combined_event_personalization_is_valid,
+    fit_bounded_event_personalization,
+    gate_combined_event_personalization,
+)
 from .models import (
     AnalysisRecord,
     BackendMetadataRecord,
@@ -71,8 +81,8 @@ V3_FEATURE_SCHEMA = "context-sequence-v3"
 V3_NETWORK_KIND = "contextual_gated_v3"
 PERSONAL_ARCHITECTURE = "personalized-contextual-gated-mlp-direct-24-v3"
 LEGACY_PERSONAL_ARCHITECTURE = "personalized-hybrid-mlp-direct-24-v2"
-STATIC_PERSONAL_ARCHITECTURE = "personalized-static-ridge-residual-v3"
-FORECAST_ENGINE_VERSION = "forecast-engine-v7-regularized-residual"
+STATIC_PERSONAL_ARCHITECTURE = "personalized-static-ridge-residual-v4"
+FORECAST_ENGINE_VERSION = "forecast-engine-v8-trend-smooth-residual"
 ACTIVE_MODEL_METADATA_KEY = "active_forecast_model"
 ACTIVATION_HISTORY_METADATA_KEY = "forecast_model_activation_history"
 GLUCOSE_SOURCE_REVISION_METADATA_KEY = "forecast_glucose_source_revision"
@@ -80,16 +90,37 @@ STATIC_TRAINING_MODE = "manual"
 STATIC_INTERVAL_LEVEL = 0.80
 STATIC_INTERVAL_Z = 1.2816
 STATIC_LOW_GUARD_MG_DL = 90.0
+STATIC_ALERT_SAFETY_ENVELOPE = "reference-interval-union-v1"
+STATIC_DISPLAY_SAFETY_ENVELOPE = "chart-only-conformal-v1"
+STATIC_DISPLAY_SIGMA_EXPANSION = 1.05
 STATIC_TRAINING_SEED = 20_260_805
-STATIC_FEATURE_SCHEMA = "generic-glucose-context-v2"
-STATIC_NETWORK_KIND = "static_generic_ridge_v3"
+STATIC_FEATURE_SCHEMA = "generic-glucose-context-v3"
+STATIC_NETWORK_KIND = "static_generic_ridge_v4"
+STATIC_ARTIFACT_VERSION = 7
 STATIC_FEATURE_COUNT = 138
 STATIC_RIDGE_ALPHA = 100.0
 STATIC_RIDGE_ALPHAS = (10.0, 30.0, 100.0, 300.0, 1_000.0)
+STATIC_REFERENCE_KIND = "quality-gated-damped-trend-events-v1"
+STATIC_EVENT_LABELS_CAUSAL = "anchor-known-training-labels-v1"
+STATIC_EVENT_LABELS_RETROSPECTIVE = "retrospective-training-labels-v1"
+STATIC_TREND_DECAY_MINUTES = 42.0
+STATIC_TREND_LOOKBACK_MINUTES = 55
+STATIC_HORIZON_SMOOTHNESS = 2.0
+STATIC_SHRINK_GRID = (0.0, 0.25, 0.50, 0.75, 1.0)
+STATIC_SHRINK_KNOT_MINUTES = (5, 30, 60, 120)
+STATIC_TRAJECTORY_METRICS = (
+    "trajectory_max_step_mg_dl",
+    "trajectory_p95_step_mg_dl",
+    "trajectory_max_curvature_mg_dl",
+    "trajectory_p95_curvature_mg_dl",
+    "strong_trend_samples",
+    "near_flat_strong_trend_rate",
+    "strong_trend_direction_agreement",
+)
 STATIC_PURGE_MINUTES = HORIZON_MINUTES
 STATIC_PURGE_WINDOWS = STATIC_PURGE_MINUTES // STEP_MINUTES
 STATIC_PROMOTION_GATE_VERSION = "independent-day-block-hypo-safe-v3"
-STATIC_DISPLAY_PROTOCOL = "retrospective-exploratory-display-v1"
+STATIC_DISPLAY_PROTOCOL = "retrospective-sensor-time-display-v2"
 STATIC_MIN_TRAIN_DAYS = 8
 STATIC_TUNING_DAYS = 1
 STATIC_CALIBRATION_DAYS = 2
@@ -428,6 +459,47 @@ def _validated_vector(value: Any, *, positive: bool = False) -> np.ndarray | Non
     return result
 
 
+def _static_shrinkage_curve(knot_weights: Sequence[float]) -> np.ndarray:
+    """Interpolate a conservative, horizon-smooth persistence blend.
+
+    The previous four independent step bands could turn an otherwise smooth
+    residual forecast into a visible jump at 30/35, 60/65, or 90/95 minutes.
+    A monotone knot curve keeps the same low-variance shrinkage idea while making
+    every adjacent five-minute weight continuous.
+    """
+
+    knots = np.asarray(knot_weights, dtype=np.float64)
+    if (
+        knots.shape != (len(STATIC_SHRINK_KNOT_MINUTES),)
+        or not np.isfinite(knots).all()
+        or np.any(knots < 0.0)
+        or np.any(knots > 1.0)
+        or np.any(np.diff(knots) > 1e-12)
+    ):
+        raise ValueError("static shrinkage knots must be finite and non-increasing")
+    horizons = np.arange(
+        STEP_MINUTES, HORIZON_MINUTES + STEP_MINUTES, STEP_MINUTES, dtype=np.float64
+    )
+    return np.interp(
+        horizons,
+        np.asarray(STATIC_SHRINK_KNOT_MINUTES, dtype=np.float64),
+        knots,
+    )
+
+
+def _static_horizon_smoother() -> np.ndarray:
+    """Return the code-owned second-difference smoother for residual targets."""
+
+    second_difference = np.zeros((HORIZON_STEPS - 2, HORIZON_STEPS), dtype=np.float64)
+    for index in range(HORIZON_STEPS - 2):
+        second_difference[index, index : index + 3] = (1.0, -2.0, 1.0)
+    penalty = second_difference.T @ second_difference
+    return np.linalg.solve(
+        np.eye(HORIZON_STEPS, dtype=np.float64) + STATIC_HORIZON_SMOOTHNESS * penalty,
+        np.eye(HORIZON_STEPS, dtype=np.float64),
+    )
+
+
 def _finite_sample_quantile_level(
     sample_count: int, coverage: float = STATIC_INTERVAL_LEVEL
 ) -> float:
@@ -444,13 +516,21 @@ def _apply_static_predictor(
     sigma: np.ndarray,
     parameters: dict[str, Any],
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Apply immutable persistence shrinkage and frozen calibration."""
+    """Apply immutable shrinkage and the calibration for this model's scope.
+
+    The chart-only predictor keeps its evaluated central estimate and conformal
+    band. Only the separately validated prospective/alert scope unions that band
+    with the reference and applies the low-glucose guard; doing so to a chart
+    predictor would change the point trajectory that was actually selected.
+    """
 
     blend = _validated_vector(parameters.get("persistence_blend_weights"))
     calibration = parameters.get("frozen_calibration")
     if blend is None or np.any(blend < 0.0) or np.any(blend > 1.0):
         return prediction, sigma
     if not isinstance(calibration, dict):
+        return prediction, sigma
+    if not _static_calibration_scope_is_valid(calibration):
         return prediction, sigma
     bias = _validated_vector(calibration.get("bias_mg_dl"))
     frozen_sigma = _validated_vector(calibration.get("sigma_mg_dl"), positive=True)
@@ -465,10 +545,15 @@ def _apply_static_predictor(
     ):
         return prediction, sigma
     reference = np.asarray(reference_prediction, dtype=np.float64)
+    display_only = (
+        calibration["safety_envelope"] == STATIC_DISPLAY_SAFETY_ENVELOPE
+    )
     if prediction.ndim == 1:
         if reference.shape != (HORIZON_STEPS,):
             return prediction, sigma
         shrunk = np.clip(reference + blend * (prediction - reference), 20.0, 600.0)
+        if display_only:
+            return shrunk, frozen_sigma.copy()
         # Preserve every low-glucose signal emitted by either trajectory. This
         # makes the point forecast's <70 false-safe set a subset of the reference
         # model's false-safe set without shifting ordinary-range predictions.
@@ -486,6 +571,8 @@ def _apply_static_predictor(
         return prediction, sigma
     shrunk = reference + blend.reshape(1, -1) * (prediction - reference)
     shrunk = np.clip(shrunk, 20.0, 600.0)
+    if display_only:
+        return shrunk, np.broadcast_to(frozen_sigma, shrunk.shape).copy()
     shrunk = np.where(
         (shrunk <= STATIC_LOW_GUARD_MG_DL)
         | (reference <= STATIC_LOW_GUARD_MG_DL),
@@ -496,6 +583,25 @@ def _apply_static_predictor(
         shrunk, reference, frozen_sigma, reference_sigma
     )
     return shrunk, safe_sigma
+
+
+def _static_calibration_scope_is_valid(calibration: dict[str, Any]) -> bool:
+    envelope = calibration.get("safety_envelope")
+    if envelope == STATIC_DISPLAY_SAFETY_ENVELOPE:
+        expansion, low_guard = STATIC_DISPLAY_SIGMA_EXPANSION, False
+    elif envelope == STATIC_ALERT_SAFETY_ENVELOPE:
+        expansion, low_guard = 1.0, True
+    else:
+        return False
+    return bool(
+        calibration.get("point_low_guard") is low_guard
+        and math.isclose(
+            _finite(calibration.get("sigma_expansion"), -1.0),
+            expansion,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+    )
 
 
 def _reference_safety_sigma(
@@ -1383,6 +1489,8 @@ def _static_artifact_is_valid(
     evaluation = artifact.get("evaluation") if isinstance(artifact, dict) else None
     split = artifact.get("split") if isinstance(artifact, dict) else None
     approval = artifact.get("approval") if isinstance(artifact, dict) else None
+    reference_configuration = parameters.get("reference_configuration")
+    event_personalization_context = parameters.get("event_personalization_context")
     if not all(
         isinstance(item, dict)
         for item in (
@@ -1393,6 +1501,8 @@ def _static_artifact_is_valid(
             reliability,
             evaluation,
             split,
+            reference_configuration,
+            event_personalization_context,
         )
     ):
         return False
@@ -1427,11 +1537,21 @@ def _static_artifact_is_valid(
         and parameters.get("architecture") == STATIC_PERSONAL_ARCHITECTURE
         and parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA
         and parameters.get("kind") == "personalized_static_generic_residual"
-        and artifact.get("artifact_version") == 6
+        and parameters.get("prediction_reference") == STATIC_REFERENCE_KIND
+        and reference_configuration.get("quality_gated") is True
+        and math.isclose(
+            _finite(reference_configuration.get("trend_decay_minutes"), -1.0),
+            STATIC_TREND_DECAY_MINUTES,
+            abs_tol=1e-12,
+        )
+        and int(_finite(reference_configuration.get("trend_lookback_minutes"), -1))
+        == STATIC_TREND_LOOKBACK_MINUTES
+        and artifact.get("artifact_version") == STATIC_ARTIFACT_VERSION
         and artifact.get("engine_version") == FORECAST_ENGINE_VERSION
         and artifact.get("architecture") == STATIC_PERSONAL_ARCHITECTURE
         and artifact.get("feature_schema") == STATIC_FEATURE_SCHEMA
         and artifact.get("network_kind") == STATIC_NETWORK_KIND
+        and artifact.get("reference_kind") == STATIC_REFERENCE_KIND
         and artifact.get("training_mode") == STATIC_TRAINING_MODE
         and artifact.get("promotion_gate_version")
         == STATIC_PROMOTION_GATE_VERSION
@@ -1473,7 +1593,7 @@ def _static_artifact_is_valid(
             STATIC_LOW_GUARD_MG_DL,
             abs_tol=1e-9,
         )
-        and calibration.get("safety_envelope") == "reference-interval-union-v1"
+        and _static_calibration_scope_is_valid(calibration)
         and math.isclose(
             _finite(calibration.get("interval_level"), -1.0),
             STATIC_INTERVAL_LEVEL,
@@ -1492,27 +1612,42 @@ def _static_artifact_is_valid(
         )
         and parameters.get("network_disabled_event_channels")
         == ["meal", "rapid", "long"]
+        and combined_event_personalization_is_valid(
+            parameters.get("event_personalization")
+        )
+        and event_personalization_context.get("label_mode")
+        == (
+            STATIC_EVENT_LABELS_RETROSPECTIVE
+            if calibration.get("safety_envelope") == STATIC_DISPLAY_SAFETY_ENVELOPE
+            else STATIC_EVENT_LABELS_CAUSAL
+        )
+        and int(_finite(event_personalization_context.get("label_cutoff_ms"), -1))
+        == int(_finite(artifact.get("data_cutoff_ms"), -2))
+        and 0
+        < int(_finite(event_personalization_context.get("last_training_target_at_ms"), -1))
+        < int(_finite(event_personalization_context.get("first_tuning_anchor_at_ms"), -1))
+        <= int(_finite(artifact.get("data_cutoff_ms"), -2))
+        and int(_finite(event_personalization_context.get("training_window_count"), -1))
+        == int(_finite(artifact.get("sample_count"), -2))
+        and isinstance(event_personalization_context.get("training_windows_sha256"), str)
+        and len(event_personalization_context["training_windows_sha256"]) == 64
     ):
         return False
-    expected_band_values: list[float] = []
-    for band_index, (start, end) in enumerate(STATIC_BANDS):
-        band_value = float(blend[(start // STEP_MINUTES) - 1])
-        expected_band_values.extend(
-            [band_value] * (((end - start) // STEP_MINUTES) + 1)
-        )
-        declared = artifact.get("band_definitions")
-        if not isinstance(declared, list) or len(declared) != len(STATIC_BANDS):
-            return False
-        band = declared[band_index]
-        if not isinstance(band, dict) or (
-            int(_finite(band.get("start_minutes"), -1)) != start
-            or int(_finite(band.get("end_minutes"), -1)) != end
-            or not math.isclose(
-                _finite(band.get("weight"), -1.0), band_value, abs_tol=1e-9
-            )
-        ):
-            return False
-    if not np.allclose(blend, np.asarray(expected_band_values), atol=1e-9, rtol=0.0):
+    declared_knots = artifact.get("shrinkage_knots")
+    if not isinstance(declared_knots, list) or len(declared_knots) != len(
+        STATIC_SHRINK_KNOT_MINUTES
+    ):
+        return False
+    try:
+        artifact_knot_minutes = [int(item["minute"]) for item in declared_knots]
+        artifact_knot_weights = [float(item["weight"]) for item in declared_knots]
+        expected_blend = _static_shrinkage_curve(artifact_knot_weights)
+    except (KeyError, TypeError, ValueError):
+        return False
+    if (
+        artifact_knot_minutes != list(STATIC_SHRINK_KNOT_MINUTES)
+        or not np.allclose(blend, expected_blend, atol=1e-12, rtol=0.0)
+    ):
         return False
     try:
         x_mean = np.asarray(network["x_mean"], dtype=np.float64)
@@ -1533,6 +1668,11 @@ def _static_artifact_is_valid(
             )
             for candidate in STATIC_RIDGE_ALPHAS
         )
+        or not math.isclose(
+            _finite(network.get("horizon_smoothness"), -1.0),
+            STATIC_HORIZON_SMOOTHNESS,
+            abs_tol=1e-12,
+        )
         or coefficients.shape != (STATIC_FEATURE_COUNT, HORIZON_STEPS)
         or intercept.shape != (HORIZON_STEPS,)
         or parameter_count != int(artifact.get("parameter_count"))
@@ -1543,8 +1683,8 @@ def _static_artifact_is_valid(
     try:
         candidate_alphas = [float(item["alpha"]) for item in candidates]
         candidate_losses = [float(item["tuning_mae"]) for item in candidates]
-        candidate_band_weights = [
-            [float(value) for value in item["band_weights"]] for item in candidates
+        candidate_shrink_knots = [
+            [float(value) for value in item["shrink_knots"]] for item in candidates
         ]
     except (KeyError, TypeError, ValueError):
         return False
@@ -1554,16 +1694,17 @@ def _static_artifact_is_valid(
     ) if isinstance(candidates, list) and len(candidates) == len(STATIC_RIDGE_ALPHAS) else -1
     if (
         model_selection.get("protocol")
-        != "chronological-tuning-only-ridge-grid-v1"
+        != "chronological-tuning-only-smooth-shrink-ridge-grid-v2"
         or model_selection.get("criterion")
         != "lowest_tuning_mae_then_stronger_regularization"
         or candidate_alphas != list(STATIC_RIDGE_ALPHAS)
         or selected_index < 0
         or any(not math.isfinite(value) or value < 0.0 for value in candidate_losses)
         or any(
-            len(values) != len(STATIC_BANDS)
-            or any(value not in {0.0, 0.25, 0.5, 0.75, 1.0} for value in values)
-            for values in candidate_band_weights
+            len(values) != len(STATIC_SHRINK_KNOT_MINUTES)
+            or any(value not in set(STATIC_SHRINK_GRID) for value in values)
+            or any(later > earlier for earlier, later in zip(values, values[1:]))
+            for values in candidate_shrink_knots
         )
         or not math.isclose(
             _finite(model_selection.get("selected_alpha"), -1.0),
@@ -1580,13 +1721,11 @@ def _static_artifact_is_valid(
             candidate_alphas[selected_index],
             abs_tol=1e-12,
         )
-        or any(
-            not math.isclose(
-                float(blend[(start // STEP_MINUTES) - 1]),
-                candidate_band_weights[selected_index][band_index],
-                abs_tol=1e-12,
-            )
-            for band_index, (start, _end) in enumerate(STATIC_BANDS)
+        or not np.allclose(
+            blend,
+            _static_shrinkage_curve(candidate_shrink_knots[selected_index]),
+            atol=1e-12,
+            rtol=0.0,
         )
     ):
         return False
@@ -1595,6 +1734,8 @@ def _static_artifact_is_valid(
         and isinstance(approval, dict)
         and approval.get("state") == "exploratory_retrospective_display"
     ):
+        if calibration.get("safety_envelope") != STATIC_DISPLAY_SAFETY_ENVELOPE:
+            return False
         return _static_display_approval_is_valid(
             artifact=artifact,
             evaluation=evaluation,
@@ -1668,6 +1809,8 @@ def _static_artifact_is_valid(
         "gate_interval_score_safe",
         "gate_rmse_safe",
         "gate_anchor_mae_safe",
+        "gate_trajectory_continuity_safe",
+        "gate_strong_trend_preserved",
     )
     required_evaluation = (
         required_evaluation
@@ -1675,12 +1818,18 @@ def _static_artifact_is_valid(
             f"candidate_coverage_band_{index}"
             for index in range(len(STATIC_BANDS))
         )
+        + tuple(
+            f"{prefix}_{metric_name}"
+            for prefix in ("candidate", "reference", "pinned")
+            for metric_name in STATIC_TRAJECTORY_METRICS
+        )
         + required_gate_flags
     )
     expected_reliability: dict[str, Any] | None = None
     if require_approved:
         if (
             not isinstance(approval, dict)
+            or calibration.get("safety_envelope") != STATIC_ALERT_SAFETY_ENVELOPE
             or approval.get("state") != "approved_prospective"
             or approval.get("protocol") != STATIC_PROSPECTIVE_PROTOCOL
             or not _alert_approval_envelope_is_valid(approval)
@@ -1813,6 +1962,10 @@ def _static_artifact_is_valid(
                 metric_consistency[f"{prefix}_mae_{horizon}"] = metrics.get(
                     f"mae_{horizon}"
                 )
+            for metric_name in STATIC_TRAJECTORY_METRICS:
+                metric_consistency[f"{prefix}_{metric_name}"] = metrics.get(
+                    metric_name
+                )
         if any(
             expected_value is None
             or not math.isclose(
@@ -1927,6 +2080,28 @@ def _static_display_approval_is_valid(
 
     test_days = int(_finite(evaluation.get("test_days"), -1))
     causal_replay = artifact.get("receipt_causal_replay")
+    snapshot = artifact.get("snapshot")
+    raw_source_hash = snapshot.get("raw_source_sha256") if isinstance(snapshot, dict) else None
+    if not (
+        isinstance(raw_source_hash, str)
+        and len(raw_source_hash) == 64
+        and all(character in "0123456789abcdef" for character in raw_source_hash)
+    ):
+        return False
+    if not isinstance(causal_replay, dict) or any(
+        type(causal_replay.get(key)) is not int or causal_replay[key] < 0
+        for key in (
+            "window_count",
+            "local_day_count",
+            "causal_history_rejections",
+            "causal_target_rejections",
+            "causal_stale_anchor_rejections",
+        )
+    ):
+        return False
+    receipt_evidence_sufficient = bool(
+        causal_replay["window_count"] >= 32 and causal_replay["local_day_count"] >= 4
+    )
     independent_anchors = int(
         _finite(evaluation.get("test_independent_anchors"), -1)
     )
@@ -1935,6 +2110,8 @@ def _static_display_approval_is_valid(
         or approval.get("alert_approved") is not False
         or approval.get("unbiased_holdout") is not False
         or approval.get("receipt_causal_validation") is not False
+        or approval.get("validation_clock") != "sensor_measured_at"
+        or approval.get("receipt_causal_evidence_required") is not False
         or approval.get("use_scope") != "chart_only_not_for_dosing_or_alerts"
         or not _static_runtime_dependency_envelope_is_valid(approval)
         or approval.get("predictor_sha256") != predictor_hash
@@ -1952,19 +2129,13 @@ def _static_display_approval_is_valid(
         or evaluation.get("prospective") != 0
         or evaluation.get("prospective_pending") != 0
         or evaluation.get("gate_display_only") != 1
-        or evaluation.get("gate_receipt_causal_evidence_sufficient") != 1
-        or not isinstance(causal_replay, dict)
+        or evaluation.get("receipt_causal_gate_required") != 0
+        or evaluation.get("gate_receipt_causal_evidence_sufficient")
+        != int(receipt_evidence_sufficient)
+        or causal_replay.get("role") != "historical_availability_diagnostic"
+        or causal_replay.get("source_snapshot_sha256") != raw_source_hash
         or causal_replay.get("validated_for_activation") is not False
-        or int(_finite(causal_replay.get("window_count"), -1)) < 32
-        or int(_finite(causal_replay.get("local_day_count"), -1)) < 4
-        or any(
-            int(_finite(causal_replay.get(key), -1)) < 0
-            for key in (
-                "causal_history_rejections",
-                "causal_target_rejections",
-                "causal_stale_anchor_rejections",
-            )
-        )
+        or causal_replay["local_day_count"] > causal_replay["window_count"]
         or not isinstance(approval.get("pinned_comparator_version"), str)
         or approval.get("pinned_comparator_version") == artifact.get("model_version")
         or not isinstance(approval.get("pinned_comparator_sha256"), str)
@@ -2035,6 +2206,8 @@ def _static_display_approval_is_valid(
             metric_consistency[f"{prefix}_mae_{horizon}"] = metrics.get(
                 f"mae_{horizon}"
             )
+        for metric_name in STATIC_TRAJECTORY_METRICS:
+            metric_consistency[f"{prefix}_{metric_name}"] = metrics.get(metric_name)
     for band_index in range(len(STATIC_BANDS)):
         metric_consistency[f"candidate_coverage_band_{band_index}"] = (
             candidate_metrics.get(f"coverage_band_{band_index}")
@@ -2623,6 +2796,77 @@ def _event_reference_prediction(
     return np.clip(current + event_delta, 20.0, 600.0)
 
 
+def _static_reference_prediction(
+    readings: Sequence[GlucoseReadingRecord],
+    events: Sequence[_Event],
+    anchor_ms: int,
+    parameters: dict[str, Any],
+) -> np.ndarray:
+    """Quality-gated trend plus group-validated, bounded event amplitudes."""
+
+    current = float(readings[-1].glucose_mg_dl)
+    recent = [
+        row
+        for row in readings
+        if anchor_ms - STATIC_TREND_LOOKBACK_MINUTES * 60_000
+        <= row.measured_at_ms
+        <= anchor_ms
+    ]
+    reliability = 0.0
+    if len(recent) >= 4:
+        elapsed_minutes = max(
+            0.0, (recent[-1].measured_at_ms - recent[0].measured_at_ms) / 60_000.0
+        )
+        occupied_bins = len({row.measured_at_ms // STEP_MS for row in recent})
+        expected_bins = max(1.0, elapsed_minutes / STEP_MINUTES + 1.0)
+        density = _clamp(occupied_bins / expected_bins, 0.0, 1.0)
+        mean_quality = float(
+            np.mean(
+                [
+                    _clamp(row.quality if row.quality is not None else 0.75, 0.0, 1.0)
+                    for row in recent
+                ]
+            )
+        )
+        x = np.asarray(
+            [(row.measured_at_ms - recent[-1].measured_at_ms) / 60_000.0 for row in recent],
+            dtype=np.float64,
+        )
+        y = np.asarray([row.glucose_mg_dl for row in recent], dtype=np.float64)
+        if float(np.ptp(x)) >= 1.0:
+            fitted = np.polyval(np.polyfit(x, y, 1), x)
+            linear_rmse = math.sqrt(float(np.mean((y - fitted) ** 2)))
+            stability = 1.0 / (1.0 + (linear_rmse / 18.0) ** 2)
+        else:
+            stability = 0.0
+        reliability = _clamp(
+            min(1.0, elapsed_minutes / 30.0) * density * mean_quality * stability,
+            0.0,
+            1.0,
+        )
+
+    horizons = (
+        np.arange(1, HORIZON_STEPS + 1, dtype=np.float64) * STEP_MINUTES
+    )
+    slope = _recent_slope(recent or readings) * reliability
+    trend_delta = slope * STATIC_TREND_DECAY_MINUTES * (
+        1.0 - np.exp(-horizons / STATIC_TREND_DECAY_MINUTES)
+    )
+    meal, rapid, long = _event_basis(events, anchor_ms, parameters)
+    sensitivity = parameters.get("sensitivities", {})
+    population_effects = {
+        "meal": meal * _finite(sensitivity.get("carb_mg_dl_per_g"), 0.85),
+        "rapid": -rapid * _finite(sensitivity.get("rapid_mg_dl_per_unit"), 7.0),
+        "long": -long * _finite(sensitivity.get("long_mg_dl_per_unit"), 2.0),
+    }
+    personalization = parameters.get("event_personalization")
+    event_delta = sum(
+        apply_bounded_event_personalization(kind, population_effects[kind], personalization)
+        for kind in EVENT_KINDS
+    )
+    return np.clip(current + trend_delta + event_delta, 20.0, 600.0)
+
+
 def _nearest_value(
     readings: Sequence[GlucoseReadingRecord],
     target_ms: int,
@@ -2888,11 +3132,11 @@ def _forecast_arrays(
     parameters: dict[str, Any],
 ) -> tuple[np.ndarray, np.ndarray]:
     def raw_prediction(causal_events: Sequence[_Event]) -> np.ndarray:
-        if (
-            parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA
-            or parameters.get("prediction_reference")
-            == "event_aware_persistence"
-        ):
+        if parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA:
+            baseline = _static_reference_prediction(
+                readings, causal_events, anchor_ms, parameters
+            )
+        elif parameters.get("prediction_reference") == "event_aware_persistence":
             baseline = _event_reference_prediction(
                 readings, causal_events, anchor_ms, parameters
             )
@@ -3081,7 +3325,12 @@ def _prior_action_estimate(
     peak, duration, confidence = _profile_for_event(event, parameters)
     overlap_count = _overlap_count(event, events, parameters)
     evidence = int(parameters.get("evidence_counts", {}).get(event.kind, 0) or 0)
-    personalized = evidence >= MINIMUM_CLEAN_EVENT_SAMPLES
+    # Static amplitude corrections do not identify an individual event's timing
+    # or pharmacokinetics; the separate activity kernel must keep its prior label.
+    personalized = bool(
+        parameters.get("feature_schema") != STATIC_FEATURE_SCHEMA
+        and evidence >= MINIMUM_CLEAN_EVENT_SAMPLES
+    )
 
     if event.kind == "long" and _uses_basal_depot(parameters):
         rise_end, fall_start = _basal_depot_geometry(duration)
@@ -3407,7 +3656,7 @@ def _fit_network(
     x_scale = x_train.std(axis=0)
     x_scale[x_scale < 0.05] = 1.0
     x = np.clip((x_train - x_mean) / x_scale, -8.0, 8.0)
-    y = np.clip(residual_train, -180.0, 180.0)
+    y = np.clip(residual_train, -180.0, 180.0) @ _static_horizon_smoother()
     intercept = y.mean(axis=0)
     centered = y - intercept.reshape(1, -1)
     gram = x.T @ x
@@ -3422,6 +3671,7 @@ def _fit_network(
         "kind": STATIC_NETWORK_KIND,
         "feature_schema": STATIC_FEATURE_SCHEMA,
         "alpha": alpha,
+        "horizon_smoothness": STATIC_HORIZON_SMOOTHNESS,
         "x_mean": x_mean.tolist(),
         "x_scale": x_scale.tolist(),
         "coefficients": coefficients.tolist(),
@@ -4578,7 +4828,8 @@ class ForecastService:
                 unit = "U"
                 profile_source = (
                     "personalized"
-                    if int(parameters.get("evidence_counts", {}).get("rapid", 0) or 0)
+                    if parameters.get("feature_schema") != STATIC_FEATURE_SCHEMA
+                    and int(parameters.get("evidence_counts", {}).get("rapid", 0) or 0)
                     >= MINIMUM_CLEAN_EVENT_SAMPLES
                     else "population_prior"
                 )
@@ -4591,7 +4842,8 @@ class ForecastService:
                 unit = "U"
                 profile_source = (
                     "personalized"
-                    if int(parameters.get("evidence_counts", {}).get("long", 0) or 0)
+                    if parameters.get("feature_schema") != STATIC_FEATURE_SCHEMA
+                    and int(parameters.get("evidence_counts", {}).get("long", 0) or 0)
                     >= MINIMUM_CLEAN_EVENT_SAMPLES
                     else "population_prior"
                 )
@@ -4776,6 +5028,8 @@ class ForecastService:
         # the model. Missing flags remain shadow-only for backward compatibility.
         return bool(
             isinstance(approval, dict)
+            and parameters.get("frozen_calibration", {}).get("safety_envelope")
+            == STATIC_ALERT_SAFETY_ENVELOPE
             and approval.get("state") == "approved_prospective"
             and approval.get("protocol") == STATIC_PROSPECTIVE_PROTOCOL
             and approval.get("alert_approved") is True
@@ -5003,7 +5257,7 @@ class ForecastService:
 
         median, sigma = _forecast_arrays(readings, events, anchor_ms, parameters)
         if champion.architecture == STATIC_PERSONAL_ARCHITECTURE:
-            reference = _event_reference_prediction(
+            reference = _static_reference_prediction(
                 readings, events, anchor_ms, parameters
             )
             median, sigma = _apply_static_predictor(
@@ -5399,6 +5653,144 @@ class ForecastService:
         parameters["kind"] = "personalized_hybrid_neural"
         return parameters
 
+    @staticmethod
+    def _fit_static_event_personalization(
+        readings: Sequence[GlucoseReadingRecord],
+        events: Sequence[_Event],
+        training_windows: Sequence[tuple[int, np.ndarray]],
+        parameters: dict[str, Any],
+        *,
+        retrospective_label_cutoff_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Fit small prior corrections from the training partition only.
+
+        A meal/injection stays one group across every overlapping CGM window.
+        Same-kind overlaps are excluded per horizon rather than being assigned
+        arbitrary responsibility. Other known event kinds stay in the complete
+        population reference when forming the residual to avoid double-counting.
+        A chart-only build may use imported/backdated labels for these training
+        targets, explicitly bounded by its snapshot cutoff. Tuning, calibration,
+        and evaluation retain their original anchor-known event semantics.
+        """
+
+        population_parameters = dict(parameters)
+        population_parameters.pop("event_personalization", None)
+        reading_times = [row.measured_at_ms for row in readings]
+        sorted_events = sorted(events, key=lambda item: item.occurred_at_ms)
+        horizons_ms = np.arange(1, HORIZON_STEPS + 1) * STEP_MS
+        samples: list[EventEffectSample] = []
+        response_windows: list[EventResponseWindow] = []
+        for anchor_index, raw_target in training_windows:
+            anchor_ms = int(readings[anchor_index].measured_at_ms)
+            known_cutoff_ms = (
+                anchor_ms
+                if retrospective_label_cutoff_ms is None
+                else retrospective_label_cutoff_ms
+            )
+            causal_events = [
+                event
+                for event in sorted_events
+                if anchor_ms - 96 * 60 * 60_000 <= event.occurred_at_ms <= anchor_ms
+                and _event_known_at(event) <= known_cutoff_ms
+                and event.kind in EVENT_KINDS
+            ]
+            if not causal_events:
+                continue
+            target = np.asarray(raw_target, dtype=np.float64)
+            if target.shape != (HORIZON_STEPS,):
+                continue
+            history_index = bisect.bisect_left(
+                reading_times,
+                anchor_ms - CONTEXT_HISTORY_MINUTES * 60_000 - MATCH_TOLERANCE_MS,
+            )
+            reference = _static_reference_prediction(
+                readings[history_index : anchor_index + 1],
+                causal_events,
+                anchor_ms,
+                population_parameters,
+            )
+            residual = target - reference
+            valid_target = (
+                np.isfinite(target)
+                & np.isfinite(reference)
+                & (target > 20.0)
+                & (target < 600.0)
+                & (reference > 20.0)
+                & (reference < 600.0)
+            )
+            # A later recorded intake is not a feature of this anchor. Exclude
+            # its affected outcomes from amplitude attribution rather than
+            # crediting the earlier meal/injection with that unmodeled effect.
+            future_event_times = [
+                event.occurred_at_ms
+                for event in sorted_events
+                if anchor_ms < event.occurred_at_ms <= anchor_ms + HORIZON_STEPS * STEP_MS
+                and event.kind in EVENT_KINDS
+                and event.amount > 0.0
+                and (
+                    retrospective_label_cutoff_ms is None
+                    or _event_known_at(event) <= retrospective_label_cutoff_ms
+                )
+            ]
+            if future_event_times:
+                valid_target &= anchor_ms + horizons_ms < min(future_event_times)
+            safety = (target < 80.0) | (reference < 80.0)
+            event_effects: dict[tuple[str, str], np.ndarray] = {}
+            for kind in EVENT_KINDS:
+                matching = [event for event in causal_events if event.kind == kind]
+                if not matching:
+                    continue
+                effects = np.asarray(
+                    [
+                        [
+                            _event_glucose_increment(
+                                event,
+                                anchor_ms,
+                                anchor_ms + int(horizon_ms),
+                                population_parameters,
+                            )
+                            for horizon_ms in horizons_ms
+                        ]
+                        for event in matching
+                    ],
+                    dtype=np.float64,
+                )
+                finite_effects = np.isfinite(effects)
+                active = finite_effects & (np.abs(effects) > 1e-8)
+                identifiable = (
+                    (np.sum(active, axis=0) == 1)
+                    & np.all(finite_effects, axis=0)
+                    & valid_target
+                )
+                for event, effect, active_horizons in zip(matching, effects, active):
+                    event_effects[(kind, event.event_id)] = effect
+                    usable = identifiable & active_horizons
+                    if not np.any(usable):
+                        continue
+                    samples.append(
+                        EventEffectSample(
+                            event_id=event.event_id,
+                            kind=kind,
+                            occurred_at_ms=event.occurred_at_ms,
+                            population_effect_mg_dl=effect[usable],
+                            observed_residual_mg_dl=residual[usable],
+                            safety_mask=safety[usable],
+                        )
+                    )
+            response_windows.append(
+                EventResponseWindow(
+                    reference_mg_dl=reference,
+                    target_mg_dl=target,
+                    event_effects=event_effects,
+                    usable_mask=valid_target,
+                    safety_mask=safety,
+                )
+            )
+        artifact = fit_bounded_event_personalization(samples)
+        if not any(artifact["kinds"][kind]["accepted"] for kind in EVENT_KINDS):
+            return artifact
+        return gate_combined_event_personalization(artifact, samples, response_windows)
+
     def _dataset_for_parameters(
         self,
         readings: Sequence[GlucoseReadingRecord],
@@ -5455,15 +5847,12 @@ class ForecastService:
             features.append(
                 _history_features(causal_readings, causal_recent, anchor.measured_at_ms, parameters)
             )
-            reference_function = (
-                _event_reference_prediction
-                if (
-                    parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA
-                    or parameters.get("prediction_reference")
-                    == "event_aware_persistence"
-                )
-                else _baseline_prediction
-            )
+            if parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA:
+                reference_function = _static_reference_prediction
+            elif parameters.get("prediction_reference") == "event_aware_persistence":
+                reference_function = _event_reference_prediction
+            else:
+                reference_function = _baseline_prediction
             baselines.append(
                 reference_function(
                     causal_readings,
@@ -5485,6 +5874,7 @@ class ForecastService:
         decision_times_ms: dict[int, int] | None = None,
     ) -> np.ndarray:
         sorted_events = sorted(events, key=lambda item: item.occurred_at_ms)
+        reading_times = [row.measured_at_ms for row in readings]
         references: list[np.ndarray] = []
         for anchor_index, _target in windows:
             anchor = readings[anchor_index]
@@ -5506,9 +5896,26 @@ class ForecastService:
                 and event.occurred_at_ms
                 >= anchor.measured_at_ms - 96 * 60 * 60_000
             ]
+            history_minutes = (
+                CONTEXT_HISTORY_MINUTES
+                if parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA
+                else (HISTORY_STEPS - 1) * STEP_MINUTES
+            )
+            history_start = anchor.measured_at_ms - history_minutes * 60_000
+            history_index = bisect.bisect_left(reading_times, history_start)
+            causal_readings = readings[history_index : anchor_index + 1]
+            if decision_times_ms is not None:
+                causal_readings = [
+                    row for row in causal_readings if int(row.received_at_ms) <= decision_ms
+                ]
+            reference_function = (
+                _static_reference_prediction
+                if parameters.get("feature_schema") == STATIC_FEATURE_SCHEMA
+                else _event_reference_prediction
+            )
             references.append(
-                _event_reference_prediction(
-                    [anchor], causal_events, anchor.measured_at_ms, parameters
+                reference_function(
+                    causal_readings, causal_events, anchor.measured_at_ms, parameters
                 )
             )
         return np.vstack(references)
@@ -5524,6 +5931,60 @@ class ForecastService:
             "mae_60": float(np.mean(absolute[:, 11])),
             "mae_120": float(np.mean(absolute[:, 23])),
             "rmse": float(np.sqrt(np.mean((prediction - target) ** 2))),
+        }
+
+    @staticmethod
+    def _trajectory_diagnostics(
+        prediction: np.ndarray, trend_reference: np.ndarray
+    ) -> dict[str, float]:
+        """Describe visual continuity and preservation of a strong reference trend."""
+
+        candidate = np.asarray(prediction, dtype=np.float64)
+        reference = np.asarray(trend_reference, dtype=np.float64)
+        if (
+            candidate.ndim != 2
+            or candidate.shape != reference.shape
+            or candidate.shape[1] != HORIZON_STEPS
+            or not np.isfinite(candidate).all()
+            or not np.isfinite(reference).all()
+        ):
+            return {
+                "trajectory_max_step_mg_dl": math.inf,
+                "trajectory_p95_step_mg_dl": math.inf,
+                "trajectory_max_curvature_mg_dl": math.inf,
+                "trajectory_p95_curvature_mg_dl": math.inf,
+                "strong_trend_samples": 0.0,
+                "near_flat_strong_trend_rate": 1.0,
+                "strong_trend_direction_agreement": 0.0,
+            }
+        adjacent = np.abs(np.diff(candidate, axis=1))
+        curvature = np.abs(np.diff(candidate, n=2, axis=1))
+        # Five-to-thirty minutes is long enough to ignore a single noisy point,
+        # but short enough that the damped trend reference still carries signal.
+        reference_change = reference[:, 5] - reference[:, 0]
+        candidate_change = candidate[:, 5] - candidate[:, 0]
+        strong = np.abs(reference_change) >= 8.0
+        strong_count = int(np.sum(strong))
+        if strong_count:
+            strong_reference = reference_change[strong]
+            strong_candidate = candidate_change[strong]
+            near_flat = np.abs(strong_candidate) < np.maximum(
+                3.0, 0.35 * np.abs(strong_reference)
+            )
+            direction_agreement = np.sign(strong_candidate) == np.sign(strong_reference)
+            near_flat_rate = float(np.mean(near_flat))
+            agreement_rate = float(np.mean(direction_agreement))
+        else:
+            near_flat_rate = 0.0
+            agreement_rate = 1.0
+        return {
+            "trajectory_max_step_mg_dl": float(np.max(adjacent)),
+            "trajectory_p95_step_mg_dl": float(np.quantile(adjacent, 0.95)),
+            "trajectory_max_curvature_mg_dl": float(np.max(curvature)),
+            "trajectory_p95_curvature_mg_dl": float(np.quantile(curvature, 0.95)),
+            "strong_trend_samples": float(strong_count),
+            "near_flat_strong_trend_rate": near_flat_rate,
+            "strong_trend_direction_agreement": agreement_rate,
         }
 
     @staticmethod
@@ -5980,6 +6441,7 @@ class ForecastService:
             "hypo_fpr",
             "hypo_missed_episodes",
             "low_zone_mae",
+            *STATIC_TRAJECTORY_METRICS,
         )
         if (
             not finite
@@ -6079,6 +6541,54 @@ class ForecastService:
             and hypo_false_alarm_safe
             and low_zone_safe
         )
+        continuity_step_limit = min(
+            18.0,
+            max(
+                15.0,
+                float(reference_metrics["trajectory_max_step_mg_dl"]) + 4.0,
+                float(pinned_metrics["trajectory_max_step_mg_dl"]) + 4.0,
+            ),
+        )
+        continuity_curvature_limit = min(
+            10.0,
+            max(
+                8.0,
+                float(reference_metrics["trajectory_max_curvature_mg_dl"])
+                + 3.0,
+                float(pinned_metrics["trajectory_max_curvature_mg_dl"]) + 3.0,
+            ),
+        )
+        continuity_p95_curvature_limit = min(
+            6.0,
+            max(
+                5.0,
+                float(reference_metrics["trajectory_p95_curvature_mg_dl"])
+                + 2.0,
+                float(pinned_metrics["trajectory_p95_curvature_mg_dl"]) + 2.0,
+            ),
+        )
+        trajectory_continuity_safe = bool(
+            float(candidate_metrics["trajectory_max_step_mg_dl"])
+            <= continuity_step_limit
+            and float(candidate_metrics["trajectory_max_curvature_mg_dl"])
+            <= continuity_curvature_limit
+            and float(candidate_metrics["trajectory_p95_curvature_mg_dl"])
+            <= continuity_p95_curvature_limit
+        )
+        strong_trend_samples = int(
+            float(candidate_metrics["strong_trend_samples"])
+        )
+        strong_trend_evidence_sufficient = strong_trend_samples >= 4
+        strong_trend_preserved = bool(
+            not strong_trend_evidence_sufficient
+            or (
+                float(candidate_metrics["near_flat_strong_trend_rate"]) <= 0.25
+                and float(
+                    candidate_metrics["strong_trend_direction_agreement"]
+                )
+                >= 0.75
+            )
+        )
         result.update(
             {
                 "candidate_equal_day_mae": candidate_equal,
@@ -6098,6 +6608,16 @@ class ForecastService:
                 "hypo_false_alarm_safe": hypo_false_alarm_safe,
                 "low_zone_safe": low_zone_safe,
                 "hypo_safe": hypo_safe,
+                "trajectory_continuity_safe": trajectory_continuity_safe,
+                "trajectory_step_limit_mg_dl": continuity_step_limit,
+                "trajectory_curvature_limit_mg_dl": continuity_curvature_limit,
+                "trajectory_p95_curvature_limit_mg_dl": (
+                    continuity_p95_curvature_limit
+                ),
+                "strong_trend_evidence_sufficient": (
+                    strong_trend_evidence_sufficient
+                ),
+                "strong_trend_preserved": strong_trend_preserved,
                 "interval_score_safe": float(candidate_metrics["interval_score_80"])
                 <= float(reference_metrics["interval_score_80"]) * 0.98
                 and float(candidate_metrics["interval_score_80"])
@@ -6124,6 +6644,8 @@ class ForecastService:
             and bool(result["rmse_safe"])
             and bool(result["anchor_mae_safe"])
             and hypo_safe
+            and trajectory_continuity_safe
+            and strong_trend_preserved
         )
         return result
 
@@ -6139,11 +6661,11 @@ class ForecastService:
     ) -> dict[str, bool | float | int]:
         """Engineering selection gate for an exploratory display-only predictor.
 
-        This deliberately cannot approve predictive alert delivery.  It keeps
-        the chronological independent-day, horizon, calibration, RMSE, and
-        low-glucose safeguards from the prospective gate, while treating a
-        modest false-positive-rate change as diagnostic because the resulting
-        model is used only to draw an explicitly uncertain chart.  Alert
+        This deliberately cannot approve predictive alert delivery. It keeps
+        independent-day improvement, horizon noninferiority, low-zone point
+        accuracy, interval calibration, and trajectory continuity. Episode
+        recall/false alarms and agreement with the reference's trend remain
+        diagnostics here, not claims about a notification system. Alert
         eligibility still requires the separate frozen future-day protocol.
         """
 
@@ -6164,12 +6686,10 @@ class ForecastService:
             "no_day_regression_over_2pct",
             "horizons_safe",
             "coverage_safe",
-            "hypo_evidence_sufficient",
-            "hypo_recall_safe",
-            "hypo_episode_safe",
             "low_zone_safe",
             "rmse_safe",
             "anchor_mae_safe",
+            "trajectory_continuity_safe",
         )
         if any(key not in result for key in required):
             result["accepted"] = False
@@ -6181,16 +6701,10 @@ class ForecastService:
             and float(candidate_metrics["interval_score_80"])
             <= float(pinned_metrics["interval_score_80"])
         )
-        hypo_display_safe = bool(
-            result["hypo_evidence_sufficient"]
-            and result["hypo_recall_safe"]
-            and result["hypo_episode_safe"]
-            and result["low_zone_safe"]
-        )
-        # With only 22 independent calibration anchors, one observation changes
-        # empirical coverage by about 4.5 percentage points.  A small amount of
-        # conservative over-coverage is acceptable for an uncertainty band that
-        # cannot trigger alerts; under-coverage is not.
+        low_zone_display_safe = bool(result["low_zone_safe"])
+        # A small calibration set has coarse order statistics. Modest
+        # conservative over-coverage is acceptable for a chart-only band; all
+        # horizon bands must still satisfy the declared coverage floor.
         display_coverage_safe = bool(
             0.75 <= float(candidate_metrics["coverage_80"]) <= 0.92
             and all(
@@ -6203,7 +6717,7 @@ class ForecastService:
                 "display_only": True,
                 "coverage_safe": display_coverage_safe,
                 "interval_score_safe": interval_score_safe,
-                "hypo_safe": hypo_display_safe,
+                "low_zone_display_safe": low_zone_display_safe,
             }
         )
         result["accepted"] = bool(
@@ -6217,7 +6731,8 @@ class ForecastService:
             and interval_score_safe
             and result["rmse_safe"]
             and result["anchor_mae_safe"]
-            and hypo_display_safe
+            and low_zone_display_safe
+            and result["trajectory_continuity_safe"]
         )
         return result
 
@@ -6544,9 +7059,9 @@ class ForecastService:
         events = self._load_events(
             session, through_ms=cutoff_ms, known_through_ms=cutoff_ms
         )
-        # Analyze label support, but do not fit personal event curves from the 27
-        # heavily overlapping records. The runtime event reference keeps bounded
-        # population priors, while the network receives glucose/context only.
+        # Flexible event-specific networks remain unidentifiable from a sparse
+        # log. Fit only a strongly shrunk amplitude correction around each prior,
+        # using independent event groups from the training partition alone.
         evidence_parameters = self._personalized_parameters(readings, events)
         parameters = _default_parameters()
         parameters["evidence_counts"] = dict(
@@ -6555,6 +7070,12 @@ class ForecastService:
         parameters["kind"] = "personalized_static_generic_residual"
         parameters["feature_schema"] = STATIC_FEATURE_SCHEMA
         parameters["architecture"] = STATIC_PERSONAL_ARCHITECTURE
+        parameters["prediction_reference"] = STATIC_REFERENCE_KIND
+        parameters["reference_configuration"] = {
+            "trend_decay_minutes": STATIC_TREND_DECAY_MINUTES,
+            "trend_lookback_minutes": STATIC_TREND_LOOKBACK_MINUTES,
+            "quality_gated": True,
+        }
         parameters["network_disabled_event_channels"] = [
             "meal",
             "rapid",
@@ -6569,6 +7090,38 @@ class ForecastService:
                 ),
             }
             for kind in ("meal", "rapid", "long")
+        }
+        parameters["event_personalization"] = (
+            self._fit_static_event_personalization(
+                readings,
+                events,
+                train_windows,
+                parameters,
+                retrospective_label_cutoff_ms=(
+                    cutoff_ms if allow_display_activation else None
+                ),
+            )
+        )
+        parameters["event_personalization_context"] = {
+            "label_mode": (
+                STATIC_EVENT_LABELS_RETROSPECTIVE
+                if allow_display_activation
+                else STATIC_EVENT_LABELS_CAUSAL
+            ),
+            "label_cutoff_ms": cutoff_ms,
+            "last_training_target_at_ms": max(
+                int(readings[index].measured_at_ms) + HORIZON_STEPS * STEP_MS
+                for index, _target in train_windows
+            ),
+            "first_tuning_anchor_at_ms": min(
+                int(readings[index].measured_at_ms) for index, _target in tuning_windows
+            ),
+            "training_window_count": len(train_windows),
+            "training_windows_sha256": hashlib.sha256(
+                ",".join(
+                    str(readings[index].measured_at_ms) for index, _target in train_windows
+                ).encode("ascii")
+            ).hexdigest(),
         }
 
         x_train, reference_train, target_train = self._dataset_for_parameters(
@@ -6585,10 +7138,10 @@ class ForecastService:
             raw = np.clip(reference + residual, 20.0, 600.0)
             return features, reference, target, raw
 
-        grid = (0.0, 0.25, 0.50, 0.75, 1.0)
         selection_results: list[dict[str, Any]] = []
         selected_network: dict[str, Any] | None = None
         selected_blend: np.ndarray | None = None
+        selected_knots: tuple[float, ...] | None = None
         selected_loss = math.inf
         selected_alpha = -1.0
         for alpha in STATIC_RIDGE_ALPHAS:
@@ -6598,48 +7151,31 @@ class ForecastService:
             _tune_x, tune_reference, tune_target, tune_raw = raw_static(
                 tuning_independent
             )
-            candidate_band_weights: list[float] = []
-            for start, end in STATIC_BANDS:
-                start_index = (start // STEP_MINUTES) - 1
-                end_index = end // STEP_MINUTES
-                best_weight = 0.0
-                best_band_loss = math.inf
-                for weight in grid:
-                    prediction = tune_reference[:, start_index:end_index] + weight * (
-                        tune_raw[:, start_index:end_index]
-                        - tune_reference[:, start_index:end_index]
-                    )
-                    loss = float(
-                        np.mean(
-                            np.abs(
-                                prediction
-                                - tune_target[:, start_index:end_index]
-                            )
-                        )
-                    )
-                    if loss < best_band_loss - 1e-9:
-                        best_band_loss = loss
-                        best_weight = weight
-                candidate_band_weights.append(best_weight)
-            candidate_blend = np.asarray(
-                [
-                    weight
-                    for weight, (start, end) in zip(
-                        candidate_band_weights, STATIC_BANDS
-                    )
-                    for _ in range(((end - start) // STEP_MINUTES) + 1)
-                ],
-                dtype=np.float64,
-            )
-            tuning_prediction = tune_reference + candidate_blend.reshape(1, -1) * (
-                tune_raw - tune_reference
-            )
-            tuning_mae = float(np.mean(np.abs(tuning_prediction - tune_target)))
+            candidate_blend: np.ndarray | None = None
+            candidate_knots: tuple[float, ...] | None = None
+            tuning_mae = math.inf
+            for raw_knots in product(
+                STATIC_SHRINK_GRID, repeat=len(STATIC_SHRINK_KNOT_MINUTES)
+            ):
+                knots = tuple(float(value) for value in raw_knots)
+                if any(later > earlier for earlier, later in zip(knots, knots[1:])):
+                    continue
+                curve = _static_shrinkage_curve(knots)
+                prediction = tune_reference + curve.reshape(1, -1) * (
+                    tune_raw - tune_reference
+                )
+                loss = float(np.mean(np.abs(prediction - tune_target)))
+                if loss < tuning_mae - 1e-9:
+                    tuning_mae = loss
+                    candidate_blend = curve
+                    candidate_knots = knots
+            if candidate_blend is None or candidate_knots is None:
+                raise RuntimeError("smooth shrinkage grid did not produce a candidate")
             selection_results.append(
                 {
                     "alpha": alpha,
                     "tuning_mae": tuning_mae,
-                    "band_weights": candidate_band_weights,
+                    "shrink_knots": list(candidate_knots),
                 }
             )
             if tuning_mae < selected_loss or (
@@ -6649,20 +7185,18 @@ class ForecastService:
                 selected_alpha = alpha
                 selected_network = parameters["network"]
                 selected_blend = candidate_blend
-        if selected_network is None or selected_blend is None:
+                selected_knots = candidate_knots
+        if selected_network is None or selected_blend is None or selected_knots is None:
             raise RuntimeError("ridge tuning grid did not produce a finite candidate")
         parameters["network"] = selected_network
         parameters["model_selection"] = {
-            "protocol": "chronological-tuning-only-ridge-grid-v1",
+            "protocol": "chronological-tuning-only-smooth-shrink-ridge-grid-v2",
             "criterion": "lowest_tuning_mae_then_stronger_regularization",
             "selected_alpha": selected_alpha,
             "selected_tuning_mae": selected_loss,
             "candidates": selection_results,
         }
         blend = selected_blend
-        band_weights = [
-            float(blend[(start // STEP_MINUTES) - 1]) for start, _end in STATIC_BANDS
-        ]
         parameters["persistence_blend_weights"] = blend.tolist()
 
         _cal_x, cal_reference, cal_target, cal_raw = raw_static(
@@ -6675,6 +7209,8 @@ class ForecastService:
         reference_bias, reference_sigma = self._frozen_calibration(
             cal_reference, cal_target
         )
+        sigma_expansion = STATIC_DISPLAY_SIGMA_EXPANSION if allow_display_activation else 1.0
+        sigma = sigma * sigma_expansion
         parameters["residual_sigma"] = sigma.tolist()
         parameters["frozen_calibration"] = {
             "method": "frozen-uncentered-conformal-v2",
@@ -6692,7 +7228,13 @@ class ForecastService:
             "quantile_method": "exact-order-statistic",
             "point_bias": "disabled",
             "low_guard_threshold_mg_dl": STATIC_LOW_GUARD_MG_DL,
-            "safety_envelope": "reference-interval-union-v1",
+            "safety_envelope": (
+                STATIC_DISPLAY_SAFETY_ENVELOPE
+                if allow_display_activation
+                else STATIC_ALERT_SAFETY_ENVELOPE
+            ),
+            "point_low_guard": not allow_display_activation,
+            "sigma_expansion": sigma_expansion,
             "bias_mg_dl": bias.tolist(),
             "sigma_mg_dl": sigma.tolist(),
             "reference_sigma_mg_dl": reference_sigma.tolist(),
@@ -6751,6 +7293,7 @@ class ForecastService:
 
         candidate_metrics: dict[str, float | None] = {
             **self._metrics(candidate_prediction, test_target),
+            **self._trajectory_diagnostics(candidate_prediction, reference_prediction),
             **self._interval_metrics(
                 candidate_prediction,
                 test_target,
@@ -6761,6 +7304,7 @@ class ForecastService:
         }
         reference_metrics: dict[str, float | None] = {
             **self._metrics(reference_prediction, test_target),
+            **self._trajectory_diagnostics(reference_prediction, reference_prediction),
             **self._interval_metrics(
                 reference_prediction,
                 test_target,
@@ -6771,6 +7315,7 @@ class ForecastService:
         }
         pinned_metrics: dict[str, float | None] = {
             **self._metrics(pinned_prediction, champion_target),
+            **self._trajectory_diagnostics(pinned_prediction, reference_prediction),
             **self._interval_metrics(
                 pinned_prediction,
                 champion_target,
@@ -6810,16 +7355,17 @@ class ForecastService:
             ),
         )
         if allow_display_activation:
+            # Historical receipt timing describes what a server could have
+            # known live, not whether sensor-time history can train a chart.
+            # Backfilled CGM remains valid for explicit retrospective display;
+            # only the separate prospective/alert protocol can establish live
+            # receipt-causal performance. Preserve these counts as diagnostics.
             display_gates = {
                 **display_gates,
                 "receipt_causal_evidence_sufficient": bool(
                     len(receipt_causal_windows) >= 32 and receipt_causal_days >= 4
                 ),
             }
-            display_gates["accepted"] = bool(
-                display_gates["accepted"]
-                and display_gates["receipt_causal_evidence_sufficient"]
-            )
         reporting_gates = display_gates if allow_display_activation else gates
         accepted = bool(reporting_gates["accepted"])
 
@@ -6956,6 +7502,15 @@ class ForecastService:
             "diagnostic_overlapping_mae": float(diagnostic_metrics["mae"]),
             "reliability": reliability_overall,
         }
+        for prefix, metrics in (
+            ("candidate", candidate_metrics),
+            ("reference", reference_metrics),
+            ("pinned", pinned_metrics),
+        ):
+            for metric_name in STATIC_TRAJECTORY_METRICS:
+                evaluation[f"{prefix}_{metric_name}"] = float(
+                    metrics[metric_name] or 0.0
+                )
         for band_index in range(len(STATIC_BANDS)):
             evaluation[f"candidate_coverage_band_{band_index}"] = float(
                 candidate_metrics[f"coverage_band_{band_index}"] or 0.0
@@ -6986,6 +7541,7 @@ class ForecastService:
             evaluation["exploratory"] = 1
             evaluation["unbiased_holdout"] = 0
             evaluation["receipt_causal_validation"] = 0
+            evaluation["receipt_causal_gate_required"] = 0
             evaluation["prospective"] = 0
             evaluation["prospective_pending"] = 0
             evaluation["development_only"] = 0
@@ -7012,11 +7568,12 @@ class ForecastService:
         max_received_at = max(int(row.received_at_ms) for row in readings)
         event_revision = source_revision_before[3]
         parameters["artifact"] = {
-            "artifact_version": 6,
+            "artifact_version": STATIC_ARTIFACT_VERSION,
             "engine_version": FORECAST_ENGINE_VERSION,
             "architecture": STATIC_PERSONAL_ARCHITECTURE,
             "feature_schema": STATIC_FEATURE_SCHEMA,
             "network_kind": STATIC_NETWORK_KIND,
+            "reference_kind": STATIC_REFERENCE_KIND,
             "training_mode": STATIC_TRAINING_MODE,
             "promotion_gate_version": STATIC_PROMOTION_GATE_VERSION,
             "interval_level": STATIC_INTERVAL_LEVEL,
@@ -7029,6 +7586,7 @@ class ForecastService:
             "sample_count": len(train_windows),
             "dataset_sha256": _dataset_fingerprint(readings, events),
             "snapshot": {
+                "raw_source_sha256": frozen_source_fingerprint_before,
                 "source_revision": list(source_revision_before),
                 "last_reading_at_ms": cutoff_ms,
                 "max_received_at_ms": max_received_at,
@@ -7038,23 +7596,29 @@ class ForecastService:
             },
             "split": split,
             "receipt_causal_replay": {
+                "role": "historical_availability_diagnostic",
+                "source_snapshot_sha256": frozen_source_fingerprint_before,
                 "validated_for_activation": False,
                 "window_count": len(receipt_causal_windows),
                 "local_day_count": receipt_causal_days,
                 **receipt_causal_diagnostics,
             },
-            "band_definitions": [
+            "shrinkage_knots": [
                 {
-                    "start_minutes": start,
-                    "end_minutes": end,
+                    "minute": minute,
                     "weight": weight,
                 }
-                for weight, (start, end) in zip(band_weights, STATIC_BANDS)
+                for minute, weight in zip(
+                    STATIC_SHRINK_KNOT_MINUTES, selected_knots
+                )
             ],
             "event_channels": {
-                "meal": "population_prior_not_identifiable",
-                "rapid": "population_prior_not_identifiable",
-                "long": "population_prior_not_identifiable",
+                kind: (
+                    "bounded_reference_amplitude"
+                    if parameters["event_personalization"]["kinds"][kind]["accepted"]
+                    else "population_prior_not_identifiable"
+                )
+                for kind in EVENT_KINDS
             },
             "reliability": {
                 "overall": reliability_overall,
@@ -7078,6 +7642,8 @@ class ForecastService:
                 "alert_approved": False,
                 "unbiased_holdout": False,
                 "receipt_causal_validation": False,
+                "validation_clock": "sensor_measured_at",
+                "receipt_causal_evidence_required": False,
                 "use_scope": "chart_only_not_for_dosing_or_alerts",
                 "approved_model_version": version,
                 "evaluated_at_ms": now,
@@ -7339,6 +7905,8 @@ class ForecastService:
         )
         if (
             not isinstance(approval, dict)
+            or parameters.get("frozen_calibration", {}).get("safety_envelope")
+            != STATIC_ALERT_SAFETY_ENVELOPE
             or approval.get("state") != "pending_prospective"
             or approval.get("protocol") != STATIC_PROSPECTIVE_PROTOCOL
             or artifact.get("accepted") is not False
@@ -7644,6 +8212,7 @@ class ForecastService:
 
         candidate_metrics: dict[str, float | None] = {
             **self._metrics(candidate_prediction, target),
+            **self._trajectory_diagnostics(candidate_prediction, reference_prediction),
             **self._interval_metrics(
                 candidate_prediction,
                 target,
@@ -7654,6 +8223,7 @@ class ForecastService:
         }
         reference_metrics: dict[str, float | None] = {
             **self._metrics(reference_prediction, target),
+            **self._trajectory_diagnostics(reference_prediction, reference_prediction),
             **self._interval_metrics(
                 reference_prediction,
                 target,
@@ -7664,6 +8234,7 @@ class ForecastService:
         }
         pinned_metrics: dict[str, float | None] = {
             **self._metrics(pinned_prediction, pinned_target),
+            **self._trajectory_diagnostics(pinned_prediction, reference_prediction),
             **self._interval_metrics(
                 pinned_prediction,
                 pinned_target,
@@ -7713,6 +8284,7 @@ class ForecastService:
         ):
             current_metrics = {
                 **self._metrics(current_prediction, current_target),
+                **self._trajectory_diagnostics(current_prediction, reference_prediction),
                 **self._interval_metrics(
                     current_prediction,
                     current_target,
@@ -8036,6 +8608,15 @@ class ForecastService:
             "test_independent_anchors": len(future_windows),
             "winning_days": int(gates.get("winning_days", 0)),
         }
+        for prefix, metrics in (
+            ("candidate", candidate_metrics),
+            ("reference", reference_metrics),
+            ("pinned", pinned_metrics),
+        ):
+            for metric_name in STATIC_TRAJECTORY_METRICS:
+                evaluation[f"{prefix}_{metric_name}"] = float(
+                    metrics[metric_name] or 0.0
+                )
         for band_index in range(len(STATIC_BANDS)):
             evaluation[f"candidate_coverage_band_{band_index}"] = float(
                 candidate_metrics[f"coverage_band_{band_index}"] or 0.0
