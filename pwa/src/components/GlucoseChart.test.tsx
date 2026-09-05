@@ -30,7 +30,7 @@ describe('GlucoseChart', () => {
     expect(document.querySelector('.forecast-band')).toHaveAttribute('data-series', 'forecast-uncertainty')
     expect(document.querySelector('.forecast-endpoint')).toHaveAttribute('data-forecast-confidence', '76')
     expect(screen.getByRole('img', { name: /^Сахар за 6 часов и прогноз/ }))
-      .toHaveAttribute('data-chart-end-ms', '9000000')
+      .toHaveAttribute('data-chart-end-ms', '12600000')
     expect(screen.getByRole('button', { name: 'Показать данные за 8 часов' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Показать данные за 12 часов' }))
@@ -76,6 +76,15 @@ describe('GlucoseChart', () => {
     const highPathNumbers = chart.querySelector('.actual-line.glucose-high')!.getAttribute('d')!.match(/-?\d+(?:\.\d+)?/g)!.map(Number)
     expect(lowPathNumbers.at(-1)).toBeCloseTo(targetBottom, 1)
     expect(highPathNumbers[1]).toBeCloseTo(targetTop, 1)
+    const forecastStroke = chart.querySelector('.forecast-line')!.getAttribute('stroke')!
+    const forecastGradient = document.getElementById(forecastStroke.slice(5, -1))!
+    const stops = forecastGradient.querySelectorAll('stop')
+    const gradientTop = Number(forecastGradient.getAttribute('y1'))
+    const gradientHeight = Number(forecastGradient.getAttribute('y2')) - gradientTop
+    expect(Number(stops[1].getAttribute('offset')) * gradientHeight + gradientTop).toBeCloseTo(targetTop, 5)
+    expect(stops[1].getAttribute('offset')).toEqual(stops[2].getAttribute('offset'))
+    expect(Number(stops[3].getAttribute('offset')) * gradientHeight + gradientTop).toBeCloseTo(targetBottom, 5)
+    expect(stops[3].getAttribute('offset')).toEqual(stops[4].getAttribute('offset'))
   })
 
   it('keeps a cold-start forecast out of the prediction while reserving the real future window', () => {
@@ -105,8 +114,9 @@ describe('GlucoseChart', () => {
 
     const chart = screen.getByRole('img', { name: 'Сахар за 6 часов' })
     expect(chart).toHaveAttribute('data-forecast-state', 'pending')
-    expect(chart).toHaveAttribute('data-chart-end-ms', String(rawSnapshot.server_time_ms + 120 * 60_000))
-    expect(chart).toHaveAttribute('data-future-window-minutes', '120')
+    expect(chart).toHaveAttribute('data-chart-end-ms', String(rawSnapshot.server_time_ms + 180 * 60_000))
+    expect(chart).toHaveAttribute('data-future-window-minutes', '180')
+    expect(chart).toHaveAttribute('data-forecast-horizon-minutes', '120')
     expect(chart.querySelector('.forecast-line')).toBeNull()
     expect(chart.querySelector('.forecast-band')).toBeNull()
     expect(chart.querySelector('.forecast-endpoint')).toBeNull()
@@ -303,11 +313,12 @@ describe('GlucoseChart', () => {
 
       await waitFor(() => expect(chart).toHaveAttribute('viewBox', '0 0 375 510'))
       expect(chart.closest('.chart-viewport')).toHaveAttribute('data-chart-height', '510')
-      expect(chart).toHaveAttribute('data-future-window-minutes', '120')
+      expect(chart).toHaveAttribute('data-future-window-minutes', '180')
+      expect(chart).toHaveAttribute('data-forecast-horizon-minutes', '120')
       const plotLeft = 10
       const plotWidth = 375 - plotLeft - 42
       const nowRatio = (Number(chart.getAttribute('data-chart-now-x')) - plotLeft) / plotWidth
-      expect(nowRatio).toBeCloseTo(0.75, 4)
+      expect(nowRatio).toBeCloseTo(2 / 3, 4)
       expect(screen.getByText('5 ЕД')).toBeInTheDocument()
       expect(screen.getByText('12 ЕД')).toBeInTheDocument()
 

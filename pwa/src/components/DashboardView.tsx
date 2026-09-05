@@ -53,8 +53,8 @@ export function DashboardView({ snapshot, savedAt, serverNowMs, range, onRangeCh
             <>
               <div className="glucose-glance-value">
                 <strong>{mmol(current.glucoseMgDl)}</strong>
-                <span>ммоль/л</span>
                 <span className="trend-arrow" aria-label={readingTrend!.label}>{readingTrend!.arrow}</span>
+                <span>ммоль/л</span>
               </div>
               <div className="glucose-glance-meta">
                 <span className={`state-pill ${state!.tone}`}>{state!.label}</span>

@@ -35,8 +35,8 @@ describe('SettingsView access mode', () => {
     await screen.findByText(/0,1 МБ/)
 
     expect(screen.getByText('Публичный просмотр')).toBeInTheDocument()
-    expect(screen.getByText(/Только сахар и прогноз/)).toBeInTheDocument()
-    expect(screen.getByText(/Еда и инсулин скрыты/)).toBeInTheDocument()
+    expect(screen.getByText(/Сахар, прогноз и отметки инсулина/)).toBeInTheDocument()
+    expect(screen.getByText(/Личные записи скрыты/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Удалить сохранённые показания' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Выйти и удалить данные' })).not.toBeInTheDocument()
     expect(screen.queryByText(/Сессия действует/)).not.toBeInTheDocument()

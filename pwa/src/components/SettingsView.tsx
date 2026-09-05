@@ -148,7 +148,7 @@ export function SettingsView({
         {accessMode === 'public' ? (
           <div className="public-access-copy compact-access">
             <strong>Публичный просмотр</strong>
-            <p>Только сахар и прогноз. Еда и инсулин скрыты.</p>
+            <p>Сахар, прогноз и отметки инсулина. Личные записи скрыты.</p>
             {offlineCopyPaused ? (
               <p className="success-copy compact-status" role="status"><Icon name="check" size={17} />Копия удалена</p>
             ) : (

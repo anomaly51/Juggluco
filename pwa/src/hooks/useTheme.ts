@@ -5,7 +5,7 @@ const THEME_KEY = 'juggluco-theme'
 
 function storedTheme(): ThemeMode {
   const value = localStorage.getItem(THEME_KEY)
-  return value === 'dark' || value === 'light' || value === 'system' ? value : 'system'
+  return value === 'dark' || value === 'light' || value === 'system' ? value : 'dark'
 }
 
 export function useTheme() {
@@ -18,7 +18,7 @@ export function useTheme() {
       document.documentElement.dataset.theme = resolved
       document.documentElement.style.colorScheme = resolved
       const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
-      if (meta) meta.content = resolved === 'dark' ? '#090c0b' : '#f4f7f5'
+      if (meta) meta.content = resolved === 'dark' ? '#060301' : '#f9eedc'
     }
     apply()
     media.addEventListener('change', apply)

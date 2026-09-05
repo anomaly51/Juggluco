@@ -130,11 +130,11 @@ export default function App() {
 
   return (
     <div className="app-shell graph-app-shell">
-      <a className="skip-link" href="#main-content">Перейти к графику</a>
-      <header className="app-header compact-header">
+      <a className="skip-link" href="#main-content" inert={Boolean(panel)}>Перейти к графику</a>
+      <header className="app-header compact-header" inert={Boolean(panel)}>
         <div className="header-inner compact-header-inner">
           <div className="brand-lockup compact-brand" aria-label="Juggluco">
-            <span className="brand-mark small"><Icon name="droplet" size={20} /></span>
+            <span className="brand-mark small"><Icon name="activity" size={20} /></span>
             <strong>Juggluco</strong>
           </div>
           <div className="header-controls">
@@ -168,7 +168,7 @@ export default function App() {
         </div>
       </header>
 
-      <div className="app-notices" aria-live="polite">
+      <div className="app-notices" aria-live="polite" inert={Boolean(panel)}>
         {update.updateReady && (
           <aside className="update-banner" aria-label="Доступно обновление">
             <div><Icon name="download" size={20} /><span><strong>Доступно обновление</strong></span></div>
@@ -193,7 +193,7 @@ export default function App() {
         )}
       </div>
 
-      <main id="main-content" className="main-content graph-main" tabIndex={-1}>
+      <main id="main-content" className="main-content graph-main" tabIndex={-1} inert={Boolean(panel)}>
         <DashboardView
           snapshot={snapshot}
           savedAt={viewer.savedAt}

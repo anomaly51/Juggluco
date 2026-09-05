@@ -20,8 +20,8 @@ export default defineConfig({
         display: 'standalone',
         display_override: ['window-controls-overlay', 'standalone', 'minimal-ui'],
         orientation: 'any',
-        background_color: '#090c0b',
-        theme_color: '#090c0b',
+        background_color: '#060301',
+        theme_color: '#060301',
         categories: ['health', 'medical', 'utilities'],
         icons: [
           {

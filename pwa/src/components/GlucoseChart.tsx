@@ -166,6 +166,8 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
   const descriptionId = useId()
   const helpId = useId()
   const liveId = useId()
+  const spectrumId = useId()
+  const ribbonId = useId()
   const viewportRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState(DEFAULT_SIZE)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
@@ -222,6 +224,7 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
   const visibleFutureMinutes = Math.max(
     MIN_FORECAST_HORIZON_MINUTES,
     Math.min(MAX_FORECAST_HORIZON_MINUTES, configuredHorizonMinutes),
+    Math.min(MAX_FORECAST_HORIZON_MINUTES, range * 60 * 0.6),
   )
   // Keep the time scale stable while a forecast is learning: the right-hand
   // side is a real future window, but it remains empty until a ready forecast exists.
@@ -245,7 +248,7 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
   const margin = {
     top: chartHeight < 240 ? 12 : 18,
     right: chartWidth < 420 ? 42 : 46,
-    bottom: chartHeight < 240 ? 25 : 32,
+    bottom: chartHeight < 240 ? 30 : 36,
     left: chartWidth < 420 ? 10 : 18,
   }
   const plotWidth = Math.max(1, chartWidth - margin.left - margin.right)
@@ -310,7 +313,8 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
     })
   })()
   const yTickCount = chartWidth < 440 || chartHeight < 240 ? 4 : 5
-  const gridTicks = Array.from({ length: yTickCount }, (_, index) => yLow + ((yHigh - yLow) * index) / (yTickCount - 1))
+  const gridStep = Math.max(18, Math.ceil((yHigh - yLow) / (yTickCount - 1) / 18) * 18)
+  const gridTicks = Array.from({ length: Math.floor((yHigh - yLow) / gridStep) + 1 }, (_, index) => yLow + index * gridStep)
   const timeTicks = (() => {
     const minimumGap = chartWidth < 440 ? 54 : 48
     const ticks = [start, end]
@@ -454,13 +458,14 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
   const selectedX = selectedPoint ? x(selectedPoint.atMs) : 0
   const selectedY = selectedPoint ? selectedPoint.chartY! : 0
   const selectedIsInsulin = selectedPoint?.kind === 'insulin-rapid' || selectedPoint?.kind === 'insulin-long'
-  const tooltipWidth = selectedIsInsulin ? (chartWidth < 380 ? 148 : 174) : chartWidth < 380 ? 132 : 154
-  const tooltipHeight = selectedPoint?.kind === 'forecast' ? 60 : 48
-  const tooltipX = selectedPoint
+  const tooltipWidth = Math.min(chartWidth - 24, selectedIsInsulin ? 224 : 194)
+  const tooltipHeight = selectedPoint?.kind === 'forecast' ? 94 : 76
+  const preferredTooltipX = selectedPoint
     ? selectedX + 12 + tooltipWidth > chartWidth - margin.right
       ? selectedX - tooltipWidth - 12
       : selectedX + 12
     : 0
+  const tooltipX = Math.max(12, Math.min(chartWidth - tooltipWidth - 12, preferredTooltipX))
   const tooltipY = selectedPoint
     ? selectedY - tooltipHeight - 12 < margin.top
       ? Math.min(chartHeight - margin.bottom - tooltipHeight, selectedY + 12)
@@ -468,9 +473,9 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
     : 0
 
   return (
-    <section className="card chart-card chart-panel" aria-labelledby="chart-heading">
+    <section className="card chart-card chart-panel" aria-labelledby={titleId}>
       <div className="chart-toolbar">
-        <h2 id="chart-heading" className="sr-only">График сахара</h2>
+        <h2 className="sr-only">График сахара</h2>
         <div className="segmented compact chart-range-controls" aria-label="Период графика">
           {RANGE_OPTIONS.map((hours) => (
             <button
@@ -505,6 +510,7 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
           data-chart-now-ms={now}
           data-chart-now-x={x(now)}
           data-future-window-minutes={visibleFutureMinutes}
+          data-forecast-horizon-minutes={configuredHorizonMinutes}
           data-forecast-state={forecastPresentation.kind}
           onFocus={() => {
             if (selectedKey == null && inspectablePoints.length) {
@@ -524,6 +530,21 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
         >
           <title id={titleId}>Сахар за {range} часов{forecastPresentation.kind === 'ready' ? ' и прогноз' : ''}</title>
           <desc id={descriptionId}>{narrative}</desc>
+          <defs>
+            <linearGradient id={spectrumId} x1="0" x2="0" y1={margin.top} y2={plotBottom} gradientUnits="userSpaceOnUse">
+              <stop className="spectrum-high" offset="0" />
+              <stop className="spectrum-high" offset={(targetTop - margin.top) / plotHeight} />
+              <stop className="spectrum-target" offset={(targetTop - margin.top) / plotHeight} />
+              <stop className="spectrum-target" offset={(targetBottom - margin.top) / plotHeight} />
+              <stop className="spectrum-low" offset={(targetBottom - margin.top) / plotHeight} />
+              <stop className="spectrum-low" offset="1" />
+            </linearGradient>
+            <linearGradient id={ribbonId} x1="0" x2="1" y1="0" y2="0">
+              <stop className="ribbon-near" offset="0" />
+              <stop className="ribbon-far" offset="1" />
+            </linearGradient>
+          </defs>
+          <rect className="plot-surface" x={margin.left} y={margin.top} width={plotWidth} height={plotHeight} />
           <rect
             className="glucose-zone-band high-zone-band"
             data-glucose-zone="high"
@@ -549,6 +570,14 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
             height={plotBottom - targetBottom}
           />
           <rect
+            className="target-band-inner"
+            x={margin.left}
+            y={targetTop + (targetBottom - targetTop) * 0.2}
+            width={plotWidth}
+            height={(targetBottom - targetTop) * 0.6}
+            aria-hidden="true"
+          />
+          <rect
             className={`future-window ${forecastPresentation.kind}`}
             data-series="future-window"
             x={x(now)}
@@ -559,10 +588,15 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
           {gridTicks.map((tick) => (
             <g key={tick}>
               <line className="chart-grid" x1={margin.left} x2={chartWidth - margin.right} y1={y(tick)} y2={y(tick)} />
-              <text className="axis-label" x={chartWidth - margin.right + 8} y={y(tick) + 4} textAnchor="start">
-                {mmol(tick, tick % 18 === 0 ? 0 : 1)}
-              </text>
+              {Math.abs(y(tick) - targetTop) > 17 && Math.abs(y(tick) - targetBottom) > 17 && (
+                <text className="axis-label" x={chartWidth - margin.right + 8} y={y(tick) + 4} textAnchor="start">
+                  {mmol(tick, tick % 18 === 0 ? 0 : 1)}
+                </text>
+              )}
             </g>
+          ))}
+          {timeTicks.map((tick) => (
+            <line key={tick} className="chart-grid vertical-grid" x1={x(tick)} x2={x(tick)} y1={margin.top} y2={plotBottom} />
           ))}
           {timeTicks.map((tick, index) => (
             <text
@@ -573,18 +607,36 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
               x={x(tick)}
               y={chartHeight - 9}
               textAnchor={index === 0 ? 'start' : index === timeTicks.length - 1 ? 'end' : 'middle'}
+              visibility={Math.abs(x(tick) - x(now)) < 44 ? 'hidden' : undefined}
             >
               {time(tick)}
             </text>
           ))}
-          {end > now && <line className="now-line" x1={x(now)} x2={x(now)} y1={margin.top} y2={chartHeight - margin.bottom} />}
+          <line className="target-boundary" x1={margin.left} x2={chartWidth - margin.right} y1={targetTop} y2={targetTop} />
+          <line className="target-boundary" x1={margin.left} x2={chartWidth - margin.right} y1={targetBottom} y2={targetBottom} />
           {uncertainty && (
             <polygon
               className="forecast-band"
               data-series="forecast-uncertainty"
               points={uncertainty}
+              fill={`url(#${ribbonId})`}
             />
           )}
+          {forecast.length >= 2 && (
+            <g aria-hidden="true" className="forecast-boundaries">
+              <path d={linePath(forecast, (point) => point.atMs, (point) => point.highMgDl)} />
+              <path d={linePath(forecast, (point) => point.atMs, (point) => point.lowMgDl)} />
+            </g>
+          )}
+          <g aria-hidden="true" className="actual-halo-lines">
+            {actualZoneSegments.map((segment) => (
+              <path
+                className={`actual-line-halo glucose-${segment.zone}`}
+                d={linePath(segment.points, (point) => point.atMs, (point) => point.valueMgDl)}
+                key={segment.key}
+              />
+            ))}
+          </g>
           {actualZoneSegments.map((segment) => (
               <path
                 className={`actual-line glucose-${segment.zone}`}
@@ -614,6 +666,7 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
               data-series="forecast"
               data-line-style="dashed"
               strokeDasharray="8 7"
+              stroke={`url(#${spectrumId})`}
               d={linePath(forecast, (point) => point.atMs, (point) => point.medianMgDl)}
             />
           )}
@@ -680,7 +733,7 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
                 className={`latest-halo glucose-${latestActualZone}`}
                 cx={x(latestActual.measuredAtMs)}
                 cy={y(latestActual.glucoseMgDl)}
-                r="9"
+                r="10"
                 aria-hidden="true"
               />
               <circle
@@ -694,7 +747,7 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
           )}
           {latestForecast && (
             <circle
-              className="forecast-endpoint"
+              className={`forecast-endpoint glucose-${glucoseZone(latestForecast.medianMgDl, snapshot.targetRange.lowMgDl, snapshot.targetRange.highMgDl)}`}
               data-forecast-confidence={forecastConfidence}
               cx={x(latestForecast.atMs)}
               cy={y(latestForecast.medianMgDl)}
@@ -702,9 +755,15 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
             />
           )}
           {end > now && (
-            <text className="now-label" x={x(now) + 5} y={margin.top + 11}>
-              сейчас
-            </text>
+            <g className="now-marker" aria-hidden="true">
+              <line className="now-line" x1={x(now)} x2={x(now)} y1={margin.top} y2={plotBottom} />
+              <rect className="now-cap" x={x(now) - 3} y={margin.top} width="6" height="3" />
+              <rect className="now-label-frame" x={Math.min(chartWidth - 63, x(now) - 29)} y={plotBottom + 9} width="58" height="20" rx="2" />
+              <text className="now-label" x={Math.min(chartWidth - 34, x(now))} y={plotBottom + 23} textAnchor="middle">СЕЙЧАС</text>
+            </g>
+          )}
+          {forecast.length >= 2 && chartWidth - margin.right - x(now) >= 76 && (
+            <text className="future-field-label" x={x(now) + 9} y={margin.top + 14} aria-hidden="true">ПРОГНОЗ</text>
           )}
           <text
             className="series-label target-series-label"
@@ -712,17 +771,25 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
             y={y(snapshot.targetRange.highMgDl) + 14}
             aria-hidden="true"
           >
-            цель 4,2–9
+            цель {mmol(snapshot.targetRange.lowMgDl)}–{mmol(snapshot.targetRange.highMgDl, snapshot.targetRange.highMgDl % 18 === 0 ? 0 : 1)}
           </text>
+          {[snapshot.targetRange.highMgDl, snapshot.targetRange.lowMgDl].map((threshold) => (
+            <g className="target-axis-tag" key={threshold} aria-hidden="true" transform={`translate(${chartWidth - margin.right + 4} ${y(threshold) - 9})`}>
+              <rect width="32" height="18" rx="2" />
+              <text x="16" y="13" textAnchor="middle">{mmol(threshold, threshold % 18 === 0 ? 0 : 1)}</text>
+            </g>
+          ))}
           {latestForecast && (
             <text
               className="series-label forecast-series-label"
               x={x(latestForecast.atMs) - 5}
-              y={Math.max(margin.top + 11, y(latestForecast.medianMgDl) - 9)}
+              y={Math.max(margin.top + 34, y(latestForecast.medianMgDl) - 14)}
               textAnchor="end"
               aria-hidden="true"
             >
-              прогноз {mmol(latestForecast.medianMgDl)} ммоль/л · {forecastConfidence}%
+              {chartWidth < 440
+                ? `${mmol(latestForecast.medianMgDl)} · ${forecastConfidence}%`
+                : `прогноз ${mmol(latestForecast.medianMgDl)} ммоль/л · ${forecastConfidence}%`}
             </text>
           )}
           {!latestActual && (
@@ -730,6 +797,12 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
               Нет данных
             </text>
           )}
+          <rect className="plot-outline" x={margin.left} y={margin.top} width={plotWidth} height={plotHeight} aria-hidden="true" />
+          <path
+            className="plot-corners"
+            d={`M ${margin.left + 9} ${margin.top} H ${margin.left} V ${margin.top + 9} M ${chartWidth - margin.right - 9} ${plotBottom} H ${chartWidth - margin.right} V ${plotBottom - 9}`}
+            aria-hidden="true"
+          />
           {selectedPoint && (
             <g
               className="chart-inspector"
@@ -746,13 +819,13 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
                 r="5"
               />
               <g className="inspection-tooltip" transform={`translate(${tooltipX} ${tooltipY})`}>
-                <rect width={tooltipWidth} height={tooltipHeight} rx="10" />
-                <text className="inspection-value" x="10" y="19">
+                <rect width={tooltipWidth} height={tooltipHeight} rx="3" />
+                <text className="inspection-value" x="12" y="23">
                   {selectedIsInsulin
                     ? `${selectedPoint.insulinName} · ${insulinUnits(selectedPoint.insulinUnits!)} ЕД`
                     : `${mmol(selectedPoint.valueMgDl!)} ммоль/л`}
                 </text>
-                <text className="inspection-meta" x="10" y="37">
+                <text className="inspection-meta" x="12" y="43">
                   {time(selectedPoint.atMs)} · {
                     selectedPoint.kind === 'forecast'
                       ? 'прогноз'
@@ -761,11 +834,14 @@ export function GlucoseChart({ snapshot, savedAt, serverNowMs, range, onRangeCha
                         : selectedPoint.kind === 'insulin-long'
                           ? 'длительный инсулин'
                           : 'замер'
-                  }{selectedPoint.glucoseZone ? ` · ${glucoseZoneLabel(selectedPoint.glucoseZone)}` : ''}
+                  }
+                </text>
+                <text className={`inspection-status${selectedPoint.glucoseZone ? ` glucose-${selectedPoint.glucoseZone}` : ''}`} x="12" y="63">
+                  {selectedPoint.glucoseZone ? glucoseZoneLabel(selectedPoint.glucoseZone) : 'запись инсулина'}
                 </text>
                 {selectedPoint.kind === 'forecast' && (
-                  <text className="inspection-range" x="10" y="53">
-                    {mmol(selectedPoint.lowMgDl!)}–{mmol(selectedPoint.highMgDl!)}
+                  <text className="inspection-range" x="12" y="82">
+                    диапазон {mmol(selectedPoint.lowMgDl!)}–{mmol(selectedPoint.highMgDl!)}
                   </text>
                 )}
               </g>
