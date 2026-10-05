@@ -8,8 +8,8 @@ volume.
 
 `.github/workflows/backend-container.yml` checks the PWA, backend, chart, and combined
 image on GitHub-hosted runners. After a successful push check on `primary`,
-`.github/workflows/backend-deploy.yml` runs only on the restricted
-`juggluco-deploy` runner inside Kubernetes. Its local BuildKit publishes
+`.github/workflows/backend-deploy.yml` uses the shared
+`arc-runner-set` pool inside Kubernetes and the shared remote BuildKit service to publish
 `harbor.internal.api-api-api.com/applications/juggluco:sha-<commit>` to the private
 Harbor instance in General-1. Pull requests never run on the cluster runner.
 
