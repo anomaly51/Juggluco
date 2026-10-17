@@ -1,3 +1,5 @@
+import { viewerEndpoint } from './profile'
+
 export type ViewerStreamEventType = 'ready' | 'glucose' | 'heartbeat'
 
 export interface ViewerStreamEvent {
@@ -19,7 +21,6 @@ export interface ViewerStreamConnection {
   close: () => void
 }
 
-const STREAM_URL = '/v1/viewer/stream'
 const MAX_EVENT_CHARS = 16 * 1024
 
 function eventRecord(value: unknown): Record<string, unknown> {
@@ -71,7 +72,7 @@ export function parseViewerStreamEvent(type: ViewerStreamEventType, raw: string)
 }
 
 export function connectViewerStream(handlers: ViewerStreamHandlers): ViewerStreamConnection {
-  const source = new EventSource(STREAM_URL, { withCredentials: true })
+  const source = new EventSource(viewerEndpoint('stream'), { withCredentials: true })
 
   source.onopen = handlers.onOpen
   source.onerror = handlers.onError

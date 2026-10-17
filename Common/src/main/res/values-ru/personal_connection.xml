@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="personal_connection_title">Персональная ссылка</string>
+    <string name="personal_connection_waiting">Ожидание подключения</string>
+    <string name="personal_connection_identity">Создаём ID телефона</string>
+    <string name="personal_connection_connecting">Подключаемся к серверу</string>
+    <string name="personal_connection_created">Персональное хранилище готово</string>
+    <string name="personal_connection_saving">Сохраняем подключение телефона</string>
+    <string name="personal_connection_ready">Подключено · ссылка готова</string>
+    <string name="personal_connection_existing">Текущее подключение сохранено. Ниже можно привязать его историю к персональной ссылке.</string>
+    <string name="personal_connection_manual">Подключение изменено вручную. Персональный профиль не перезаписан.</string>
+    <string name="personal_connection_pending">Завершите ожидающую операцию в чате и повторите. Данные сохранены.</string>
+    <string name="personal_connection_retry">Не удалось завершить. Проверьте интернет и сервер, затем повторите. Создание продолжится с тем же ID.</string>
+    <string name="personal_connection_auth_error">Сервер не принял подключение. Проверьте ключ в настройках Backend.</string>
+    <string name="personal_connection_conflict">Эта история уже принадлежит другой установке. Ничего не заменено.</string>
+    <string name="personal_connection_capacity">Сервер занят или достиг лимита. Повторите позже.</string>
+    <string name="personal_connection_progress">%1$d%% · %2$s</string>
+    <string name="personal_connection_stages">ID телефона → хранилище → ссылка → подключение
+Процент показывает завершённые этапы, а не оставшееся время.</string>
+    <string name="personal_connection_link_pending">Здесь появится ваша персональная ссылка.</string>
+    <string name="personal_connection_privacy">Любой, у кого есть ссылка, видит сахар и прогноз, но не может менять записи. Делитесь только с теми, кому доверяете.</string>
+    <string name="personal_connection_forecast">Показания, еда, инсулин и прогноз хранятся отдельно от других телефонов. Новый профиль начинает со стандартного прогноза, без персональных корректировок другого человека.</string>
+    <string name="personal_connection_open">Открыть просмотр</string>
+    <string name="personal_connection_change">Изменить ссылку</string>
+    <string name="personal_connection_copy">Скопировать ссылку</string>
+    <string name="personal_connection_copied">Ссылка скопирована</string>
+    <string name="personal_connection_try">Подключить / повторить</string>
+    <string name="personal_connection_claim">Подключить текущую историю</string>
+    <string name="personal_connection_claim_help">Привязать текущую историю и модель этого сервера к телефону. Данные не удаляются. Это однократное действие с текущим ключом Backend; его должен выполнять только владелец этой истории.</string>
+    <string name="personal_connection_label">Название в URL — необязательно</string>
+    <string name="personal_connection_label_invalid">До 24 строчных латинских букв, цифр или дефисов. Начните с буквы или цифры. Можно оставить пустым.</string>
+    <string name="personal_connection_rotate_help">Случайный суффикс защищает ссылку от угадывания. Старая ссылка перестанет получать данные. Уже скачанные копии нельзя удалить удалённо. История и прогноз сохранятся.</string>
+</resources>

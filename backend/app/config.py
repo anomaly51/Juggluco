@@ -108,8 +108,15 @@ class Settings:
     viewer_session_days: int = 30
     pwa_dist_path: Path = DEFAULT_PWA_DIST_PATH
     viewer_trusted_proxy_cidrs: tuple[str, ...] = ()
+    personal_connections: bool = True
+    connection_registration_limit: int = 100
+    connection_runtime_limit: int = 32
+    connection_ai_daily_limit: int = 100
 
     def __post_init__(self) -> None:
+        if min(self.connection_registration_limit, self.connection_runtime_limit,
+               self.connection_ai_daily_limit) < 1:
+            raise ValueError("personal connection limits must be positive")
         try:
             normalized_audio_language = normalize_audio_language(
                 self.openrouter_audio_language
@@ -205,6 +212,10 @@ class Settings:
                 "JUGGLUCO_MAX_AUDIO_BYTES", 15 * 1024 * 1024
             ),
             app_version=os.getenv("APP_VERSION", "dev"),
+            personal_connections=_boolean("JUGGLUCO_PERSONAL_CONNECTIONS", True),
+            connection_registration_limit=_positive_int("JUGGLUCO_CONNECTION_REGISTRATION_LIMIT", 100),
+            connection_runtime_limit=_positive_int("JUGGLUCO_CONNECTION_RUNTIME_LIMIT", 32),
+            connection_ai_daily_limit=_positive_int("JUGGLUCO_CONNECTION_AI_DAILY_LIMIT", 100),
             openrouter_audio_language=os.getenv(
                 "OPENROUTER_AUDIO_LANGUAGE"
             ),

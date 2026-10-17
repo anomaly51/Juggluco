@@ -1,4 +1,5 @@
 import { normalizeSnapshot } from './normalize'
+import { profileStorageKey } from './profile'
 import type { CachedSnapshot, ViewerAccessMode, ViewerSnapshot } from './types'
 
 const DB_NAME = 'juggluco-viewer'
@@ -9,7 +10,7 @@ const CACHE_PREFIX = 'juggluco-viewer'
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION)
+    const request = indexedDB.open(profileStorageKey(DB_NAME), DB_VERSION)
     request.onupgradeneeded = () => {
       const database = request.result
       if (!database.objectStoreNames.contains(STORE_NAME)) database.createObjectStore(STORE_NAME)

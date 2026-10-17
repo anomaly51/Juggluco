@@ -2498,6 +2498,8 @@ private    void mksettings(MainActivity context) {
         mirror.setOnClickListener(view->new Backup().realmkbackupview(context,false));
         Button intakeBackend=getbutton(context,R.string.intake_backend_settings_title);
         intakeBackend.setOnClickListener(view->IntakeBackendSettings.show(context));
+        Button personalConnection=getbutton(context,R.string.personal_connection_title);
+        personalConnection.setOnClickListener(view->tk.glucodata.PersonalConnectionSettings.show(context));
 
         Button logview=null;
         if(doLog)
@@ -2512,7 +2514,7 @@ private    void mksettings(MainActivity context) {
         unitLabel.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
 
         for(View action:new View[]{calibration,displayview,alarmbut,numalarm,
-                exchanges,intakeBackend,mirror,about,intro,changelabels})
+                exchanges,intakeBackend,personalConnection,mirror,about,intro,changelabels})
             stylePhoneSettingsAction(action,true);
         if(logview!=null)
             stylePhoneSettingsAction(logview,true);
@@ -2597,7 +2599,7 @@ private    void mksettings(MainActivity context) {
                 R.string.settings_category_connections,
                 R.string.settings_category_connections_intro,
                 phoneSettingsPageSection(context,R.string.settings_category_services),
-                phoneSettingsGroup(context,intakeBackend,exchanges,mirror));
+                phoneSettingsGroup(context,personalConnection,intakeBackend,exchanges,mirror));
 
         LinearLayout lastScanAction=ClinicalUi.actionRow(context,
                 context.getString(R.string.last_scan),

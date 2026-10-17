@@ -2570,6 +2570,7 @@ def create_app(
             request.url.path == "/viewer"
             or request.url.path.startswith("/viewer/")
             or request.url.path.startswith("/v1/viewer/")
+            or request.url.path.startswith("/v1/shares/")
         )
         secure_browser_request = _is_secure_browser_request(request)
         if viewer_browser_path and not secure_browser_request:
@@ -2580,12 +2581,14 @@ def create_app(
             )
         else:
             response = await call_next(request)
-        if request.url.path == "/v1/viewer/stream":
+        if request.url.path == "/v1/viewer/stream" or (
+            request.url.path.startswith("/v1/shares/") and request.url.path.endswith("/stream")
+        ):
             # Prevent reverse proxies from buffering or transforming the live
             # event stream while retaining the viewer's private no-store rule.
             response.headers["Cache-Control"] = "no-store, no-transform, private"
             response.headers["Vary"] = "Authorization, Cookie"
-        elif request.url.path.startswith("/v1/viewer/"):
+        elif request.url.path.startswith(("/v1/viewer/", "/v1/shares/")):
             # Viewer responses contain health data and may traverse a remote
             # reverse proxy.  Explicitly forbid both shared and private caches
             # and keep credential-dependent representations separated.
@@ -5995,6 +5998,8 @@ def create_app(
     application.include_router(create_viewer_session_router())
     application.include_router(create_viewer_router(get_session, _event_response))
     mount_viewer_pwa(application, settings.pwa_dist_path)
+    from .connections import install_connections
+    install_connections(application, settings, create_app)
     return application
 
 

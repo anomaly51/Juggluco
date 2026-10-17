@@ -578,6 +578,7 @@ def create_viewer_router(
 
         async def events():
             last_revision = initial_revision
+            link_valid = getattr(request.state, "viewer_link_valid", lambda: True)
             try:
                 yield _sse_event(
                     "ready",
@@ -589,6 +590,8 @@ def create_viewer_router(
                     event_id=f"{stream_id}:{last_revision}",
                 )
                 while True:
+                    if not link_valid():
+                        return
                     now_ms = _now_ms()
                     if expires_at_ms is not None and now_ms >= expires_at_ms:
                         return
@@ -603,6 +606,8 @@ def create_viewer_router(
                     try:
                         update = await asyncio.wait_for(queue.get(), timeout=timeout)
                     except TimeoutError:
+                        if not link_valid():
+                            return
                         now_ms = _now_ms()
                         if expires_at_ms is not None and now_ms >= expires_at_ms:
                             return
@@ -616,6 +621,8 @@ def create_viewer_router(
                         )
                         continue
                     if update is None:
+                        return
+                    if not link_valid():
                         return
                     if update.revision <= last_revision:
                         continue

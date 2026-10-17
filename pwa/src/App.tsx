@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { relativeAge } from './format'
+import { profileContext } from './profile'
 import { readingIsStaleAt } from './freshness'
 import { useInstall } from './hooks/useInstall'
 import { usePwaUpdate } from './hooks/usePwaUpdate'
@@ -113,6 +114,13 @@ export default function App() {
   }
 
   if (viewer.authState === 'unauthenticated' || (!viewer.snapshot && viewer.authState !== 'authenticated')) {
+    if (profileContext().key !== 'legacy') {
+      return <main className="splash-screen" aria-live="polite">
+        <h1>Персональная ссылка</h1>
+        <p>Не удалось открыть данные. Проверьте интернет или получите действующую ссылку в настройках Android.</p>
+        <button type="button" onClick={() => window.location.reload()}>Повторить</button>
+      </main>
+    }
     return <LoginView error={viewer.error} onLogin={viewer.login} />
   }
 

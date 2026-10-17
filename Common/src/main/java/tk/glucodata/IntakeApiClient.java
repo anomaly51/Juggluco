@@ -493,7 +493,20 @@ final class IntakeApiClient {
     private JSONObject requestJson(String method, String path, JSONObject body,
             int timeoutMs, String idempotencyKey)
             throws IOException, JSONException {
+        return requestJson(method,path,body,timeoutMs,idempotencyKey,null);
+    }
+
+    JSONObject connectionRequest(String method,String path,JSONObject body,
+            String legacyToken) throws IOException,JSONException {
+        return requestJson(method,path,body,REQUEST_TIMEOUT_MS,null,legacyToken);
+    }
+
+    private JSONObject requestJson(String method, String path, JSONObject body,
+            int timeoutMs, String idempotencyKey, String legacyToken)
+            throws IOException, JSONException {
         HttpURLConnection connection = open(method, path, timeoutMs);
+        if(legacyToken!=null&&!legacyToken.isEmpty())
+            connection.setRequestProperty("X-Legacy-Token",legacyToken);
         connection.setRequestProperty("Accept", "application/json");
         if (idempotencyKey != null && !idempotencyKey.isEmpty()) {
             connection.setRequestProperty("Idempotency-Key", idempotencyKey);

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="personal_connection_title">Personal link</string>
+    <string name="personal_connection_waiting">Waiting to connect</string>
+    <string name="personal_connection_identity">Preparing this phone’s ID</string>
+    <string name="personal_connection_connecting">Connecting to your server</string>
+    <string name="personal_connection_created">Personal storage is ready</string>
+    <string name="personal_connection_saving">Saving this phone’s connection</string>
+    <string name="personal_connection_ready">Connected · your link is ready</string>
+    <string name="personal_connection_existing">Existing connection kept. Connect its history to a personal link below.</string>
+    <string name="personal_connection_manual">Connection changed in advanced settings. Your personal profile has not been overwritten.</string>
+    <string name="personal_connection_pending">Finish the pending chat operation, then retry. Your data is safe.</string>
+    <string name="personal_connection_retry">Cannot finish yet. Check internet and server, then retry. Setup will resume with the same ID.</string>
+    <string name="personal_connection_auth_error">This connection was not accepted. Check your server credentials in Backend settings.</string>
+    <string name="personal_connection_conflict">This history already belongs to another installation. Nothing was replaced.</string>
+    <string name="personal_connection_capacity">Server is busy or has reached its limit. Try again later.</string>
+    <string name="personal_connection_progress">%1$d%% · %2$s</string>
+    <string name="personal_connection_stages">Phone ID → personal storage → link → connected
+Progress reflects completed setup steps, not time remaining.</string>
+    <string name="personal_connection_link_pending">Your personal link will appear here.</string>
+    <string name="personal_connection_privacy">Anyone with this link can view your glucose and forecast. They cannot edit your records. Share it only with people you trust.</string>
+    <string name="personal_connection_forecast">Your readings, meals, insulin and forecasts stay separate from other phones. New profiles start with the standard forecast, without another person’s personal adjustments.</string>
+    <string name="personal_connection_open">Open viewer</string>
+    <string name="personal_connection_change">Change link</string>
+    <string name="personal_connection_copy">Copy personal link</string>
+    <string name="personal_connection_copied">Personal link copied</string>
+    <string name="personal_connection_try">Connect / retry</string>
+    <string name="personal_connection_claim">Connect existing history</string>
+    <string name="personal_connection_claim_help">Connect this server’s existing history and forecast model to this phone. Nothing is deleted. This one-time action requires the current backend credential and is only for the owner of that history.</string>
+    <string name="personal_connection_label">Optional URL label</string>
+    <string name="personal_connection_label_invalid">Use up to 24 lowercase English letters, digits or hyphens; start with a letter or digit. Or leave empty.</string>
+    <string name="personal_connection_rotate_help">A random suffix keeps your link hard to guess. The old link stops receiving data. Already downloaded copies cannot be erased remotely. History and forecast stay unchanged.</string>
+</resources>

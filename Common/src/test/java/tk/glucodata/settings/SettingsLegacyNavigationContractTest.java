@@ -84,7 +84,8 @@ public class SettingsLegacyNavigationContractTest {
         assertTrue(phoneRoot.contains("PhoneSettingsPage dataPage"));
         assertTrue(phoneRoot.contains("PhoneSettingsPage behaviorPage"));
         assertTrue(phoneRoot.contains("PhoneSettingsPage advancedPage"));
-        assertTrue(phoneRoot.contains("phoneSettingsGroup(context,intakeBackend,exchanges,mirror)"));
+        assertTrue(phoneRoot.contains("phoneSettingsGroup(context,personalConnection,intakeBackend,exchanges,mirror)"));
+        assertTrue(phoneRoot.contains("PersonalConnectionSettings.show(context)"));
         assertTrue(phoneRoot.contains("IntakeBackendSettings.show(context)"));
         assertTrue(phoneRoot.contains("phoneSettingsGroup(context,alarmbut,numalarm)"));
         assertTrue(phoneRoot.contains("LegacySettingsRoutes.showLastScan(context,dismissSettingsForNative)"));

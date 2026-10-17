@@ -1,8 +1,7 @@
 import { normalizeSnapshot } from './normalize'
+import { viewerEndpoint } from './profile'
 import type { ViewerSession, ViewerSnapshot } from './types'
 
-const SESSION_URL = '/v1/viewer/session'
-const SNAPSHOT_URL = '/v1/viewer/snapshot'
 const MAX_SNAPSHOT_BYTES = 12 * 1024 * 1024
 
 export class ApiError extends Error {
@@ -80,7 +79,7 @@ async function boundedResponseText(response: Response): Promise<string> {
 }
 
 export async function getSession(signal?: AbortSignal): Promise<ViewerSession> {
-  const response = await fetch(SESSION_URL, {
+  const response = await fetch(viewerEndpoint('session'), {
     method: 'GET',
     credentials: 'include',
     cache: 'no-store',
@@ -96,7 +95,7 @@ export async function getSession(signal?: AbortSignal): Promise<ViewerSession> {
 }
 
 export async function createSession(token: string): Promise<ViewerSession> {
-  const response = await fetch(SESSION_URL, {
+  const response = await fetch(viewerEndpoint('session'), {
     method: 'POST',
     credentials: 'include',
     cache: 'no-store',
@@ -109,7 +108,7 @@ export async function createSession(token: string): Promise<ViewerSession> {
 }
 
 export async function deleteSession(): Promise<void> {
-  const response = await fetch(SESSION_URL, {
+  const response = await fetch(viewerEndpoint('session'), {
     method: 'DELETE',
     credentials: 'include',
     cache: 'no-store',
@@ -121,7 +120,7 @@ export async function deleteSession(): Promise<void> {
 
 export async function fetchSnapshot(signal?: AbortSignal): Promise<ViewerSnapshot> {
   const query = new URLSearchParams({ glucose_limit: '1500', event_limit: '500' })
-  const response = await fetch(`${SNAPSHOT_URL}?${query}`, {
+  const response = await fetch(`${viewerEndpoint('snapshot')}?${query}`, {
     method: 'GET',
     credentials: 'include',
     cache: 'no-store',

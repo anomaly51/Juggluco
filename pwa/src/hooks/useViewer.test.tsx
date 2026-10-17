@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { deleteSession, fetchSnapshot, getSession } from '../api'
+import { ApiError, deleteSession, fetchSnapshot, getSession } from '../api'
 import { clearDeviceData, clearSnapshot, loadSnapshot, saveSnapshot } from '../db'
 import { connectViewerStream } from '../live'
 import type { ViewerStreamHandlers } from '../live'
@@ -46,6 +46,21 @@ describe('useViewer request ordering', () => {
     ...rawSnapshot,
     glucose_revision: 2,
     current_glucose: { ...rawSnapshot.current_glucose, glucose_mg_dl: 144 },
+  })
+  it('clears the current personal cache after link revocation', async () => {
+    history.replaceState(null, '', '/viewer/?profile=abcdefghijklmnopqrstuv')
+    try {
+      vi.mocked(getSession).mockResolvedValue({ authenticated: true, accessMode: 'public', expiresAtMs: null })
+      vi.mocked(fetchSnapshot).mockResolvedValue(firstSnapshot)
+      const hook = renderHook(() => useViewer())
+      await waitFor(() => expect(hook.result.current.snapshot).not.toBeNull())
+      vi.mocked(fetchSnapshot).mockRejectedValue(new ApiError('revoked', 401))
+      await act(async () => { await hook.result.current.refresh() })
+      expect(hook.result.current.authState).toBe('unauthenticated')
+      expect(hook.result.current.snapshot).toBeNull()
+      expect(clearSnapshot).toHaveBeenCalled()
+      hook.unmount()
+    } finally { history.replaceState(null, '', '/viewer/') }
   })
   let streamHandlers: ViewerStreamHandlers | null = null
   let closeStream: ReturnType<typeof vi.fn>

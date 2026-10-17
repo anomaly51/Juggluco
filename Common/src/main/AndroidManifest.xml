@@ -67,6 +67,7 @@
         android:supportsRtl="true"
         android:name=".Applic"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/personal_connection_backup_rules"
         android:debuggable="${debuggable}"
         android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher"

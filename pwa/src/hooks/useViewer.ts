@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, createSession, deleteSession, fetchSnapshot, getSession } from '../api'
 import { clearDeviceData, clearSnapshot, loadSnapshot, saveSnapshot } from '../db'
 import { effectiveServerNow } from '../freshness'
+import { profileContext, profileStorageKey } from '../profile'
 import { connectViewerStream } from '../live'
 import type { ViewerStreamEvent } from '../live'
 import type { AuthState, ConnectionState, LogoutState, SyncState, ViewerAccessMode, ViewerSnapshot } from '../types'
@@ -26,7 +27,7 @@ function message(error: unknown): string {
 
 function logoutWasInterrupted(): boolean {
   try {
-    return localStorage.getItem(LOGOUT_PENDING_KEY) === '1'
+    return localStorage.getItem(profileStorageKey(LOGOUT_PENDING_KEY)) === '1'
   } catch {
     return false
   }
@@ -34,7 +35,7 @@ function logoutWasInterrupted(): boolean {
 
 function rememberPendingLogout(): void {
   try {
-    localStorage.setItem(LOGOUT_PENDING_KEY, '1')
+    localStorage.setItem(profileStorageKey(LOGOUT_PENDING_KEY), '1')
   } catch {
     // The current page still remains fail-closed when storage is unavailable.
   }
@@ -42,7 +43,7 @@ function rememberPendingLogout(): void {
 
 function forgetPendingLogout(): void {
   try {
-    localStorage.removeItem(LOGOUT_PENDING_KEY)
+    localStorage.removeItem(profileStorageKey(LOGOUT_PENDING_KEY))
   } catch {
     // A stale non-sensitive marker is safer than silently restoring a session.
   }
@@ -137,6 +138,18 @@ export function useViewer() {
     } catch (reason) {
       if (sequence !== refreshSequence.current || (reason instanceof DOMException && reason.name === 'AbortError')) return false
       if (reason instanceof ApiError && reason.status === 401) {
+        if (profileContext().key !== 'legacy') {
+          hasData.current = false
+          snapshotRef.current = null
+          setSnapshot(null)
+          setSavedAt(null)
+          const clear = persistQueue.current.then(async () => {
+            if (sequence === refreshSequence.current) await clearSnapshot().catch(() => undefined)
+          })
+          persistQueue.current = clear
+          await clear
+          if (sequence !== refreshSequence.current) return false
+        }
         const wasPublic = accessModeRef.current === 'public'
         rememberAccessMode('session')
         setAuthState('unauthenticated')
@@ -281,6 +294,13 @@ export function useViewer() {
           if (!active) return
         }
         if (!session.authenticated) {
+          if (profileContext().key !== 'legacy') {
+            hasData.current = false
+            snapshotRef.current = null
+            setSnapshot(null)
+            setSavedAt(null)
+            await clearSnapshot().catch(() => undefined)
+          }
           setAuthState('unauthenticated')
           setSyncState(hasData.current ? 'offline' : 'error')
           return

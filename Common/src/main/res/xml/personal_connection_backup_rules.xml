@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <!-- Never clone backend credentials/cursors when an OEM offers device transfer
+         despite allowBackup=false. The identity DB itself is in noBackupFilesDir. -->
+    <cloud-backup>
+        <exclude domain="sharedpref" path="intake_backend.xml" />
+        <exclude domain="sharedpref" path="forecast_sync.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="intake_backend.xml" />
+        <exclude domain="sharedpref" path="forecast_sync.xml" />
+    </device-transfer>
+</data-extraction-rules>

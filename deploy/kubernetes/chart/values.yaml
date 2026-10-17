@@ -71,6 +71,10 @@ forecastRetry:
 
 config:
   databasePath: /data/juggluco.db
+  personalConnections: true
+  connectionRegistrationLimit: 100
+  connectionRuntimeLimit: 32
+  connectionAiDailyLimit: 100
   # Anyone with the PWA link can view glucose. Write/admin routes still require
   # the Android bearer token and are never covered by the public viewer policy.
   viewerPublic: true

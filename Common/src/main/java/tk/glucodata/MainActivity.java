@@ -759,6 +759,7 @@ static boolean tocalendarapp=false;
     protected void onResume() {
     if(doLog) {Log.i(LOG_ID,"onResume");};;
     super.onResume();
+    if(!isWearable) PersonalConnection.initialize(this);
     if(curve!=null) {
         if(!curve.waitnfc) {
             {if(doLog) {Log.d(LOG_ID,"onResume setnfc");};};

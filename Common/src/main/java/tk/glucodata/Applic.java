@@ -674,6 +674,7 @@ public static    int stopprogram=0;
     if(DiskSpace.check(this)) {
         initproc();
         if (!isWearable) AppUpdates.initialize(this);
+        if (!isWearable) PersonalConnection.initialize(this);
         }
     else {    
         android.util.Log.e(LOG_ID,"Stop program");
