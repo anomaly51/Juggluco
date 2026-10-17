@@ -205,6 +205,8 @@ private void startdisplay() {
    if(doLog) {Log.i(LOG_ID,"startdisplay");};
    Applic app=    (Applic)getApplication();
     app.setbackgroundcolor(this) ;
+    if(!isWearable)
+        syncDashboardSystemBars();
     if(Applic.Nativesloaded)
         app.needsnatives() ;
 
@@ -249,9 +251,7 @@ private void startdisplay() {
     else {
         }
 
-      // The redesigned phone shell is consistently dark, including the
-      // edge-to-edge regions behind both system bars.
-      lightBars(false);
+      syncDashboardSystemBars();
       }
     if(isWearable) {
         setContentView(curve);
@@ -352,13 +352,11 @@ private void supportRTL() {
     // Returns true if the currently applied theme is a light theme
 private void reallightBars(boolean light) {
    Log.i(LOG_ID,"lightBars "+ light);
-   if(Build.VERSION.SDK_INT >= 30) {
-     var win=getWindow();
-     var view= win.getDecorView();
-     WindowInsetsControllerCompat windowInsetsController =WindowCompat.getInsetsController(win, view);
-     windowInsetsController.setAppearanceLightStatusBars(light);
-     windowInsetsController.setAppearanceLightNavigationBars(light);
-     }
+   var win=getWindow();
+   var view= win.getDecorView();
+   WindowInsetsControllerCompat windowInsetsController =WindowCompat.getInsetsController(win, view);
+   windowInsetsController.setAppearanceLightStatusBars(light);
+   windowInsetsController.setAppearanceLightNavigationBars(light);
    }
 
 
@@ -414,6 +412,39 @@ private  boolean getIsLightTheme() {
         return false; 
       }
 private boolean isLightTheme=false;
+static boolean usesLightDashboardPalette(Configuration configuration) {
+    // The retro dashboard uses the same dark CRT canvas in both system modes.
+    // Keeping this false also guarantees readable light system-bar glyphs when
+    // Android is configured for day mode.
+    return false;
+    }
+
+private void applyDashboardTheme(Configuration configuration) {
+    getTheme().applyStyle(R.style.ModernDashboardThemeOverlay, true);
+    if(Build.VERSION.SDK_INT >= 29)
+        getTheme().rebase();
+    isLightTheme=usesLightDashboardPalette(configuration);
+    }
+
+/** Keeps edge-to-edge system chrome on the same semantic canvas as the dashboard. */
+void syncDashboardSystemBars() {
+    if(isWearable)
+        return;
+    Configuration configuration=getResources().getConfiguration();
+    isLightTheme=usesLightDashboardPalette(configuration);
+    int background=ContextCompat.getColor(this,R.color.lifeprompt_background);
+    int divider=ContextCompat.getColor(this,R.color.lifeprompt_outline_variant);
+    var window=getWindow();
+    window.getDecorView().setBackgroundColor(background);
+    if(Build.VERSION.SDK_INT >= 21) {
+        window.setStatusBarColor(background);
+        window.setNavigationBarColor(background);
+        }
+    if(Build.VERSION.SDK_INT >= 28)
+        window.setNavigationBarDividerColor(divider);
+    lightBars(isLightTheme);
+    }
+
   private void updateRtl(Configuration config) {
         rtl = config.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
 
@@ -459,6 +490,12 @@ private void setBackPress() {
             });
         }
     @Override
+    protected void attachBaseContext(android.content.Context base) {
+        AppLanguage.beforeActivityAttach();
+        super.attachBaseContext(AppLanguage.wrap(base));
+    }
+
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         if(android.os.Build.VERSION.SDK_INT >= 21) {
              Log.i(LOG_ID,"sdk 21 or larger") ;
@@ -478,14 +515,10 @@ private void setBackPress() {
              isLightTheme=getIsLightTheme();
              }
 
-        // The redesigned phone experience uses one stable, high-contrast
-        // product palette.  Applying it to the Activity (rather than only the
-        // dashboard root) also brings the existing data-entry, help and
-        // settings flows into the same visual system while their mature
-        // business logic remains untouched.
+        // The amber terminal overlay keeps one dark canvas across system modes
+        // while preserving the persisted Juggluco theme enum and its ordering.
         if(!isWearable) {
-             getTheme().applyStyle(R.style.ModernDashboardThemeOverlay, true);
-             isLightTheme=false;
+             applyDashboardTheme(getResources().getConfiguration());
              }
 
         updateRtl(getResources().getConfiguration());
@@ -1115,7 +1148,9 @@ void removeconfig() {
     }
 @Override
 public void onConfigurationChanged(Configuration newConfig) {
+    newConfig = AppLanguage.configuration(newConfig);
     super.onConfigurationChanged(newConfig);
+    AppLanguage.apply(this);
     if(doLog) {Log.i(LOG_ID,"onConfigurationChanged height=" +newConfig.screenHeightDp+" width=" +newConfig.screenWidthDp + " sw="+newConfig.smallestScreenWidthDp);};
    boolean keepIntake=intakeComposer!=null&&intakeComposer.isShowing();
    boolean keepEventDetails=intakeEventDetailsSheet!=null
@@ -1124,13 +1159,21 @@ public void onConfigurationChanged(Configuration newConfig) {
            &&intakeEventClusterSheet.isShowing();
    boolean keepForecast=forecastDetailsPage!=null
            &&forecastDetailsPage.isShowing();
-   if(keepIntake||keepEventDetails||keepEventCluster||keepForecast) {
+   boolean keepAlerts=GlucoseAlertSettingsPage.hasActiveScreen(this);
+   boolean keepSettings=tk.glucodata.settings.Settings.isShowing();
+   boolean keepMenu=Menus.isShowing();
+   if(keepIntake||keepEventDetails||keepEventCluster||keepForecast
+           ||keepAlerts||keepSettings||keepMenu) {
        screenwidth=0;
        screenheight=0;
        }
    else
        removeconfig();
    updateRtl(newConfig);
+   if(!isWearable) {
+       applyDashboardTheme(newConfig);
+       syncDashboardSystemBars();
+       }
    setsizes(this);
    GlucoseCurve.setgeo(screenwidth,screenheight);
    if(dashboardChrome!=null)
@@ -1143,10 +1186,22 @@ public void onConfigurationChanged(Configuration newConfig) {
        intakeEventClusterSheet.onConfigurationChanged();
    if(keepForecast)
        forecastDetailsPage.onConfigurationChanged();
+   if(keepAlerts)
+       GlucoseAlertSettingsPage.onHostConfigurationChanged(this);
+   if(keepSettings)
+       tk.glucodata.settings.Settings.onConfigurationChanged();
+   if(keepMenu)
+       Menus.onConfigurationChanged();
    requestRender();
    }
 public void requestRender() {
-    if(curve!=null)
+    // The phone dashboard has a Canvas renderer above the compatibility GL
+    // surface. Dashboard-specific refreshes must not repaint that hidden
+    // surface; NFC/camera and other native state-machine paths still call the
+    // curve directly, while Wear and an explicit dashboard fallback keep the
+    // established GL behavior here.
+    if(curve!=null&&(dashboardChrome==null
+            ||dashboardChrome.isLegacyGraphRendererActive()))
         curve.requestRender();
     refreshDashboardData();
     }
@@ -1161,6 +1216,11 @@ boolean acceptsDashboardGraphGestures() {
             && dashboardChrome.acceptsGraphGestures();
     }
 
+void onDashboardGraphViewportMoved() {
+    if(dashboardChrome!=null)
+        dashboardChrome.showReturnToNow();
+    }
+
 void showIntakeComposer() {
     if(isWearable) return;
     if(intakeComposer!=null&&intakeComposer.isShowing()) return;
@@ -1170,6 +1230,11 @@ void showIntakeComposer() {
 
 void onIntakeComposerClosed(IntakeComposer composer) {
     if(intakeComposer==composer) intakeComposer=null;
+    // Add is a top-level task. Return the graph to its current live window.
+    if(curve!=null) {
+        Natives.settonow();
+        requestRender();
+        }
     }
 
 void showIntakeEvent(int renderKey) {
@@ -1216,7 +1281,7 @@ void onIntakeEventDetailsClosed(IntakeEventDetailsSheet sheet) {
         }
     }
 
-void showForecastDetails() {
+public void showForecastDetails() {
     if(isWearable) return;
     if(forecastDetailsPage!=null&&forecastDetailsPage.isShowing()) return;
     forecastDetailsPage=ForecastDetailsPage.show(this);
@@ -1621,6 +1686,17 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
             }
     }
 
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        // The forecast page intentionally removes the above-app overlay. Keep
+        // the same deliberate five-press acknowledgement available while the
+        // live measured-low alarm is sounding inside the main application.
+        CriticalAlarmVolumeKeyController.Result result =
+                CriticalAlarmVolumeKeyController.dispatch(this, null, event);
+        if (result.consumed) return true;
+        return super.dispatchKeyEvent(event);
+    }
+
 @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
     {if(doLog) {Log.v(LOG_ID,"OnKeyDown");};};
@@ -1688,7 +1764,7 @@ static public boolean doonback() {
         }
     return false;
     }
-static boolean isConfigurationBackDrain() {
+public static boolean isConfigurationBackDrain() {
     return configurationBackDrain;
     }
 static int drainBackStackForConfiguration() {

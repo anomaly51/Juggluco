@@ -5,7 +5,8 @@
     android:layout_height="match_parent"
     android:background="#B8000000"
     android:clickable="true"
-    android:focusable="true">
+    android:focusable="true"
+    android:theme="@style/ModernDashboardThemeOverlay">
 
     <LinearLayout
         android:id="@+id/intake_event_cluster_sheet"
@@ -49,7 +50,7 @@
                     android:id="@+id/intake_event_cluster_title"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:fontFamily="sans-serif-medium"
+                    android:fontFamily="monospace"
                     android:includeFontPadding="false"
                     android:maxLines="1"
                     android:textColor="@color/modern_secondary_text_primary"

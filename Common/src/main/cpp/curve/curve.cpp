@@ -83,7 +83,7 @@ using namespace std::literals;
 #include "calibrate/Calibrate.hpp"
 
 namespace {
-struct IntakeTimelineHit {
+struct IntakeGraphHit {
     std::vector<std::int32_t> keys;
     float left;
     float top;
@@ -91,10 +91,10 @@ struct IntakeTimelineHit {
     float bottom;
 };
 
-std::mutex intakeTimelineMutex;
-std::vector<IntakeTimelineEvent> intakeTimelineEvents;
-std::vector<IntakeTimelineHit> intakeTimelineHits;
-std::uint64_t intakeTimelineRevision=0U;
+std::mutex intakeGraphMutex;
+std::vector<IntakeGraphEvent> intakeGraphEvents;
+std::vector<IntakeGraphHit> intakeGraphHits;
+std::uint64_t intakeGraphRevision=0U;
 
 std::mutex forecastGraphMutex;
 std::vector<forecastgraph::Point> forecastGraphPoints;
@@ -202,31 +202,31 @@ std::uint32_t forecastGraphEndTime() {
     return forecastGraphPoints.empty()?0U:forecastGraphPoints.back().time;
 }
 
-void replaceIntakeTimelineEvents(std::vector<IntakeTimelineEvent> events) {
+void replaceIntakeGraphEvents(std::vector<IntakeGraphEvent> events) {
     std::stable_sort(events.begin(),events.end(),[](const auto &left,
                                                     const auto &right) {
         if(left.time!=right.time)
             return left.time<right.time;
         return left.key<right.key;
     });
-    std::lock_guard<std::mutex> guard(intakeTimelineMutex);
-    intakeTimelineEvents=std::move(events);
-    intakeTimelineHits.clear();
-    ++intakeTimelineRevision;
+    std::lock_guard<std::mutex> guard(intakeGraphMutex);
+    intakeGraphEvents=std::move(events);
+    intakeGraphHits.clear();
+    ++intakeGraphRevision;
 }
 
-int intakeTimelineEventAt(float x,float y) {
-    std::lock_guard<std::mutex> guard(intakeTimelineMutex);
-    for(auto it=intakeTimelineHits.rbegin();it!=intakeTimelineHits.rend();++it) {
+int intakeGraphEventAt(float x,float y) {
+    std::lock_guard<std::mutex> guard(intakeGraphMutex);
+    for(auto it=intakeGraphHits.rbegin();it!=intakeGraphHits.rend();++it) {
         if(x>=it->left&&x<=it->right&&y>=it->top&&y<=it->bottom)
             return it->keys.empty()?0:it->keys.front();
     }
     return 0;
 }
 
-std::vector<std::int32_t> intakeTimelineEventsAt(float x,float y) {
-    std::lock_guard<std::mutex> guard(intakeTimelineMutex);
-    for(auto it=intakeTimelineHits.rbegin();it!=intakeTimelineHits.rend();++it) {
+std::vector<std::int32_t> intakeGraphEventsAt(float x,float y) {
+    std::lock_guard<std::mutex> guard(intakeGraphMutex);
+    for(auto it=intakeGraphHits.rbegin();it!=intakeGraphHits.rend();++it) {
         if(x>=it->left&&x<=it->right&&y>=it->top&&y<=it->bottom)
             return it->keys;
     }
@@ -341,6 +341,26 @@ static int getWhiteFont(NVGcontext* avg) {
 //"/usr/local/Wolfram/Wolfram/14.2/SystemFiles/Fonts/TrueType/Roboto-Regular.ttf"
 #endif
     );
+    }
+static int getMonoFont(NVGcontext* avg) {
+    // Android vendors do not ship one universal monospace face. Try common
+    // system fonts in preference order, then let initfont fall back to the
+    // already validated regular face instead of risking an invalid font id.
+    constexpr const char *monofonts[]={
+        fontpath "CutiveMono.ttf",
+        fontpath "DroidSansMono.ttf",
+        fontpath "RobotoMono-Regular.ttf",
+        fontpath "Roboto-Regular.ttf"
+        };
+    for(const char *name:monofonts) {
+        const int face=nvgCreateFont(avg,"terminal-mono",name);
+        if(face!=-1) {
+            CURVELOGGER("monofont %s succeeded\n",name);
+            return face;
+            }
+        CURVELOGGER("monofont %s failed\n",name);
+        }
+    return -1;
     }
 static int getMenuFont(NVGcontext* avg) {
         constexpr const char menufonts[][sizeof(fontpath "SourceSansPro-SemiBold.ttf")]={
@@ -525,8 +545,20 @@ thevg=avg;
         CURVELOGAR("white font failed");
         whitefont=blackfont;
         }
+    monofont=getMonoFont(avg);
+    if(monofont<0) {
+        CURVELOGAR("monospace fonts unavailable; using regular graph font");
+        monofont=whitefont;
+        }
+    else {
+        if(whitefont>=0&&whitefont!=monofont)
+            nvgAddFallbackFontId(avg,monofont,whitefont);
+        if(blackfont>=0&&blackfont!=whitefont&&blackfont!=monofont)
+            nvgAddFallbackFontId(avg,monofont,blackfont);
+        }
 #else
         whitefont=blackfont;
+        monofont=font;
 #endif
 const FontUse fontuse{.vg=avg,.whitefont=whitefont,.blackfont=blackfont,.scriptEnabled=usedScript};
 if(usedtext==&hitext) {
@@ -710,7 +742,7 @@ pollCurveStrokeWidth=3*density;
 hitStrokeWidth=10*density;
 TrendStrokeWidth=15/2*density;
 glucoseLinesStrokeWidth=1.5*density;
-timeLinesStrokeWidth=glucoseLinesStrokeWidth;
+timeGridStrokeWidth=glucoseLinesStrokeWidth;
 dayEndStrokeWidth=2*density;
 nowLineStrokeWidth=density*2;
 pointRadius=4*density;
@@ -994,9 +1026,9 @@ void JCurve::drawforecastactivities(NVGcontext* avg,const uint32_t now,
         const int kindIndex=rawKind-1;
         const int lane=activityLanes[activityIndex];
         const NVGcolor base=activity.kind==forecastgraph::ActivityKind::Meal?
-                            hexcolor(0xF2A93B):
+                            modernGraphMeal:
                             (activity.kind==forecastgraph::ActivityKind::RapidInsulin?
-                             hexcolor(0x55C8F2):hexcolor(0xB69AF5));
+                             modernGraphRapid:modernGraphLong);
         const float confidence=std::isfinite(activity.confidence)?
                 forecastgraph::clamp01(activity.confidence):0.0f;
         const float strength=std::isfinite(activity.strength)?
@@ -1230,20 +1262,20 @@ void JCurve::drawforecast(NVGcontext* avg,const uint32_t now,
     if(clipStart>=visibleEnd)
         return;
 
-    std::vector<forecastgraph::Point> timeline=source;
+    std::vector<forecastgraph::Point> series=source;
     if(actualAnchor&&actualAnchor->time<=now&&
        now-actualAnchor->time<=15U*60U) {
-        const auto position=std::lower_bound(timeline.begin(),timeline.end(),
+        const auto position=std::lower_bound(series.begin(),series.end(),
                 actualAnchor->time,
                 [](const forecastgraph::Point &point,const uint32_t value) {
                     return point.time<value;
                 });
-        if(position!=timeline.end()&&position->time==actualAnchor->time)
+        if(position!=series.end()&&position->time==actualAnchor->time)
             *position=*actualAnchor;
         else
-            timeline.insert(position,*actualAnchor);
+            series.insert(position,*actualAnchor);
         }
-    if(timeline.size()<2)
+    if(series.size()<2)
         return;
 
     const auto interpolate=[](const forecastgraph::Point &left,
@@ -1261,26 +1293,26 @@ void JCurve::drawforecast(NVGcontext* avg,const uint32_t now,
     };
     const auto sampleAt=[&](const uint32_t time,
                             forecastgraph::Point &result) {
-        const auto after=std::lower_bound(timeline.begin(),timeline.end(),time,
+        const auto after=std::lower_bound(series.begin(),series.end(),time,
                 [](const forecastgraph::Point &point,const uint32_t value) {
                     return point.time<value;
                 });
-        if(after!=timeline.end()&&after->time==time) {
+        if(after!=series.end()&&after->time==time) {
             result=*after;
             return true;
             }
-        if(after==timeline.begin()||after==timeline.end())
+        if(after==series.begin()||after==series.end())
             return false;
         result=interpolate(*std::prev(after),*after,time);
         return true;
     };
 
     std::vector<forecastgraph::Point> points;
-    points.reserve(timeline.size()+2U);
+    points.reserve(series.size()+2U);
     forecastgraph::Point boundary{};
     if(sampleAt(clipStart,boundary))
         points.push_back(boundary);
-    for(const auto &point:timeline) {
+    for(const auto &point:series) {
         if(point.time>=clipStart&&point.time<=visibleEnd&&
            (points.empty()||points.back().time!=point.time))
             points.push_back(point);
@@ -1343,9 +1375,9 @@ void JCurve::drawforecast(NVGcontext* avg,const uint32_t now,
         const auto &left=points[index-1],&right=points[index];
         const float progressLeft=(left.time-firstTime)/horizon;
         const float progressRight=(right.time-firstTime)/horizon;
-        const float alphaBase=.055f+.115f*confidence;
-        const float alphaLeft=alphaBase*(1.0f-.48f*progressLeft);
-        const float alphaRight=alphaBase*(1.0f-.48f*progressRight);
+        const float alphaBase=.035f+.060f*confidence;
+        const float alphaLeft=alphaBase*(1.0f-.78f*progressLeft);
+        const float alphaRight=alphaBase*(1.0f-.78f*progressRight);
         const float middle=(left.medianMgDl+right.medianMgDl)*.5f;
         const NVGcolor base=stateColor(middle);
         const float xLeft=transx(left.time),xRight=transx(right.time);
@@ -1374,8 +1406,8 @@ void JCurve::drawforecast(NVGcontext* avg,const uint32_t now,
         nvgBeginPath(avg);
         nvgMoveTo(avg,transx(left.time),yFor(left.medianMgDl));
         nvgLineTo(avg,transx(right.time),yFor(right.medianMgDl));
-        nvgStrokeWidth(avg,pollCurveStrokeWidth+density*2.6f);
-        nvgStrokeColor(avg,alphaColor(base,.08f+.10f*confidence));
+        nvgStrokeWidth(avg,std::max(density*3.0f,2.2f));
+        nvgStrokeColor(avg,alphaColor(base,.035f+.055f*confidence));
         nvgStroke(avg);
         }
 
@@ -1383,6 +1415,9 @@ void JCurve::drawforecast(NVGcontext* avg,const uint32_t now,
     const float gapLength=std::max(density*3.5f,2.0f);
     const float pattern=dashLength+gapLength;
     float travelled=0.0f;
+    // Square-ended CRT dashes remain visibly discontinuous at phone scale;
+    // the measured trace keeps its softer round joins.
+    nvgLineCap(avg,NVG_BUTT);
     nvgStrokeWidth(avg,std::max(density*1.65f,1.35f));
     for(size_t index=1;index<points.size();++index) {
         const auto &left=points[index-1],&right=points[index];
@@ -1449,34 +1484,34 @@ void JCurve::drawintakeevents(NVGcontext* avg,uint32_t visibleStart,
                               uint32_t visibleEnd,
                               const std::vector<intakemarkers::GlucosePoint>
                                       &glucosePoints) {
-    std::vector<IntakeTimelineEvent> events;
+    std::vector<IntakeGraphEvent> events;
     std::uint64_t renderRevision=0U;
     {
-        std::lock_guard<std::mutex> guard(intakeTimelineMutex);
-        events=intakeTimelineEvents;
-        renderRevision=intakeTimelineRevision;
+        std::lock_guard<std::mutex> guard(intakeGraphMutex);
+        events=intakeGraphEvents;
+        renderRevision=intakeGraphRevision;
     }
-    std::vector<IntakeTimelineHit> hits;
-    std::vector<IntakeTimelineHit> broadHits;
+    std::vector<IntakeGraphHit> hits;
+    std::vector<IntakeGraphHit> broadHits;
     if(!modernnormal||events.empty()||visibleEnd<=visibleStart) {
-        std::lock_guard<std::mutex> guard(intakeTimelineMutex);
-        if(renderRevision==intakeTimelineRevision)
-            intakeTimelineHits.clear();
+        std::lock_guard<std::mutex> guard(intakeGraphMutex);
+        if(renderRevision==intakeGraphRevision)
+            intakeGraphHits.clear();
         return;
     }
 
-    const NVGcolor mealFill=hexcolor(0x2A2114);
-    const NVGcolor mealBorder=hexcolor(0xF2A93B);
-    const NVGcolor mealText=hexcolor(0xFFD28C);
-    const NVGcolor rapidFill=hexcolor(0x122A34);
-    const NVGcolor rapidBorder=hexcolor(0x55C8F2);
-    const NVGcolor rapidText=hexcolor(0xC9F1FF);
-    const NVGcolor longFill=hexcolor(0x251D35);
-    const NVGcolor longBorder=hexcolor(0xB69AF5);
-    const NVGcolor longText=hexcolor(0xE8DCFF);
-    const NVGcolor otherInsulinFill=hexcolor(0x1A222A);
-    const NVGcolor otherInsulinBorder=hexcolor(0x91A5B8);
-    const NVGcolor otherInsulinText=hexcolor(0xD8E2EB);
+    const NVGcolor mealFill=modernGraphMealFill;
+    const NVGcolor mealBorder=modernGraphMeal;
+    const NVGcolor mealText=modernGraphMealText;
+    const NVGcolor rapidFill=modernGraphRapidFill;
+    const NVGcolor rapidBorder=modernGraphRapid;
+    const NVGcolor rapidText=modernGraphRapidText;
+    const NVGcolor longFill=modernGraphLongFill;
+    const NVGcolor longBorder=modernGraphLong;
+    const NVGcolor longText=modernGraphLongText;
+    const NVGcolor otherInsulinFill=modernGraphOtherInsulinFill;
+    const NVGcolor otherInsulinBorder=modernGraphOtherInsulin;
+    const NVGcolor otherInsulinText=modernGraphOtherInsulinText;
     const float chipHeight=std::max(density*21.0f,smallfontlineheight*.80f);
     const float chipGap=density*3.0f;
     const float horizontalPadding=density*7.0f;
@@ -1488,6 +1523,8 @@ void JCurve::drawintakeevents(NVGcontext* avg,uint32_t visibleStart,
 
     nvgSave(avg);
     nvgScissor(avg,dleft,dtop,dwidth,dheight);
+    // Meal labels can contain any locale script, so keep the fully configured
+    // regular face here. Numeric graph chrome uses the monospace face.
     nvgFontFaceId(avg,font);
     nvgFontSize(avg,textSize);
     nvgTextAlign(avg,NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
@@ -1502,7 +1539,7 @@ void JCurve::drawintakeevents(NVGcontext* avg,uint32_t visibleStart,
     };
 
     struct Marker {
-        IntakeTimelineEvent event;
+        IntakeGraphEvent event;
         bool hasMeal;
         bool hasInsulin;
         IntakeInsulinKind insulinKind;
@@ -1519,9 +1556,9 @@ void JCurve::drawintakeevents(NVGcontext* avg,uint32_t visibleStart,
     for(const auto &event:events) {
         if(event.time<visibleStart||event.time>visibleEnd)
             continue;
-        const bool hasMeal=(event.flags&IntakeTimelineMeal)!=0U;
+        const bool hasMeal=(event.flags&IntakeGraphMeal)!=0U;
         const bool hasCarbs=hasMeal
-                &&(event.flags&IntakeTimelineCarbsPresent)!=0U
+                &&(event.flags&IntakeGraphCarbsPresent)!=0U
                 &&std::isfinite(event.carbs);
         const bool hasInsulin=std::isfinite(event.insulin)&&event.insulin>0.0f;
         const IntakeInsulinKind insulinKind=intakeInsulinKind(
@@ -1705,8 +1742,8 @@ void JCurve::drawintakeevents(NVGcontext* avg,uint32_t visibleStart,
 
             nvgBeginPath(avg);
             nvgRoundedRect(avg,badgeLeft,badgeTop,badgeWidth,chipHeight,
-                           chipHeight*.48f);
-            nvgFillColor(avg,hexcolor(0x172028));
+                           density*2.0f);
+            nvgFillColor(avg,modernGraphSurfaceRaised);
             nvgFill(avg);
             nvgStrokeWidth(avg,std::max(1.0f,density*.78f));
             nvgStrokeColor(avg,modernGraphGridStrong);
@@ -1825,6 +1862,27 @@ void JCurve::drawintakeevents(NVGcontext* avg,uint32_t visibleStart,
                 nvgFill(avg);
             }
         };
+        const auto drawSquareSymbol=[&](const float x,const float y,
+                                        const NVGcolor color,
+                                        const bool anchored) {
+            const float radius=density*2.65f;
+            nvgBeginPath(avg);
+            nvgRect(avg,x-radius,y-radius,radius*2.0f,radius*2.0f);
+            if(anchored) {
+                nvgFillColor(avg,modernGraphSurface);
+                nvgFill(avg);
+            }
+            nvgStrokeWidth(avg,std::max(1.0f,density*.9f));
+            nvgStrokeColor(avg,color);
+            nvgStroke(avg);
+            if(anchored) {
+                nvgBeginPath(avg);
+                nvgRect(avg,x-density*.78f,y-density*.78f,
+                        density*1.56f,density*1.56f);
+                nvgFillColor(avg,color);
+                nvgFill(avg);
+            }
+        };
         const auto drawDiamondSymbol=[&](const float x,const float y,
                                          const NVGcolor color,
                                          const bool anchored) {
@@ -1864,7 +1922,9 @@ void JCurve::drawintakeevents(NVGcontext* avg,uint32_t visibleStart,
             const float symbolOffset=marker.hasMeal&&marker.hasInsulin
                     ?density*2.9f:0.0f;
             if(marker.hasMeal) {
-                drawCircleSymbol(marker.anchorX-symbolOffset,marker.anchorY,
+                // Meals use a square, rapid insulin a circle and long insulin
+                // a diamond. Hit rectangles remain unchanged and forgiving.
+                drawSquareSymbol(marker.anchorX-symbolOffset,marker.anchorY,
                                  mealBorder,marker.glucoseAnchored);
             }
             if(marker.hasInsulin) {
@@ -1904,25 +1964,22 @@ void JCurve::drawintakeevents(NVGcontext* avg,uint32_t visibleStart,
             NVGcolor fill=otherInsulinFill;
             NVGcolor border=otherInsulinBorder;
             NVGcolor textColor=otherInsulinText;
-            float cornerRadius=chipHeight*.32f;
+            const float cornerRadius=density*2.0f;
             switch(row.kind) {
                 case ClusterRowKind::Meal:
                     fill=mealFill;
                     border=mealBorder;
                     textColor=mealText;
-                    cornerRadius=chipHeight*.48f;
                     break;
                 case ClusterRowKind::Rapid:
                     fill=rapidFill;
                     border=rapidBorder;
                     textColor=rapidText;
-                    cornerRadius=chipHeight*.48f;
                     break;
                 case ClusterRowKind::Long:
                     fill=longFill;
                     border=longBorder;
                     textColor=longText;
-                    cornerRadius=chipHeight*.18f;
                     break;
                 case ClusterRowKind::OtherInsulin:
                     break;
@@ -1935,7 +1992,17 @@ void JCurve::drawintakeevents(NVGcontext* avg,uint32_t visibleStart,
             nvgStrokeWidth(avg,std::max(1.0f,density*.70f));
             nvgStrokeColor(avg,border);
             nvgStroke(avg);
-            if(row.kind==ClusterRowKind::Rapid) {
+            if(row.kind==ClusterRowKind::Meal) {
+                const float iconX=rowLeft+density*7.0f;
+                const float iconY=rowTop+chipHeight*.5f;
+                const float iconRadius=density*1.8f;
+                nvgBeginPath(avg);
+                nvgRect(avg,iconX-iconRadius,iconY-iconRadius,
+                        iconRadius*2.0f,iconRadius*2.0f);
+                nvgFillColor(avg,mealBorder);
+                nvgFill(avg);
+            }
+            else if(row.kind==ClusterRowKind::Rapid) {
                 nvgBeginPath(avg);
                 nvgCircle(avg,rowLeft+density*7.0f,
                           rowTop+chipHeight*.5f,density*1.7f);
@@ -1978,12 +2045,12 @@ void JCurve::drawintakeevents(NVGcontext* avg,uint32_t visibleStart,
     }
     nvgRestore(avg);
     {
-        std::lock_guard<std::mutex> guard(intakeTimelineMutex);
+        std::lock_guard<std::mutex> guard(intakeGraphMutex);
         // Broad accessibility targets come first; reverse hit-testing then
         // gives exact chip cells deterministic priority when targets overlap.
         broadHits.insert(broadHits.end(),hits.begin(),hits.end());
-        if(renderRevision==intakeTimelineRevision)
-            intakeTimelineHits=std::move(broadHits);
+        if(renderRevision==intakeGraphRevision)
+            intakeGraphHits=std::move(broadHits);
     }
 }
 
@@ -2105,7 +2172,7 @@ void JCurve::drawgraphselection(NVGcontext* avg,float posx,float posy) {
     const int timelen=tms?mktime(tms->tm_hour,mktmmin(tms),timestr):0;
 
     nvgSave(avg);
-    nvgFontFaceId(avg,font);
+    nvgFontFaceId(avg,monofont>=0?monofont:font);
     nvgTextAlign(avg,NVG_ALIGN_LEFT|NVG_ALIGN_MIDDLE);
     nvgFontSize(avg,smallsize*1.05f);
     float valuebounds[4];
@@ -2128,7 +2195,7 @@ void JCurve::drawgraphselection(NVGcontext* avg,float posx,float posy) {
         cardy=posy+markerGap;
     cardy=std::max(dtop+margin,std::min(cardy,bottom-cardheight-margin));
 
-    const float corner=density*12.0f;
+    const float corner=density*2.0f;
     NVGpaint shadow=nvgBoxGradient(avg,cardx,cardy+density*3.0f,cardwidth,
                                    cardheight,corner,density*12.0f,
                                    nvgRGBA(0,0,0,105),nvgRGBA(0,0,0,0));
@@ -2150,7 +2217,7 @@ void JCurve::drawgraphselection(NVGcontext* avg,float posx,float posy) {
     const float textx=cardx+padding;
     nvgTextAlign(avg,NVG_ALIGN_LEFT|NVG_ALIGN_MIDDLE);
     nvgFontSize(avg,smallsize*1.05f);
-    nvgFillColor(avg,nvgRGBA(241,245,249,255));
+    nvgFillColor(avg,modernGraphText);
     nvgText(avg,textx,cardy+cardheight*.37f,valuestr,valuestr+valuelen);
     nvgFontSize(avg,smallsize*.88f);
     nvgFillColor(avg,modernGraphText);
@@ -2177,6 +2244,14 @@ static const NVGcolor &modernGraphStateColor(const graphpoints::RangeState state
         default:
             return glow?modernGraphGlucoseGlow:modernGraphGlucose;
         }
+}
+
+static float modernGraphCoreStrokeWidth(const float density) {
+    return std::max(density*2.0f,1.5f);
+}
+
+static float modernGraphGlowStrokeWidth(const float density) {
+    return std::max(density*3.4f,2.5f);
 }
 
 static void drawModernGraphSample(NVGcontext* avg,const float x,const float y,
@@ -2446,8 +2521,8 @@ template <class TX,class TY> void JCurve::showlineScan(NVGcontext* avg,const Sca
             bool haveprevious=false;
             uint32_t previouslate=0;
             float previousx=0.0f,previousy=0.0f,previousvalue=0.0f;
-            nvgStrokeWidth(avg,glow?pollCurveStrokeWidth+density*3.2f:
-                                    pollCurveStrokeWidth+density*.35f);
+            nvgStrokeWidth(avg,glow?modernGraphGlowStrokeWidth(density):
+                                    modernGraphCoreStrokeWidth(density));
             for(const ScanData *it=low;it!=high;it++) {
                 if(!it->valid())
                     continue;
@@ -2645,6 +2720,8 @@ template <class TX,class TY> void    JCurve::calihistcurve(NVGcontext* avg,const
     const NVGcolor *col=modernnormal?&modernGraphHistory:getcolor(colorindex);
     nvgStrokeColor(avg, *col);
     nvgFillColor(avg,*col);
+    if(modernnormal)
+        nvgStrokeWidth(avg,modernGraphCoreStrokeWidth(density));
      bool restart=true;
      float startx=-3000.0f,starty=-3000.0f;
     CalibrateBackward<Glucose>  cali(hist,CalibratePast);
@@ -2806,6 +2883,8 @@ template <class TX,class TY> void    JCurve::histcurve(NVGcontext* avg,const Sen
     const NVGcolor *col=modernnormal?&modernGraphHistory:getcolor(colorindex);
     nvgStrokeColor(avg, *col);
     nvgFillColor(avg,*col);
+    if(modernnormal)
+        nvgStrokeWidth(avg,modernGraphCoreStrokeWidth(density));
      bool restart=true;
      float startx=-3000.0f,starty=-3000.0f;
     for(auto pos=firstpos;pos<=lastpos;pos++) {
@@ -3183,13 +3262,12 @@ template <class LT> void    JCurve::glucoselines(NVGcontext* avg,const float las
             if(modernnormal) {
                 float bounds[4];
                 nvgTextBounds(avg,startld,dy,buf,buf+len,bounds);
-                const float horizontal=density*3.5f;
-                const float vertical=density*1.5f;
+                const float horizontal=density*2.0f;
+                const float vertical=density*.65f;
                 nvgBeginPath(avg);
-                nvgRoundedRect(avg,bounds[0]-horizontal,bounds[1]-vertical,
-                               bounds[2]-bounds[0]+horizontal*2.0f,
-                               bounds[3]-bounds[1]+vertical*2.0f,
-                               density*4.0f);
+                nvgRect(avg,bounds[0]-horizontal,bounds[1]-vertical,
+                        bounds[2]-bounds[0]+horizontal*2.0f,
+                        bounds[3]-bounds[1]+vertical*2.0f);
                 nvgFillColor(avg,modernGraphAxisBackdrop);
                 nvgFill(avg);
                 nvgFillColor(avg,modernGraphText);
@@ -3226,7 +3304,7 @@ static bool timemiddle() {
 static bool nocutoff=true;
 #endif
 template <class LT>
-void    JCurve::timelines(NVGcontext* avg,const displaytime *disp, const LT &transx ,uint32_t nu) {
+void    JCurve::drawTimeGrid(NVGcontext* avg,const displaytime *disp, const LT &transx ,uint32_t nu) {
 
     const uint32_t tstep=disp->tstep;
     const uint32_t first=disp->first;
@@ -3273,6 +3351,16 @@ if(nocutoff&&!modernnormal) {
     const float lowY=modernnormal
             ?dtop+dheight-smallfontlineheight*1.45f
             :dheight+dtop+dbottom;
+    if(modernnormal&&lowY>dtop+density*5.0f) {
+        // A single thin phosphor frame gives the graph the reference terminal
+        // structure without adding decorative scanline animation or flicker.
+        nvgBeginPath(avg);
+        nvgRect(avg,dleft,dtop+density*5.0f,dwidth,
+                lowY-(dtop+density*5.0f));
+        nvgStrokeWidth(avg,std::max(density*.7f,.7f));
+        nvgStrokeColor(avg,modernGraphGridStrong);
+        nvgStroke(avg);
+    }
     for(auto tim=first;tim<=last;tim+=tstep) {
         float dtim=transx(tim);
         char buf[20];
@@ -3287,11 +3375,11 @@ if(nocutoff&&!modernnormal) {
             }
          else if(stm->tm_hour||stm->tm_min) {
             if(stm->tm_min||stm->tm_hour%3) {
-                nvgStrokeWidth(avg, timeLinesStrokeWidth);
+                nvgStrokeWidth(avg, timeGridStrokeWidth);
                 nvgStrokeColor(avg, *getgray());
                 }
             else {
-                nvgStrokeWidth(avg, timeLinesStrokeWidth);
+                nvgStrokeWidth(avg, timeGridStrokeWidth);
                 nvgStrokeColor(avg, *getthreehour());
                 }
             }
@@ -3340,7 +3428,7 @@ template <class LT> void    JCurve::epochlines(NVGcontext* avg,uint32_t first,ui
             nvgLineTo( avg, dtim,dheight);
             nvgStroke(avg);
             }
-        nvgStrokeWidth(avg, timeLinesStrokeWidth);
+        nvgStrokeWidth(avg, timeGridStrokeWidth);
         nvgStrokeColor(avg, *getthreehour());
         const int inthree=hour%3;
         start=startin+(inthree?((3-inthree)*60*60):0);
@@ -3621,21 +3709,8 @@ if(showcurrentdate) {
         nvgLineTo(avg,right,bottom);
         nvgStroke(avg);
 
-        // A restrained inline label explains the band without adding a
-        // separate legend or stealing vertical space from the plot.
-        if(bottom-top>density*26.0f) {
-            char targetlabel[48];
-            const double lowvalue=::gconvert(settings->targetlow(),glunit);
-            const double highvalue=::gconvert(settings->targethigh(),glunit);
-            const int targetlen=snprintf(targetlabel,sizeof(targetlabel),
-                    glunit==1?"%.1f - %.1f mmol/L":"%.0f - %.0f mg/dL",
-                    lowvalue,highvalue);
-            nvgFontSize(avg,smallsize*.68f);
-            nvgTextAlign(avg,NVG_ALIGN_LEFT|NVG_ALIGN_TOP);
-            nvgFillColor(avg,nvgRGBAf2(0x68/255.0f,0xC9/255.0f,0x98/255.0f,.78f));
-            nvgText(avg,dleft+density*8.0f,top+density*6.0f,
-                    targetlabel,targetlabel+targetlen);
-            }
+        // The dashboard legend already names the target and its exact range.
+        // Keep the plot itself free of duplicated text on narrow displays.
         return;
         }
     showsavedomain(avg,last,dlow,dhigh) ;
@@ -3730,7 +3805,7 @@ void    JCurve::showlines(NVGcontext* avg,int gm,int gmax) {
     const auto [transx,transy]= gettrans(starttime, endtime);
     displaytime disp=getdisplaytime(UINT_MAX,starttime,endtime, transx);
     const float dlast=dleft+dwidth;
-    timelines(avg,&disp,  transx,UINT32_MAX);
+    drawTimeGrid(avg,&disp,transx,UINT32_MAX);
     if(disp.tstep>(60*60))
         epochlines(avg,starttime,disp.last,transx);
     glucoselines(avg,dlast,smallfontlineheight,gmax,transy,true) ;
@@ -3749,6 +3824,8 @@ void    JCurve::showlines(NVGcontext* avg,int gm,int gmax) {
 extern bool hascalibrations;
 bool hascalibrations=false;
 int    JCurve::displaycurve(NVGcontext* avg,time_t nu) {
+    if(modernnormal)
+        nvgFontFaceId(avg,monofont>=0?monofont:font);
     starttime=(doclamp)?(nu-diffcurrent):(starttime);
     const uint32_t starttime2=starttime;
     const uint32_t endtime=starttime2+duration;
@@ -3990,7 +4067,7 @@ displaytime disp=getdisplaytime(nu,starttime2,endtime, transx);
         showdates(avg,nu,starttime2,endtime) ;
 
     int nupos=transx(nu); 
-    timelines(avg,&disp,  transx,nu);
+    drawTimeGrid(avg,&disp,transx,nu);
     if(!modernnormal&&disp.tstep>(60*60))
         epochlines(avg,starttime2,endtime<nu?endtime:disp.last,transx);
     glucoselines(avg,dlast,smallfontlineheight,gmax,transy,(starttime2+duration/3)<nu) ;
@@ -4060,8 +4137,8 @@ displaytime disp=getdisplaytime(nu,starttime2,endtime, transx);
                     graphpoints::range_state(value,low,high),glow);
             };
         const auto drawpreview=[&](bool glow) {
-            nvgStrokeWidth(avg,glow?pollCurveStrokeWidth+density*3.2f:
-                                    pollCurveStrokeWidth+density*.35f);
+            nvgStrokeWidth(avg,glow?modernGraphGlowStrokeWidth(density):
+                                    modernGraphCoreStrokeWidth(density));
             for(int i=1;i<previewcount;i++) {
                 const previewpoint &a=points[i-1],&b=points[i];
                 float stops[4]={0.0f,1.0f,0.0f,0.0f};
@@ -4132,13 +4209,13 @@ displaytime disp=getdisplaytime(nu,starttime2,endtime, transx);
         const float valuey=std::max(dtop+density*6.0f,
                 std::min(last.y-valueh*.5f,dtop+dheight-valueh-density*6.0f));
         nvgBeginPath(avg);
-        nvgRoundedRect(avg,valuex,valuey,valuew,valueh,density*7.0f);
-        nvgFillColor(avg,nvgRGBA(24,27,30,246));
+        nvgRoundedRect(avg,valuex,valuey,valuew,valueh,density*2.0f);
+        nvgFillColor(avg,modernGraphTooltip);
         nvgFill(avg);
         nvgStrokeWidth(avg,std::max(density*.8f,.8f));
         nvgStrokeColor(avg,statecolor(last.value,false));
         nvgStroke(avg);
-        nvgFillColor(avg,nvgRGBA(238,241,244,255));
+        nvgFillColor(avg,modernGraphText);
         nvgText(avg,valuex+density*8.0f,valuey+valueh*.52f,
                 previewvalue,previewvalue+previewvaluelen);
 
@@ -4152,8 +4229,8 @@ displaytime disp=getdisplaytime(nu,starttime2,endtime, transx);
         const float labelx=dleft+density*8.0f;
         const float labely=dtop+density*8.0f;
         nvgBeginPath(avg);
-        nvgRoundedRect(avg,labelx,labely,labelw,labelh,labelh*.5f);
-        nvgFillColor(avg,nvgRGBA(31,35,39,238));
+        nvgRoundedRect(avg,labelx,labely,labelw,labelh,density*2.0f);
+        nvgFillColor(avg,modernGraphSurfaceRaised);
         nvgFill(avg);
         nvgStrokeWidth(avg,std::max(density*.7f,.7f));
         nvgStrokeColor(avg,modernGraphGridStrong);
@@ -4609,12 +4686,15 @@ void    JCurve::startstepNVG(NVGcontext* avg,int width, int height) {
 #ifdef JUGGLUCO_APP
                 failures=0;
 #endif
-                nvgBeginPath(avg);
-                 nvgFillColor(avg,modernnormal?modernGraphMuted:getoldcolor());
-                float relage=(float)age/(float)maxbluetoothage;
-                float sensory= gety+headsize/3.1f;
-                nvgRect(avg, getx+sensorbounds.left, sensorbounds.top+sensory, relage*sensorbounds.width, sensorbounds.height);
-                nvgFill(avg);
+                if(!modernnormal) {
+                    nvgBeginPath(avg);
+                    nvgFillColor(avg,getoldcolor());
+                    float relage=(float)age/(float)maxbluetoothage;
+                    float sensory= gety+headsize/3.1f;
+                    nvgRect(avg, getx+sensorbounds.left, sensorbounds.top+sensory,
+                            relage*sensorbounds.width, sensorbounds.height);
+                    nvgFill(avg);
+                    }
                 showvalue(avg,poll,hist,getx,gety,i,nu);
 #ifdef JUGGLUCO_APP
                 success=true;
@@ -4839,10 +4919,12 @@ int    JCurve::showLargevalue(NVGcontext* avg, int index,float getx,float gety,f
     const auto sensorname=hist->othershortsensorname();
     CURVELOGGER("showvalue %s\n",sensorname.data());
     float sensory= gety+headsize/3.1;
-    nvgFillColor(avg, *getblack());
-    nvgFontSize(avg,mediumfont );
-    nvgTextAlign(avg,NVG_ALIGN_LEFT|NVG_ALIGN_TOP);
-    nvgText(avg, getx,sensory, sensorname.begin(), sensorname.end());
+    if(!modernnormal) {
+        nvgFillColor(avg, *getblack());
+        nvgFontSize(avg,mediumfont );
+        nvgTextAlign(avg,NVG_ALIGN_LEFT|NVG_ALIGN_TOP);
+        nvgText(avg, getx,sensory, sensorname.begin(), sensorname.end());
+        }
     constexpr const int maxhead=11;
     char head[maxhead];
 
@@ -4884,9 +4966,9 @@ int    JCurve::showLargevalue(NVGcontext* avg, int index,float getx,float gety,f
         shownglucose[index].glucosetrend=poll->tr;
 #endif
 #endif
-         // The Java hero already renders a valid numeric reading and trend.
-         // Keep the sensor label and the LO/HI branches above visible so a
-         // modern graph never suppresses native diagnostic state.
+         // The Java hero owns the current reading, trend, freshness and sensor
+         // affordance. The native path still updates alarm/view bookkeeping,
+         // but must not duplicate those labels over the modern chart.
          if(modernnormal)
              return;
          float valuex=getx-(convglucose>=10.0f?density*20.0f:0.0f);

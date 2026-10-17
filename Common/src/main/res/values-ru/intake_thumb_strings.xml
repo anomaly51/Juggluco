@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="intake_thumb_title">ДОБАВИТЬ ЗАПИСЬ</string>
+    <string name="intake_thumb_empty_title">Еда и инсулин</string>
+    <string name="intake_thumb_empty_subtitle">Еда и инсулин — голосом, текстом или фото. Изменить запись можно прямо в этом чате.</string>
+    <string name="intake_thumb_insulin">Инсулин</string>
+    <string name="intake_thumb_food">Еда</string>
+    <string name="intake_thumb_latest">К последнему сообщению</string>
+    <string name="intake_thumb_input_label">Сообщение о еде или инсулине</string>
+    <string name="intake_thumb_recording_elapsed">Запись %1$d:%2$02d · нажми стоп</string>
+    <string name="intake_thumb_dose_label">Введено инсулина · ед.</string>
+    <string name="intake_thumb_food_label">Еда</string>
+    <string name="intake_thumb_carbs_label">Углеводы · г</string>
+    <string name="intake_thumb_time_label">Когда</string>
+</resources>

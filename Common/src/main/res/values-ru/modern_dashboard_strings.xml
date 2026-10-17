@@ -1,18 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="dashboard_today">Сегодня</string>
-    <string name="dashboard_graph_title">График глюкозы</string>
-    <string name="dashboard_state_in_target">В целевом диапазоне</string>
+    <string name="dashboard_home">Главная</string>
+    <string name="dashboard_home_description">Главная. Текущая глюкоза и график.</string>
+    <string name="dashboard_add_description">Добавить инсулин или еду.</string>
+    <string name="dashboard_more_description">Другие действия и настройки.</string>
+    <string name="dashboard_state_in_target">В диапазоне</string>
     <string name="dashboard_state_low">Ниже диапазона</string>
     <string name="dashboard_state_high">Выше диапазона</string>
-    <string name="dashboard_state_unknown">Диапазон недоступен</string>
+    <string name="dashboard_state_unknown">Нет диапазона</string>
     <string name="dashboard_state_waiting">Ожидание сенсора</string>
+    <string name="dashboard_state_stale">Данные устарели</string>
+    <string name="dashboard_state_stale_description">Данные устарели; последнее значение было: %1$s</string>
     <string name="dashboard_target_range">Цель %1$s–%2$s %3$s</string>
     <string name="dashboard_target_unavailable">Целевой диапазон</string>
     <string name="dashboard_preview_short">Предпросмотр — не данные сенсора</string>
-    <string name="dashboard_backend_checking">Проверяем соединение</string>
-    <string name="dashboard_backend_connected">Подключено</string>
-    <string name="dashboard_backend_offline">Нет связи</string>
-    <string name="dashboard_backend_settings">Статус соединения. Открыть настройки.</string>
-    <string name="dashboard_backend_open_settings">%1$s. Открыть настройки соединения.</string>
+    <string name="dashboard_seconds_short">%1$d с</string>
+    <string name="dashboard_minutes_short">%1$d мин</string>
+    <string name="dashboard_timing_summary">%1$s назад · ср. %2$s · %3$s</string>
+    <string name="dashboard_timing_unknown">%1$s назад · ср. — · след. —</string>
+    <string name="dashboard_timing_next">через %1$s</string>
+    <string name="dashboard_timing_due_now">ожидается сейчас</string>
+    <string name="dashboard_timing_overdue">задержка %1$s</string>
 </resources>

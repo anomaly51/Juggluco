@@ -5,16 +5,16 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#E9FFF9"
+        android:fillColor="@color/lifeprompt_on_surface"
         android:pathData="M54,18C49,27 30,47 30,66C30,81.5 40.7,92 54,92C67.3,92 78,81.5 78,66C78,47 59,27 54,18Z" />
     <path
         android:fillColor="#00000000"
         android:pathData="M37,67C43,60 47,74 54,66C61,58 65,71 72,63"
-        android:strokeColor="#19BFA0"
+        android:strokeColor="@color/lifeprompt_primary"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:strokeWidth="4" />
     <path
-        android:fillColor="#19BFA0"
+        android:fillColor="@color/lifeprompt_primary"
         android:pathData="M52,49a3,3 0,1 0,6 0a3,3 0,1 0,-6 0" />
 </vector>

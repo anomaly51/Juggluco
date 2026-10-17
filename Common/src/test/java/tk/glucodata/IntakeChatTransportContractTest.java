@@ -423,7 +423,7 @@ public class IntakeChatTransportContractTest {
             JSONObject stale = new JSONObject(chatPreferences.getString(
                     "state", ""));
             stale.put("saved_at_ms", System.currentTimeMillis()
-                    - 6L * 60L * 60L * 1000L - 1L);
+                    - 24L * 60L * 60L * 1000L - 1L);
             chatPreferences.edit().putString("state", stale.toString())
                     .commit();
             assertFalse(IntakeChatStateStore.hasPendingTurn(context));

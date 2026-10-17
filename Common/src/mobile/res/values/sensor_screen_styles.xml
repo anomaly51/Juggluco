@@ -3,30 +3,32 @@
     <style name="SensorScreenTitle" parent="android:style/Widget.TextView">
         <item name="android:textColor">@color/modern_secondary_text_primary</item>
         <item name="android:textSize">27sp</item>
-        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:includeFontPadding">false</item>
-        <item name="android:letterSpacing">-0.01</item>
+        <item name="android:letterSpacing">0.02</item>
     </style>
 
     <style name="SensorScreenSubtitle" parent="android:style/Widget.TextView">
         <item name="android:textColor">@color/modern_secondary_text_secondary</item>
         <item name="android:textSize">13sp</item>
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:includeFontPadding">false</item>
+        <item name="android:letterSpacing">0.01</item>
         <item name="android:lineSpacingExtra">2dp</item>
     </style>
 
     <style name="SensorScreenSectionTitle" parent="android:style/Widget.TextView">
         <item name="android:textColor">@color/modern_secondary_text_primary</item>
         <item name="android:textSize">17sp</item>
-        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:includeFontPadding">false</item>
+        <item name="android:letterSpacing">0.01</item>
     </style>
 
     <style name="SensorScreenEyebrow" parent="android:style/Widget.TextView">
         <item name="android:textColor">@color/modern_secondary_text_muted</item>
         <item name="android:textSize">12sp</item>
-        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:includeFontPadding">false</item>
         <item name="android:letterSpacing">0.05</item>
         <item name="android:textAllCaps">true</item>
@@ -35,7 +37,7 @@
     <style name="SensorScreenValue" parent="android:style/Widget.TextView">
         <item name="android:textColor">@color/modern_secondary_text_primary</item>
         <item name="android:textSize">14sp</item>
-        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:includeFontPadding">false</item>
     </style>
 
@@ -50,8 +52,9 @@
         <item name="android:background">@drawable/sensor_screen_status_enabled</item>
         <item name="android:textColor">@color/modern_secondary_accent</item>
         <item name="android:textSize">13sp</item>
-        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:gravity">center</item>
+        <item name="android:letterSpacing">0.02</item>
         <item name="android:minHeight">34dp</item>
         <item name="android:paddingStart">14dp</item>
         <item name="android:paddingEnd">14dp</item>
@@ -84,7 +87,7 @@
     <style name="SensorScreenDiagnosticBody" parent="android:style/Widget.TextView">
         <item name="android:textColor">@color/modern_secondary_text_secondary</item>
         <item name="android:textSize">13sp</item>
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:includeFontPadding">false</item>
         <item name="android:lineSpacingExtra">2dp</item>
     </style>
@@ -98,6 +101,7 @@
     </style>
 
     <style name="SensorScreenCheck" parent="@style/MyCheckBoxStyle">
+        <item name="android:fontFamily">monospace</item>
         <item name="android:textColor">@color/modern_secondary_text_primary</item>
         <item name="android:textSize">14sp</item>
         <item name="android:minHeight">48dp</item>
@@ -108,7 +112,7 @@
 
     <style name="SensorScreenSwitch" parent="Widget.AppCompat.CompoundButton.Switch">
         <item name="android:background">?android:attr/selectableItemBackground</item>
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:gravity">center_vertical</item>
         <item name="android:minHeight">52dp</item>
         <item name="android:paddingStart">12dp</item>
@@ -125,9 +129,10 @@
     <style name="SensorScreenButtonBase" parent="android:style/Widget.Button">
         <item name="android:textAllCaps">false</item>
         <item name="android:textSize">14sp</item>
-        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:includeFontPadding">false</item>
         <item name="android:gravity">center</item>
+        <item name="android:letterSpacing">0.01</item>
         <item name="android:minHeight">48dp</item>
         <item name="android:minWidth">48dp</item>
         <item name="android:paddingStart">14dp</item>

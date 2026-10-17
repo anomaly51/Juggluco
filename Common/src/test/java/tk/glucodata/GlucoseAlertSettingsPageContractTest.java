@@ -50,6 +50,23 @@ public class GlucoseAlertSettingsPageContractTest {
     }
 
     @Test
+    public void hubGroupsAlertsByUserTaskAndOffersDirectSwitches()
+            throws Exception {
+        String page = source(Paths.get("src", "main", "java", "tk",
+                "glucodata", "GlucoseAlertSettingsPage.java"));
+        assertTrue(page.contains("R.string.glucose_alert_current_section"));
+        assertTrue(page.contains("R.string.glucose_alert_forecast_section"));
+        assertTrue(page.contains("R.string.glucose_alert_signal_section"));
+        assertTrue(page.contains("private SwitchCompat hubSwitch"));
+        assertTrue(page.contains("private boolean setEnabled(Kind kind"));
+        assertTrue(page.contains("confirmDisableCurrentAlert(kind)"));
+        assertTrue(page.contains("initiallyEnabled\n                    && !enabled.isChecked()"));
+        assertTrue(page.contains("input.setError(activity.getString("));
+        assertTrue(page.contains("DetailPage.show(activity, kind"));
+        assertTrue(page.contains("R.plurals.glucose_alert_active_count"));
+    }
+
+    @Test
     public void phoneHubDropsProfilesValueNotificationsAndLegacyModes()
             throws Exception {
         String settings = source(Paths.get("src", "main", "java", "tk",
@@ -144,11 +161,11 @@ public class GlucoseAlertSettingsPageContractTest {
                 context.getResources().getConfiguration());
         russian.setLocale(Locale.forLanguageTag("ru"));
         Context ru = context.createConfigurationContext(russian);
-        assertTrue(ru.getString(R.string.critical_alarm_sound_picker_intro)
-                .contains("никогда не меняет"));
-        assertTrue(ru.getString(
-                R.string.critical_alarm_sound_preview_accessibility)
-                .contains("не будет сохранён"));
+        // The app deliberately stays English even when the device locale is Russian.
+        assertEquals(context.getString(R.string.critical_alarm_sound_picker_intro),
+                ru.getString(R.string.critical_alarm_sound_picker_intro));
+        assertEquals(context.getString(R.string.critical_alarm_sound_preview_accessibility),
+                ru.getString(R.string.critical_alarm_sound_preview_accessibility));
     }
 
     @Test

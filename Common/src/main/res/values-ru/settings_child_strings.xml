@@ -26,6 +26,13 @@
     <string name="settings_theme_hint">Выбрать оформление приложения</string>
     <string name="settings_iob_hint">Настроить расчёт активного инсулина</string>
     <string name="settings_display_help_hint">Описание настроек графика и отображения</string>
+    <string name="settings_graph_data_disclosure">Данные на графике</string>
+    <string name="settings_graph_data_disclosure_summary">Показания, инсулин, еда и история</string>
+    <string name="settings_ranges_disclosure_summary">Шкала и фиксированная целевая зона</string>
+    <string name="settings_chart_disclosure_summary">Время, ось и поведение прогноза</string>
+    <string name="settings_appearance_disclosure_summary">Тема, язык и плавающее окно</string>
+    <string name="settings_expanded">Развернуто</string>
+    <string name="settings_collapsed">Свернуто</string>
 
     <string name="settings_alarm_title">Оповещения о глюкозе</string>
     <string name="settings_alarm_intro">Настройте важные оповещения. У каждого включённого сигнала есть свой порог и звук.</string>
@@ -152,6 +159,8 @@
     <string name="critical_alarm_dnd_title">Доступ к режиму «Не беспокоить»</string>
     <string name="critical_alarm_dnd_ready">Доступ выдан для критических каналов</string>
     <string name="critical_alarm_dnd_needed">Выдайте доступ, чтобы критические каналы могли запросить обход</string>
+    <string name="critical_alarm_dnd_total_silence">Доступ выдан, но режим полной тишины блокирует звук. Откройте «Не беспокоить» и разрешите будильники.</string>
+    <string name="critical_alarm_dnd_mode_unknown">Доступ выдан, но Android не сообщил текущий режим. Проверьте настройки «Не беспокоить».</string>
     <string name="critical_alarm_full_screen_title">Полноэкранные сигналы</string>
     <string name="critical_alarm_full_screen_ready">Разрешены в Android</string>
     <string name="critical_alarm_full_screen_needed">Специальный доступ не разрешён</string>
@@ -241,12 +250,41 @@
 
     <string name="settings_section_connections">Подключения</string>
     <string name="settings_section_technical">Технические настройки</string>
+    <string name="settings_back">Назад</string>
+    <string name="settings_guide">Гид по приложению</string>
+    <string name="settings_hub_intro">Выберите, что хотите изменить.</string>
+    <string name="settings_category_glucose">Глюкоза и график</string>
+    <string name="settings_category_glucose_summary">Единицы, калибровка и график</string>
+    <string name="settings_category_alerts">Сигналы</string>
+    <string name="settings_category_alerts_summary">Низкий, высокий, прогноз и напоминания</string>
+    <string name="settings_category_connections">Подключения</string>
+    <string name="settings_category_connections_summary">Сервис еды и инсулина, обмен и резервная копия</string>
+    <string name="settings_category_data">Данные</string>
+    <string name="settings_category_data_summary">Последний скан, экспорт и метки</string>
+    <string name="settings_category_behavior">Поведение приложения</string>
+    <string name="settings_category_behavior_summary">Сканирование, устройства и плавающее окно</string>
+    <string name="settings_category_advanced">Расширенные</string>
+    <string name="settings_category_advanced_summary">Диагностика, справка и информация</string>
+    <string name="settings_category_glucose_intro">Измените шкалу глюкозы или откройте точечные настройки графика.</string>
+    <string name="settings_category_alerts_intro">Управляйте важными сигналами глюкозы и напоминаниями.</string>
+    <string name="settings_category_connections_intro">Выберите, куда отправляются показания и где хранятся копии.</string>
+    <string name="settings_category_data_intro">Открывайте записи и переносите данные, не изменяя их здесь.</string>
+    <string name="settings_category_behavior_intro">Настройте реакцию Juggluco на сканирование и внешние экраны.</string>
+    <string name="settings_category_advanced_intro">Редко используемые инструменты поддержки и диагностики.</string>
+    <string name="settings_category_basics">Основное</string>
+    <string name="settings_forecast_section">Прогноз</string>
+    <string name="settings_forecast_title">Прогноз глюкозы</string>
+    <string name="settings_forecast_summary">Траектория, факторы и точность</string>
+    <string name="settings_category_alert_rules">Правила сигналов</string>
+    <string name="settings_category_services">Сервисы</string>
+    <string name="settings_category_history">Инструменты данных</string>
+    <string name="settings_category_input">Сканирование</string>
+    <string name="settings_category_devices">Устройства и окна</string>
+    <string name="settings_category_support">Поддержка и диагностика</string>
     <string name="settings_legacy_title">Legacy</string>
     <string name="settings_legacy_intro">Старые и специализированные инструменты собраны здесь, чтобы основные настройки оставались простыми и понятными.</string>
     <string name="settings_legacy_records_section">Записи и отчёты</string>
     <string name="settings_legacy_utilities_section">Устройства и инструменты</string>
-    <string name="settings_legacy_list_hint">Открыть существующий список сохранённых записей</string>
-    <string name="settings_legacy_statistics_hint">Посмотреть существующий отчёт по глюкозе</string>
     <string name="settings_legacy_last_scan_hint">Вернуться к последнему ручному сканированию сенсора</string>
     <string name="settings_legacy_export_hint">Создать файл с историей глюкозы и записей</string>
     <string name="settings_legacy_watch_hint">Настроить часы и внешние экраны глюкозы</string>
@@ -257,6 +295,21 @@
     <string name="glucose_alert_hub_intro">Настройте все сигналы глюкозы в одном месте. У каждого сигнала свои условие, интервал повтора, звук и минимальная громкость.</string>
     <string name="glucose_alert_types_section">Сигналы глюкозы</string>
     <string name="glucose_alert_global_section">Общий полноэкранный показ</string>
+    <string name="glucose_alert_current_section">Текущая глюкоза</string>
+    <string name="glucose_alert_forecast_section">Прогноз</string>
+    <string name="glucose_alert_signal_section">Связь с сенсором</string>
+    <string name="glucose_alert_overview_hint">Включайте сигналы здесь. Нажмите строку, чтобы настроить порог, время, звук и громкость.</string>
+    <string name="glucose_alert_toggle_description">Включить или выключить: %1$s</string>
+    <string name="glucose_alert_disable_confirm_title">Выключить «%1$s»?</string>
+    <string name="glucose_alert_disable_confirm_message">Предупреждение о текущем сахаре больше не прозвучит. Его можно снова включить в любой момент.</string>
+    <string name="glucose_alert_disable_action">Выключить</string>
+    <string name="glucose_alert_save_action">Сохранить</string>
+    <plurals name="glucose_alert_active_count">
+        <item quantity="one">Активен %1$d из 5 сигналов</item>
+        <item quantity="few">Активны %1$d из 5 сигналов</item>
+        <item quantity="many">Активны %1$d из 5 сигналов</item>
+        <item quantity="other">Активны %1$d из 5 сигналов</item>
+    </plurals>
     <string name="glucose_alert_auto_save_hint">Изменения сохраняются при нажатии «Закрыть» или «Назад».</string>
     <string name="glucose_alert_current_low_title">Низкая глюкоза сейчас</string>
     <string name="glucose_alert_current_high_title">Высокая глюкоза сейчас</string>
@@ -325,4 +378,6 @@
     <string name="fullscreen_alert_behavior_title">Всегда открывать срочную форму</string>
     <string name="fullscreen_alert_behavior_body">Если Android разрешает, сигнал открывается поверх других приложений и экрана блокировки. Звук будильника продолжается, пока вы не нажмёте единственную красную кнопку подтверждения. Системный доступ Android можно отозвать, и приложение не может обойти физически заблокированное оборудование.</string>
     <string name="fullscreen_alert_readiness_section">Готовность Android</string>
+    <string name="settings_data_unavailable">Этот раздел данных пока недоступен</string>
+    <string name="settings_last_scan_unavailable">Пока нет недавнего сканирования</string>
 </resources>

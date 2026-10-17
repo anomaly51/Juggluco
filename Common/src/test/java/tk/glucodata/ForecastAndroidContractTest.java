@@ -3,6 +3,7 @@ package tk.glucodata;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
@@ -13,7 +14,6 @@ import android.graphics.Canvas;
 import android.view.ContextThemeWrapper;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.widget.Button;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 
@@ -685,17 +685,10 @@ public class ForecastAndroidContractTest {
     }
 
     @Test
-    public void dashboardAffordanceAndFullPageAreAccessible() {
+    public void forecastFullPageIsAccessible() {
         Context context = new ContextThemeWrapper(
                 RuntimeEnvironment.getApplication(),
                 R.style.AppTheme_ClinicalDark);
-        View dashboard = LayoutInflater.from(context).inflate(
-                R.layout.modern_dashboard_chrome, null, false);
-        Button affordance = dashboard.findViewById(
-                R.id.modern_dashboard_forecast);
-        assertNotNull(affordance);
-        assertTrue(affordance.getMinimumHeight() >= dp(context, 48));
-
         View page = LayoutInflater.from(context).inflate(
                 R.layout.modern_forecast_details, null, false);
         View close = page.findViewById(R.id.forecast_details_close);
@@ -719,6 +712,115 @@ public class ForecastAndroidContractTest {
         assertNotNull(page.findViewById(R.id.forecast_details_conditional));
         assertTrue(page.findViewById(R.id.forecast_details_factors)
                 instanceof LinearLayout);
+        assertTrue(page.findViewById(R.id.forecast_details_trajectory)
+                instanceof ForecastTrajectoryView);
+        assertEquals(View.GONE, page.findViewById(
+                R.id.forecast_details_factors_body).getVisibility());
+        assertEquals(View.GONE, page.findViewById(
+                R.id.forecast_details_model_body).getVisibility());
+        assertTrue(page.findViewById(R.id.forecast_details_factors_toggle)
+                .getMinimumHeight() >= dp(context, 48));
+        assertTrue(page.findViewById(R.id.forecast_details_model_toggle)
+                .getMinimumHeight() >= dp(context, 48));
+    }
+
+    @Test
+    public void forecastTrajectoryDrawsMedianAndUncertaintyFromBackendPoints() {
+        Context context = new ContextThemeWrapper(
+                RuntimeEnvironment.getApplication(),
+                R.style.AppTheme_ClinicalDark);
+        long anchor = 1_800_000_000_000L;
+        ArrayList<ForecastSnapshot.Point> points = new ArrayList<>();
+        points.add(new ForecastSnapshot.Point(anchor, 126f, 116f, 136f));
+        points.add(new ForecastSnapshot.Point(anchor + 60L * 60_000L,
+                104f, 82f, 129f));
+        points.add(new ForecastSnapshot.Point(anchor + 120L * 60_000L,
+                91f, 64f, 124f));
+        ForecastSnapshot forecast = new ForecastSnapshot("ready", anchor,
+                anchor, 126f, 120, "test", .72f, points,
+                Collections.emptyList(), "",
+                ForecastSnapshot.AlertAssessment.unavailable());
+        ForecastTrajectoryView chart = new ForecastTrajectoryView(context);
+        chart.setForecast(forecast, 1);
+        chart.setContentDescription("Forecast trajectory");
+        int width = dp(context, 320);
+        int height = dp(context, 196);
+        chart.measure(View.MeasureSpec.makeMeasureSpec(width,
+                        View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(height,
+                        View.MeasureSpec.EXACTLY));
+        chart.layout(0, 0, width, height);
+        Bitmap bitmap = Bitmap.createBitmap(width, height,
+                Bitmap.Config.ARGB_8888);
+        chart.draw(new Canvas(bitmap));
+
+        assertEquals(3, chart.sourcePointCount());
+        assertEquals("Forecast trajectory",
+                chart.getContentDescription().toString());
+        bitmap.recycle();
+    }
+
+    @Test
+    public void forecastCrossingCountdownUsesAbsoluteCrossingTime() {
+        long now = 1_800_000_000_000L;
+        ForecastSnapshot.ThresholdCrossing lowPossible =
+                new ForecastSnapshot.ThresholdCrossing("low", "possible",
+                        now + 5L * 60_000L, 41, 74f, 72f);
+        ForecastSnapshot.ThresholdCrossing highLikely =
+                new ForecastSnapshot.ThresholdCrossing("high", "likely",
+                        now + 3L * 60_000L, 52, 164f, 166f);
+        ForecastSnapshot.AlertAssessment assessment =
+                new ForecastSnapshot.AlertAssessment("eligible", true,
+                        75.6f, 162f, 4.2f, 9f, Collections.emptyList(),
+                        null, null, lowPossible, null, null, highLikely);
+
+        ForecastSnapshot.ThresholdCrossing selected =
+                ForecastDetailsPage.earliestFutureCrossing(assessment, now,
+                        now + 120L * 60_000L);
+
+        assertSame(highLikely, selected);
+        assertEquals(3, ForecastDetailsPage.remainingMinutes(selected, now));
+        assertEquals(2, ForecastDetailsPage.remainingMinutes(selected,
+                now + 60_001L));
+        assertNull(ForecastDetailsPage.earliestFutureCrossing(assessment,
+                now, now + 2L * 60_000L));
+        assertNull(ForecastDetailsPage.earliestFutureCrossing(assessment,
+                now + 6L * 60_000L, now + 120L * 60_000L));
+    }
+
+    @Test
+    public void trajectorySegmentsEveryClinicalGlucoseZone() {
+        assertEquals(ForecastTrajectoryView.ZONE_LOW,
+                ForecastTrajectoryView.zoneForMgDl(75.5f));
+        assertEquals(ForecastTrajectoryView.ZONE_TARGET,
+                ForecastTrajectoryView.zoneForMgDl(75.6f));
+        assertEquals(ForecastTrajectoryView.ZONE_TARGET,
+                ForecastTrajectoryView.zoneForMgDl(162f));
+        assertEquals(ForecastTrajectoryView.ZONE_HIGH,
+                ForecastTrajectoryView.zoneForMgDl(162.1f));
+
+        float from = 60f;
+        float to = 180f;
+        float[] cuts = ForecastTrajectoryView.splitFractions(from, to);
+        assertEquals(4, cuts.length);
+        assertEquals(0f, cuts[0], 0f);
+        assertEquals(1f, cuts[cuts.length - 1], 0f);
+        int[] expectedZones = {
+                ForecastTrajectoryView.ZONE_LOW,
+                ForecastTrajectoryView.ZONE_TARGET,
+                ForecastTrajectoryView.ZONE_HIGH
+        };
+        for (int index = 1; index < cuts.length; index++) {
+            float middle = (cuts[index - 1] + cuts[index]) * .5f;
+            float value = from + (to - from) * middle;
+            assertEquals(expectedZones[index - 1],
+                    ForecastTrajectoryView.zoneForMgDl(value));
+        }
+
+        assertEquals(2,
+                ForecastTrajectoryView.splitFractions(100f, 140f).length);
+        assertEquals(4,
+                ForecastTrajectoryView.splitFractions(180f, 60f).length);
     }
 
     @Test

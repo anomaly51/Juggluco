@@ -86,7 +86,7 @@ private static GradientDrawable swatch(MainActivity context,int color) {
     shape.setColor(color);
     shape.setStroke(ClinicalUi.dp(context,1),
             ClinicalUi.blend(ClinicalUi.primaryText(context),ClinicalUi.window(context),.24f));
-    shape.setCornerRadius(ClinicalUi.dp(context,12));
+    shape.setCornerRadius(ClinicalUi.dp(context,ClinicalUi.RETRO_CORNER_RADIUS_DP));
     return shape;
     }
 

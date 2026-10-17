@@ -1,28 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Neutral clinical-dark tokens shared by More, Settings and Sensor. -->
-    <color name="modern_secondary_background">#0B0D0E</color>
-    <color name="modern_secondary_surface">#15191B</color>
-    <color name="modern_secondary_surface_raised">#1B2022</color>
-    <color name="modern_secondary_surface_pressed">#22282A</color>
-    <color name="modern_secondary_surface_low">#101314</color>
-    <color name="modern_secondary_border">#303638</color>
-    <color name="modern_secondary_border_subtle">#242A2C</color>
+    <!-- Compatibility aliases for secondary screens. The source of truth is
+         the shared amber-terminal semantic palette. -->
+    <color name="modern_secondary_background">@color/lifeprompt_background</color>
+    <color name="modern_secondary_surface">@color/lifeprompt_surface</color>
+    <color name="modern_secondary_surface_raised">@color/lifeprompt_surface_container_low</color>
+    <color name="modern_secondary_surface_pressed">@color/lifeprompt_surface_container_high</color>
+    <color name="modern_secondary_surface_low">@color/lifeprompt_surface_container_low</color>
+    <color name="modern_secondary_border">@color/lifeprompt_outline</color>
+    <color name="modern_secondary_border_subtle">@color/lifeprompt_outline_variant</color>
 
-    <color name="modern_secondary_text_primary">#F1F3F2</color>
-    <color name="modern_secondary_text_secondary">#AAB0AE</color>
-    <color name="modern_secondary_text_muted">#7F8785</color>
+    <color name="modern_secondary_text_primary">@color/lifeprompt_on_surface</color>
+    <color name="modern_secondary_text_secondary">@color/lifeprompt_on_surface_variant</color>
+    <color name="modern_secondary_text_muted">@color/lifeprompt_secondary</color>
 
-    <color name="modern_secondary_accent">#5ACB85</color>
-    <color name="modern_secondary_accent_pressed">#6FD494</color>
-    <color name="modern_secondary_accent_soft">#1D3225</color>
-    <color name="modern_secondary_accent_border">#3A7950</color>
-    <color name="modern_secondary_on_accent">#08150D</color>
+    <color name="modern_secondary_accent">@color/lifeprompt_primary</color>
+    <color name="modern_secondary_accent_pressed">@color/lifeprompt_primary</color>
+    <color name="modern_secondary_accent_soft">@color/lifeprompt_primary_container</color>
+    <color name="modern_secondary_accent_border">@color/lifeprompt_primary</color>
+    <color name="modern_secondary_on_accent">@color/lifeprompt_on_primary</color>
 
-    <color name="modern_secondary_danger">#D99196</color>
-    <color name="modern_secondary_danger_surface">#24191A</color>
-    <color name="modern_secondary_danger_border">#553638</color>
-    <color name="modern_secondary_warning">#D2B06C</color>
-    <color name="modern_secondary_warning_surface">#2A2418</color>
-    <color name="modern_secondary_warning_border">#61512D</color>
+    <color name="modern_secondary_danger">@color/lifeprompt_error</color>
+    <color name="modern_secondary_danger_surface">@color/lifeprompt_error_container</color>
+    <color name="modern_secondary_danger_border">@color/lifeprompt_error</color>
+    <color name="modern_secondary_warning">@color/lifeprompt_tertiary</color>
+    <color name="modern_secondary_warning_surface">@color/lifeprompt_tertiary_container</color>
+    <color name="modern_secondary_warning_border">@color/lifeprompt_tertiary</color>
 </resources>

@@ -314,7 +314,7 @@ private void mkPhoneViews(MainActivity act,View set) {
     phoneScreen.setVisibility(VISIBLE);
     phoneScreen.bringToFront();
     updatePhoneListState();
-    act.lightBars(false);
+    act.themeLightBars();
     act.setonback(()->{
         set.setVisibility(VISIBLE);
         if(itemlayout!=null&&itemlayout.getParent()!=null)
@@ -336,7 +336,7 @@ private View makePhoneEmptyState(MainActivity act) {
     title.setText(R.string.reminder_modern_empty_title);
     title.setTextColor(ClinicalUi.primaryText(act));
     title.setTextSize(TypedValue.COMPLEX_UNIT_SP,20);
-    title.setTypeface(Typeface.create("sans-serif-medium",Typeface.BOLD));
+    title.setTypeface(Typeface.create("monospace",Typeface.BOLD));
     title.setGravity(Gravity.CENTER);
     empty.addView(title);
     TextView body=ClinicalUi.body(act,act.getString(R.string.reminder_modern_empty_body));
@@ -455,7 +455,7 @@ private static final class ReminderCardView extends LinearLayout {
         labelView=new TextView(context);
         labelView.setTextColor(ClinicalUi.primaryText(context));
         labelView.setTextSize(TypedValue.COMPLEX_UNIT_SP,18);
-        labelView.setTypeface(Typeface.create("sans-serif-medium",Typeface.BOLD));
+        labelView.setTypeface(Typeface.create("monospace",Typeface.BOLD));
         labelView.setGravity(Gravity.START);
         addView(labelView,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
 
@@ -469,7 +469,7 @@ private static final class ReminderCardView extends LinearLayout {
         timeView=new TextView(context);
         timeView.setTextColor(ClinicalUi.accent(context));
         timeView.setTextSize(TypedValue.COMPLEX_UNIT_SP,14);
-        timeView.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        timeView.setTypeface(Typeface.create("monospace",Typeface.NORMAL));
         timeView.setGravity(Gravity.END);
         details.addView(timeView,new LinearLayout.LayoutParams(WRAP_CONTENT,WRAP_CONTENT));
         addView(details,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
@@ -706,7 +706,7 @@ private void mkPhoneItemLayout(MainActivity act,View parent) {
         phoneFormError=ClinicalUi.body(act,"");
         phoneFormError.setTextColor(ClinicalUi.danger(act));
         phoneFormError.setTextSize(TypedValue.COMPLEX_UNIT_SP,14);
-        phoneFormError.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        phoneFormError.setTypeface(Typeface.create("monospace",Typeface.NORMAL));
         phoneFormError.setPadding(ClinicalUi.dp(act,16),ClinicalUi.dp(act,13),
                 ClinicalUi.dp(act,16),ClinicalUi.dp(act,13));
         phoneFormError.setBackground(ClinicalUi.surface(act,false,false));

@@ -2,13 +2,14 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#F20B0D0E"
+    android:background="@color/lifeprompt_background"
     android:clickable="true"
     android:clipToPadding="false"
     android:fillViewport="true"
     android:focusable="true"
     android:overScrollMode="ifContentScrolls"
-    android:padding="16dp">
+    android:padding="16dp"
+    android:theme="@style/ModernDashboardThemeOverlay">
 
     <FrameLayout
         android:layout_width="match_parent"
@@ -20,7 +21,7 @@
         android:layout_height="wrap_content"
         android:layout_gravity="center"
         android:background="@drawable/modern_sensor_empty_card"
-        android:elevation="8dp"
+        android:elevation="0dp"
         android:orientation="vertical"
         android:padding="20dp">
 
@@ -30,7 +31,7 @@
             android:drawableStart="@drawable/modern_dashboard_sensor"
             android:drawablePadding="10dp"
             android:drawableTint="@color/modern_secondary_accent"
-            android:fontFamily="sans-serif-medium"
+            android:fontFamily="monospace"
             android:text="@string/dashboard_sensor_connection"
             android:textColor="@color/modern_secondary_text_primary"
             android:textSize="24sp"

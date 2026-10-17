@@ -133,7 +133,7 @@ final class IntakeEventDetailsSheet {
                 new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT), false);
         MainActivity.setonback(this::handleSystemBack);
         ViewCompat.requestApplyInsets(root);
-        activity.lightBars(false);
+        activity.themeLightBars();
         sheet.requestFocus();
     }
 
@@ -555,6 +555,6 @@ final class IntakeEventDetailsSheet {
             }
         }
         activity.onIntakeEventDetailsClosed(this);
-        activity.lightBars(false);
+        activity.themeLightBars();
     }
 }

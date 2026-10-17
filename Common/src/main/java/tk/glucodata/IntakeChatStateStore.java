@@ -39,23 +39,26 @@ final class IntakeChatStateStore {
         final String clientTurnId;
         final long occurredAtMs;
         final String text;
+        final String displayText;
         final File audio;
         final List<File> photos;
         final boolean definitiveFailure;
         final boolean commitMayHaveOccurred;
         final int controlKind;
+        /** Exact generated JSON; never regenerated for an idempotent retry. */
+        final String structuredIntent;
 
         Pending(String clientTurnId, long occurredAtMs, String text,
                 File audio, List<File> photos) {
             this(clientTurnId, occurredAtMs, text, audio, photos,
-                    false, false, 0);
+                    false, false, 0, "");
         }
 
         Pending(String clientTurnId, long occurredAtMs, String text,
                 File audio, List<File> photos, boolean definitiveFailure,
                 boolean commitMayHaveOccurred) {
             this(clientTurnId, occurredAtMs, text, audio, photos,
-                    definitiveFailure, commitMayHaveOccurred, 0);
+                    definitiveFailure, commitMayHaveOccurred, 0, "");
         }
 
         Pending(String clientTurnId, long occurredAtMs, String text,
@@ -64,12 +67,41 @@ final class IntakeChatStateStore {
             this.clientTurnId = IntakeEvent.clean(clientTurnId);
             this.occurredAtMs = occurredAtMs;
             this.text = IntakeEvent.clean(text);
+            this.displayText = this.text;
             this.audio = audio;
             this.photos = Collections.unmodifiableList(new ArrayList<>(photos));
             this.definitiveFailure = definitiveFailure;
             this.commitMayHaveOccurred = definitiveFailure
                     && commitMayHaveOccurred;
             this.controlKind = Math.max(0, Math.min(2, controlKind));
+            this.structuredIntent = "";
+        }
+
+        Pending(String clientTurnId, long occurredAtMs, String text,
+                File audio, List<File> photos, boolean definitiveFailure,
+                boolean commitMayHaveOccurred, int controlKind,
+                String structuredIntent) {
+            this(clientTurnId, occurredAtMs, text, audio, photos,
+                    definitiveFailure, commitMayHaveOccurred, controlKind,
+                    structuredIntent, text);
+        }
+
+        Pending(String clientTurnId, long occurredAtMs, String text,
+                File audio, List<File> photos, boolean definitiveFailure,
+                boolean commitMayHaveOccurred, int controlKind,
+                String structuredIntent, String displayText) {
+            this.clientTurnId = IntakeEvent.clean(clientTurnId);
+            this.occurredAtMs = occurredAtMs;
+            this.text = IntakeEvent.clean(text);
+            this.displayText = IntakeEvent.clean(displayText);
+            this.audio = audio;
+            this.photos = Collections.unmodifiableList(new ArrayList<>(photos));
+            this.definitiveFailure = definitiveFailure;
+            this.commitMayHaveOccurred = definitiveFailure
+                    && commitMayHaveOccurred;
+            this.controlKind = Math.max(0, Math.min(2, controlKind));
+            this.structuredIntent = structuredIntent == null
+                    ? "" : structuredIntent;
         }
     }
 
@@ -188,7 +220,7 @@ final class IntakeChatStateStore {
         }
     }
 
-    static boolean save(Context context, String backendFingerprint,
+    static synchronized boolean save(Context context, String backendFingerprint,
             State state) {
         try {
             JSONObject json = new JSONObject();
@@ -222,11 +254,13 @@ final class IntakeChatStateStore {
                         .put("client_turn_id", pending.clientTurnId)
                         .put("occurred_at_ms", pending.occurredAtMs)
                         .put("text", pending.text)
+                        .put("display_text", pending.displayText)
                         .put("definitive_failure",
                                 pending.definitiveFailure)
                         .put("commit_may_have_occurred",
                                 pending.commitMayHaveOccurred)
                         .put("control_kind", pending.controlKind)
+                        .put("structured_intent", pending.structuredIntent)
                         .put("audio_path", pending.audio == null ? ""
                                 : pending.audio.getAbsolutePath());
                 JSONArray photos = new JSONArray();
@@ -243,8 +277,60 @@ final class IntakeChatStateStore {
         }
     }
 
-    static void clear(Context context) {
+    static synchronized void clear(Context context) {
         preferences(context).edit().remove(KEY_STATE).commit();
+    }
+
+    /** Clears state only when it still belongs to this composer instance. */
+    static synchronized boolean clearIfOwned(Context context,
+            String backendFingerprint,
+            String clientSessionId) {
+        String raw = preferences(context).getString(KEY_STATE, "");
+        if (raw == null || raw.isEmpty()) return true;
+        try {
+            JSONObject state = new JSONObject(raw);
+            if (!IntakeEvent.clean(backendFingerprint).equals(
+                    IntakeEvent.clean(state.optString(
+                            "backend_fingerprint", "")))
+                    || !IntakeEvent.clean(clientSessionId).equals(
+                    IntakeEvent.clean(state.optString(
+                            "client_session_id", "")))) {
+                return true;
+            }
+            return preferences(context).edit().remove(KEY_STATE).commit();
+        } catch (JSONException | RuntimeException error) {
+            return false;
+        }
+    }
+
+    /** True only while the durable slot still contains this exact turn. */
+    static synchronized boolean pendingMatches(Context context,
+            String backendFingerprint,
+            String clientTurnId) {
+        String raw = preferences(context).getString(KEY_STATE, "");
+        if (raw == null || raw.isEmpty()) return false;
+        try {
+            JSONObject state = new JSONObject(raw);
+            JSONObject pending = state.optJSONObject("pending");
+            return IntakeEvent.clean(backendFingerprint).equals(
+                    IntakeEvent.clean(state.optString(
+                            "backend_fingerprint", "")))
+                    && pending != null
+                    && IntakeEvent.clean(clientTurnId).equals(
+                    IntakeEvent.clean(pending.optString(
+                            "client_turn_id", "")));
+        } catch (JSONException | RuntimeException error) {
+            return false;
+        }
+    }
+
+    /** Removes only the exact resolved turn, never a newer composer's turn. */
+    static synchronized boolean clearPendingIfMatches(Context context,
+            String backendFingerprint, String clientTurnId) {
+        if (!pendingMatches(context, backendFingerprint, clientTurnId)) {
+            return true;
+        }
+        return preferences(context).edit().remove(KEY_STATE).commit();
     }
 
     /**
@@ -263,7 +349,7 @@ final class IntakeChatStateStore {
             JSONObject state = new JSONObject(raw);
             long ageMs = System.currentTimeMillis()
                     - state.optLong("saved_at_ms", 0L);
-            if (ageMs < 0L || ageMs > PENDING_MEDIA_TTL_MS) return false;
+            if (ageMs < 0L || ageMs > STATE_TTL_MS) return false;
             return readPending(context, state.optJSONObject("pending"),
                     state.optLong("saved_at_ms", 0L)) != null;
         } catch (JSONException | RuntimeException error) {
@@ -300,8 +386,14 @@ final class IntakeChatStateStore {
     private static Pending readPending(Context context, JSONObject json,
             long savedAtMs)
             throws JSONException {
-        if (json == null || System.currentTimeMillis() - savedAtMs
-                > PENDING_MEDIA_TTL_MS) return null;
+        if (json == null) return null;
+        long ageMs = System.currentTimeMillis() - savedAtMs;
+        if (ageMs < 0L || ageMs > STATE_TTL_MS) return null;
+        JSONArray rawPhotos = json.optJSONArray("photo_paths");
+        boolean hasPersistedMedia = !IntakeEvent.clean(
+                json.optString("audio_path", "")).isEmpty()
+                || rawPhotos != null && rawPhotos.length() > 0;
+        if (hasPersistedMedia && ageMs > PENDING_MEDIA_TTL_MS) return null;
         String turnId = IntakeEvent.clean(json.getString("client_turn_id"));
         long occurredAtMs = json.getLong("occurred_at_ms");
         if (turnId.isEmpty() || occurredAtMs <= 0L) return null;
@@ -311,7 +403,6 @@ final class IntakeChatStateStore {
             return null;
         }
         ArrayList<File> photos = new ArrayList<>();
-        JSONArray rawPhotos = json.optJSONArray("photo_paths");
         if (rawPhotos != null) {
             for (int index = 0; index < rawPhotos.length(); index++) {
                 File photo = fileOrNull(context,
@@ -321,14 +412,24 @@ final class IntakeChatStateStore {
             }
         }
         String text = json.optString("text", "");
+        String displayText = json.optString("display_text", text);
+        String structuredIntent = json.optString("structured_intent", "");
         if (IntakeEvent.clean(text).isEmpty() && audio == null
-                && photos.isEmpty()) return null;
+                && photos.isEmpty()
+                && !IntakeStructuredIntent.isValidWirePayload(
+                        structuredIntent)) return null;
+        if (!structuredIntent.isEmpty()
+                && (!IntakeStructuredIntent.isValidWirePayload(
+                        structuredIntent)
+                || !IntakeEvent.clean(text).isEmpty()
+                || audio != null || !photos.isEmpty())) return null;
         boolean definitiveFailure = json.optBoolean(
                 "definitive_failure", false);
         return new Pending(turnId, occurredAtMs, text, audio, photos,
                 definitiveFailure, definitiveFailure && json.optBoolean(
                         "commit_may_have_occurred", false),
-                json.optInt("control_kind", 0));
+                json.optInt("control_kind", 0), structuredIntent,
+                displayText);
     }
 
     private static File fileOrNull(Context context, String path) {

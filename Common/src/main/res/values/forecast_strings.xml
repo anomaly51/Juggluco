@@ -1,12 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="forecast_dashboard_unavailable">Forecast</string>
-    <string name="forecast_dashboard_loading">Checking…</string>
-    <string name="forecast_dashboard_ready">%1$d min</string>
-    <string name="forecast_dashboard_learning">Preparing</string>
-    <string name="forecast_dashboard_preview">Preview</string>
-    <string name="forecast_dashboard_description">Forecast status: %1$s. Open forecast details.</string>
-
     <string name="forecast_page_title">Glucose forecast</string>
     <string name="forecast_page_subtitle">Estimated trend for the next 120 minutes</string>
     <string name="forecast_refresh">Refresh forecast</string>
@@ -29,8 +22,29 @@
     <string name="forecast_backend_error">Couldn’t update the forecast. Check connection settings and try again.</string>
     <string name="forecast_default_notice">Experimental estimate. Future meals, insulin, activity, illness, and sensor variation can change the trajectory.</string>
 
+    <string name="forecast_outlook_label">LIKELY PATH</string>
+    <string name="forecast_outlook_waiting">Waiting for a forecast</string>
+    <string name="forecast_outlook_value">%1$s %2$s %3$s</string>
+    <string name="forecast_outcome_waiting">The next usable prediction will appear here.</string>
+    <string name="forecast_outcome_target">Expected range %1$s–%2$s %3$s · inside target</string>
+    <string name="forecast_outcome_range">Expected range %1$s–%2$s %3$s</string>
+    <string name="forecast_outcome_low_possible">May go below target in about %1$d min</string>
+    <string name="forecast_outcome_low_likely">Likely to go below target in about %1$d min</string>
+    <string name="forecast_outcome_high_possible">May go above target in about %1$d min</string>
+    <string name="forecast_outcome_high_likely">Likely to go above target in about %1$d min</string>
+    <string name="forecast_generated_compact">Updated %1$s</string>
+    <string name="forecast_chart_now">Now</string>
+    <string name="forecast_chart_minutes_ahead">+%1$d min</string>
+    <string name="forecast_chart_waiting">Forecast trajectory is not available yet</string>
+    <string name="forecast_chart_description">Forecast from %1$s to %2$s %3$s over %4$d minutes. Dashed line is the likely path; shaded ribbon is uncertainty.</string>
+
     <string name="forecast_factors_title">Active factors</string>
     <string name="forecast_factors_empty">No recorded meal or insulin is active in this forecast</string>
+    <string name="forecast_factors_summary_none">No active food or insulin records</string>
+    <plurals name="forecast_factors_summary_count">
+        <item quantity="one">%1$d active record shapes this path</item>
+        <item quantity="other">%1$d active records shape this path</item>
+    </plurals>
     <string name="forecast_factor_meal">Meal</string>
     <string name="forecast_factor_rapid">NovoRapid</string>
     <string name="forecast_factor_long">Tresiba</string>
@@ -43,8 +57,8 @@
     <string name="forecast_factor_carbs_amount">%1$s g carbs</string>
     <string name="forecast_factor_insulin_amount">%1$s U</string>
     <string name="forecast_factor_amount_unknown">Amount unavailable</string>
-    <string name="forecast_factor_timeline_estimated">Recorded %1$s · effective onset %2$s · peak %3$s–%4$s · end %5$s–%6$s</string>
-    <string name="forecast_factor_timeline">Start %1$s · peak %2$s · end %3$s</string>
+    <string name="forecast_factor_action_window_estimated">Recorded %1$s · effective onset %2$s · peak %3$s–%4$s · end %5$s–%6$s</string>
+    <string name="forecast_factor_action_window">Start %1$s · peak %2$s · end %3$s</string>
     <string name="forecast_factor_remaining_minutes">About %1$d min remaining</string>
     <string name="forecast_factor_remaining_hours">About %1$d h %2$d min remaining</string>
     <string name="forecast_factor_complete">Estimated effect complete</string>
@@ -92,6 +106,10 @@
     <string name="forecast_mae_value_mmol">%1$.1f mmol/L</string>
 
     <string name="forecast_model_title">Forecast readiness</string>
+    <string name="forecast_model_details_title">How this was calculated</string>
+    <string name="forecast_model_details_summary">Data coverage, observed error and model version</string>
+    <string name="forecast_disclosure_open">Open %1$s</string>
+    <string name="forecast_disclosure_close">Close %1$s</string>
     <string name="forecast_model_waiting">Not enough history yet</string>
     <string name="forecast_training_summary">%1$s · %2$d of %3$d examples</string>
     <string name="forecast_training_state_unknown">Waiting</string>

@@ -9,7 +9,6 @@ import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
 import android.content.Context;
-import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.util.TypedValue;
 import android.view.ContextThemeWrapper;
@@ -22,6 +21,8 @@ import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import androidx.core.content.ContextCompat;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -33,21 +34,18 @@ import org.robolectric.annotation.Config;
 @Config(sdk = 35, application = Application.class)
 public class DashboardChromeContractTest {
     private static final int[] NAVIGATION_IDS = {
-            R.id.modern_dashboard_overview,
             R.id.modern_dashboard_add_intake,
             R.id.modern_dashboard_menu
     };
 
     private static final int[] NAVIGATION_TEXT_IDS = {
-            R.string.dashboard_overview,
             R.string.intake_add_short,
             R.string.dashboard_more
     };
 
     private static final int[] NAVIGATION_DESCRIPTION_IDS = {
-            R.string.dashboard_overview,
-            R.string.intake_add_short,
-            R.string.dashboard_more
+            R.string.dashboard_add_description,
+            R.string.dashboard_more_description
     };
 
     private static final int[] RANGE_IDS = {
@@ -80,77 +78,81 @@ public class DashboardChromeContractTest {
     }
 
     @Test
-    public void dashboardIsAnOpaqueShellWithDedicatedGraphHost() {
+    public void dashboardIsOneOpaqueGraphSurfaceWithIntegratedSummary() {
         assertNotNull(root.getBackground());
         assertFalse(root.getBackground() instanceof ColorDrawable
                 && ((ColorDrawable) root.getBackground()).getColor() == 0);
 
-        assertNotNull(root.findViewById(R.id.modern_dashboard_app_bar));
         assertNotNull(root.findViewById(R.id.modern_dashboard_content));
-        assertNotNull(root.findViewById(R.id.modern_dashboard_hero));
-        assertNotNull(root.findViewById(R.id.modern_dashboard_graph_card));
+        assertNotNull(root.findViewById(R.id.modern_dashboard_body));
+        View graphCard = root.findViewById(R.id.modern_dashboard_graph_card);
+        View hero = root.findViewById(R.id.modern_dashboard_hero);
         assertNotNull(root.findViewById(R.id.modern_dashboard_graph_header));
         assertNotNull(root.findViewById(R.id.modern_dashboard_graph_controls));
+        FrameLayout plot = root.findViewById(R.id.modern_dashboard_plot);
+        Button now = root.findViewById(R.id.modern_dashboard_now);
+
+        assertNotNull(graphCard);
+        assertNotNull(hero);
+        assertNotNull(plot);
+        assertNotNull(now);
+        assertSame(graphCard, hero.getParent());
+        assertSame(plot, now.getParent());
+        assertEquals(0, plot.getLayoutParams().height);
+        assertTrue(((LinearLayout.LayoutParams) plot.getLayoutParams()).weight > 0f);
 
         FrameLayout graphHost = root.findViewById(
                 R.id.modern_dashboard_graph_host);
         assertNotNull(graphHost);
         assertEquals(0, graphHost.getChildCount());
-        assertEquals(0, graphHost.getLayoutParams().height);
-        assertTrue(((LinearLayout.LayoutParams) graphHost.getLayoutParams()).weight > 0f);
+        assertSame(plot, graphHost.getParent());
+        assertEquals(ViewGroup.LayoutParams.MATCH_PARENT,
+                graphHost.getLayoutParams().height);
+        assertEquals(ViewGroup.LayoutParams.MATCH_PARENT,
+                graphHost.getLayoutParams().width);
     }
 
     @Test
-    public void dashboardUsesNeutralClinicalPalette() {
-        assertEquals(Color.rgb(8, 10, 10),
+    public void dashboardUsesSemanticClinicalPalette() {
+        assertEquals(ContextCompat.getColor(context,
+                        R.color.lifeprompt_background),
                 resolvedColor(android.R.attr.windowBackground));
-        assertEquals(Color.rgb(78, 203, 131),
+        assertEquals(ContextCompat.getColor(context,
+                        R.color.lifeprompt_primary),
                 resolvedColor(android.R.attr.colorAccent));
     }
 
     @Test
     public void clinicalSummaryAndTrendContextAreImmediatelyVisible() {
-        TextView date = root.findViewById(R.id.modern_dashboard_date);
-        TextView backend = root.findViewById(
-                R.id.modern_dashboard_backend_status);
-        View backendAction = root.findViewById(
-                R.id.modern_dashboard_backend_action);
         TextView rangeState = root.findViewById(
                 R.id.modern_dashboard_range_state);
         TextView targetRange = root.findViewById(
                 R.id.modern_dashboard_target_range);
         View graphHeader = root.findViewById(
                 R.id.modern_dashboard_graph_header);
-        Button sensor = root.findViewById(R.id.modern_dashboard_sensor);
-        View appBar = root.findViewById(R.id.modern_dashboard_app_bar);
+        View hero = root.findViewById(R.id.modern_dashboard_hero);
+        View graphCard = root.findViewById(R.id.modern_dashboard_graph_card);
 
-        assertNotNull(date);
-        assertNotNull(backend);
-        assertNotNull(backendAction);
         assertNotNull(rangeState);
         assertNotNull(targetRange);
         assertNotNull(graphHeader);
-        assertSame(appBar, sensor.getParent());
-        assertEquals(context.getString(R.string.dashboard_backend_checking),
-                backend.getText().toString());
-        assertTrue(backendAction.isClickable());
-        assertTrue(backendAction.isFocusable());
-        assertTrue(backendAction.getMinimumHeight() >= dp(48));
-        assertFalse(backend.isClickable());
+        assertSame(graphCard, hero.getParent());
         assertEquals(context.getString(R.string.dashboard_state_unknown),
                 rangeState.getText().toString());
         assertEquals(context.getString(R.string.dashboard_target_unavailable),
                 targetRange.getText().toString());
+        assertNull(targetRange.getCompoundDrawablesRelative()[0]);
     }
 
     @Test
-    public void primaryNavigationContainsThreeBalancedLabeledActions() {
+    public void primaryNavigationContainsOnlyDominantAddAndCompactMore() {
         LinearLayout navigation = root.findViewById(R.id.modern_dashboard_actions);
         assertNotNull(navigation);
-        assertEquals(3, navigation.getChildCount());
-        assertNull(root.findViewById(R.id.modern_dashboard_records));
-        assertNull(root.findViewById(R.id.modern_dashboard_statistics));
-
+        assertEquals(2, navigation.getChildCount());
+        assertEquals(R.id.modern_dashboard_add_intake,
+                navigation.getChildAt(0).getId());
+        assertEquals(R.id.modern_dashboard_menu,
+                navigation.getChildAt(1).getId());
         int minimumTarget = dp(48);
         for (int index = 0; index < NAVIGATION_IDS.length; index++) {
             View action = root.findViewById(NAVIGATION_IDS[index]);
@@ -172,32 +174,32 @@ public class DashboardChromeContractTest {
             ViewGroup.LayoutParams params = action.getLayoutParams();
             assertEquals(0, params.width);
             assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, params.height);
-            assertEquals(1.0f,
-                    ((LinearLayout.LayoutParams) params).weight, 0.0f);
         }
+        float addWeight = ((LinearLayout.LayoutParams) navigation
+                .getChildAt(0).getLayoutParams()).weight;
+        float moreWeight = ((LinearLayout.LayoutParams) navigation
+                .getChildAt(1).getLayoutParams()).weight;
+        assertEquals(DashboardChrome.COMPACT_ADD_WEIGHT, addWeight, 0.0f);
+        assertEquals(DashboardChrome.COMPACT_MORE_WEIGHT, moreWeight, 0.0f);
+        assertTrue(addWeight > moreWeight);
     }
 
     @Test
-    public void heroStartsWithHonestLoadingStateAndSensorCallToAction() {
+    public void heroStartsWithAnHonestMinimalReadingState() {
         TextView value = root.findViewById(R.id.modern_dashboard_value);
-        TextView status = root.findViewById(R.id.modern_dashboard_status);
         TextView freshness = root.findViewById(R.id.modern_dashboard_freshness);
-        Button sensor = root.findViewById(R.id.modern_dashboard_sensor);
+        TextView rangeState = root.findViewById(
+                R.id.modern_dashboard_range_state);
 
         assertEquals(context.getString(R.string.dashboard_empty_value),
                 value.getText().toString());
-        assertEquals(context.getString(R.string.dashboard_status_loading),
-                status.getText().toString());
+        assertEquals(context.getString(R.string.dashboard_state_unknown),
+                rangeState.getText().toString());
         assertEquals(View.GONE, freshness.getVisibility());
-        assertEquals(context.getString(R.string.dashboard_sensor_status),
-                sensor.getText().toString());
-        assertEquals(context.getString(R.string.dashboard_sensor_status),
-                sensor.getContentDescription().toString());
-        assertTrue(sensor.getMinimumHeight() >= dp(48));
     }
 
     @Test
-    public void graphHeaderOffersNowAndFiveAccessibleRanges() {
+    public void graphOffersFiveAccessibleRangesAndContextualNowAction() {
         LinearLayout controls = root.findViewById(
                 R.id.modern_dashboard_graph_controls);
         assertEquals(dp(48), controls.getLayoutParams().height);
@@ -207,10 +209,12 @@ public class DashboardChromeContractTest {
         assertEquals(View.GONE, hint.getVisibility());
 
         Button now = root.findViewById(R.id.modern_dashboard_now);
+        FrameLayout plot = root.findViewById(R.id.modern_dashboard_plot);
         assertNotNull(now);
-        assertSame(controls, now.getParent());
+        assertSame(plot, now.getParent());
         assertEquals(context.getString(R.string.now), now.getText().toString());
         assertTrue(now.getMinimumHeight() >= dp(48));
+        assertEquals(View.GONE, now.getVisibility());
 
         LinearLayout ranges = root.findViewById(R.id.modern_dashboard_ranges);
         HorizontalScrollView scroller = root.findViewById(

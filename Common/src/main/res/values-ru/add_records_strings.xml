@@ -19,16 +19,4 @@
     <string name="record_editor_delete_title">Удалить эту запись?</string>
     <string name="record_editor_keep_editing">Продолжить</string>
     <string name="record_editor_delete_confirm">Удалить навсегда</string>
-    <string name="records_subtitle">Еда, инсулин, активность и заметки</string>
-    <string name="records_add">Новая</string>
-    <string name="records_add_description">Добавить новую запись</string>
-    <string name="records_search_description">Искать записи</string>
-    <string name="records_first">Начало</string>
-    <string name="records_first_description">Перейти к самым ранним записям</string>
-    <string name="records_previous">Назад</string>
-    <string name="records_previous_description">Показать предыдущую страницу</string>
-    <string name="records_next">Далее</string>
-    <string name="records_next_description">Показать следующую страницу</string>
-    <string name="records_latest">Новые</string>
-    <string name="records_latest_description">Перейти к последним записям</string>
 </resources>

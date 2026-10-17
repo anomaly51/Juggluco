@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_selected="true">
+        <shape android:shape="rectangle"><solid android:color="@color/lifeprompt_primary_container" /><stroke android:width="@dimen/lifeprompt_outline_width" android:color="@color/lifeprompt_primary" /><corners android:radius="@dimen/lifeprompt_radius_sm" /></shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle"><solid android:color="@color/lifeprompt_surface_container_high" /><stroke android:width="@dimen/lifeprompt_outline_width" android:color="@color/lifeprompt_outline" /><corners android:radius="@dimen/lifeprompt_radius_sm" /></shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle"><solid android:color="@color/lifeprompt_surface_container_low" /><stroke android:width="@dimen/lifeprompt_outline_width" android:color="@color/lifeprompt_outline_variant" /><corners android:radius="@dimen/lifeprompt_radius_sm" /></shape>
+    </item>
+</selector>

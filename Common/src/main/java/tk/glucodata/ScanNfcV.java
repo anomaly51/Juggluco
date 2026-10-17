@@ -397,8 +397,6 @@ static public synchronized void scan(GlucoseCurve curve,Tag tag) {
       ((MainActivity) curve.getContext()).setnfc();
         }
     main.runOnUiThread(() -> {
-    if(main.curve.numcontrol!=null) 
-        main.curve.numcontrol.setVisibility(GONE);
         main.curve.numberview.closenumview(); Settings.closeview();
         if(askpermission)
             main.finepermission();

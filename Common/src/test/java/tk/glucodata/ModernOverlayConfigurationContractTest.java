@@ -69,20 +69,34 @@ public class ModernOverlayConfigurationContractTest {
         String main = source("MainActivity.java");
         String sheet = source("IntakeEventDetailsSheet.java");
         String forecast = source("ForecastDetailsPage.java");
+        String alerts = source("GlucoseAlertSettingsPage.java");
+        String fullScreenAlerts = source("FullScreenAlertSettingsPage.java");
         String config = between(main, "public void onConfigurationChanged",
                 "public void requestRender");
+        String compactConfig = config.replaceAll("\\s+", "");
 
         assertTrue(config.contains("keepEventDetails"));
         assertTrue(config.contains("keepEventCluster"));
         assertTrue(config.contains("keepForecast"));
-        assertTrue(config.contains(
-                "keepIntake||keepEventDetails||keepEventCluster||keepForecast"));
+        assertTrue(config.contains("keepAlerts"));
+        assertTrue(config.contains("keepSettings"));
+        assertTrue(config.contains("keepMenu"));
+        assertFalse(config.contains("keepTimeline"));
+        assertTrue(compactConfig.contains(
+                "keepIntake||keepEventDetails||keepEventCluster||keepForecast"
+                        + "||keepAlerts||keepSettings||keepMenu"));
         assertTrue(config.contains(
                 "intakeEventDetailsSheet.onConfigurationChanged()"));
         assertTrue(config.contains(
                 "intakeEventClusterSheet.onConfigurationChanged()"));
         assertTrue(config.contains(
                 "forecastDetailsPage.onConfigurationChanged()"));
+        assertFalse(config.contains("onRecordsTimelineConfigurationChanged"));
+        assertTrue(config.contains(
+                "GlucoseAlertSettingsPage.onHostConfigurationChanged(this)"));
+        assertTrue(config.contains(
+                "tk.glucodata.settings.Settings.onConfigurationChanged()"));
+        assertTrue(config.contains("Menus.onConfigurationChanged()"));
         assertFalse(config.contains("new IntakeEventDetailsSheet"));
         assertFalse(config.contains("ForecastDetailsPage.show"));
         assertFalse(config.contains("deleteEvent"));
@@ -100,7 +114,30 @@ public class ModernOverlayConfigurationContractTest {
                 "void onConfigurationChanged()", "void destroy()");
         assertTrue(forecastRelayout.contains("requestLayout()"));
         assertTrue(forecastRelayout.contains("requestApplyInsets(root)"));
+        assertTrue(forecastRelayout.contains(
+                "inflatePage(false, preservedScrollY)"));
+        assertTrue(forecastRelayout.contains("render(latestState)"));
         assertFalse(forecastRelayout.contains("refreshNow"));
+
+        assertTrue(forecast.contains("factorsExpanded"));
+        assertTrue(forecast.contains("modelExpanded"));
+        String compactForecast = forecast.replaceAll("\\s+", "");
+        assertTrue(compactForecast.contains(
+                "applyDisclosure(factorsToggle,factorsBody,factorsChevron,"
+                        + "factorsExpanded"));
+        assertTrue(compactForecast.contains(
+                "applyDisclosure(modelToggle,modelBody,modelChevron,modelExpanded"));
+
+        assertTrue(alerts.contains("static boolean hasActiveScreen"));
+        assertTrue(alerts.contains("onHostConfigurationChanged"));
+        assertTrue(alerts.contains("activeHub.reinflateForConfiguration()"));
+        assertTrue(alerts.contains("activeDetail.reinflateForConfiguration()"));
+        assertTrue(alerts.contains("DetailDraft draft = captureDraft()"));
+        assertTrue(alerts.contains("inflateDetail(false, draft, preservedScrollY)"));
+        assertTrue(fullScreenAlerts.contains(
+                "activePage.reinflateForConfiguration()"));
+        assertTrue(fullScreenAlerts.contains(
+                "inflatePage(false, preservedScrollY)"));
 
         String back = between(sheet, "private void handleSystemBack()",
                 "private void updateSheetBounds()");

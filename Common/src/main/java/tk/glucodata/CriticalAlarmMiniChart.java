@@ -7,25 +7,34 @@ import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.graphics.Typeface;
 import android.util.AttributeSet;
 import android.util.TypedValue;
 import android.view.View;
+
+import androidx.core.content.ContextCompat;
 
 import java.util.List;
 import java.util.Locale;
 
 /** Read-only recent + forecast glucose chart for the critical alarm surface. */
 final class CriticalAlarmMiniChart extends View {
-    private static final int HISTORY_COLOR = 0xFFE7EFEB;
-    private static final int TARGET_COLOR = 0xFF4CC38A;
-    private static final int GRID_COLOR = 0xFF3A4340;
-    private static final int MUTED_COLOR = 0xFFA0AAA5;
     private static final long MIN_FUTURE_WINDOW_MS = 15L * 60_000L;
+    static final int RETRO_CORNER_RADIUS_DP = ClinicalUi.RETRO_CORNER_RADIUS_DP;
+    static final int RETRO_FRAME_STROKE_DP = 2;
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
     private CriticalAlarmChartData data;
-    private int accent = 0xFFE65B65;
+    private int historyColor;
+    private int targetColor;
+    private int targetBandFill;
+    private int targetBandStroke;
+    private int gridColor;
+    private int mutedColor;
+    private int surfaceColor;
+    private int outlineColor;
+    private int accent;
     private boolean hideExactValue;
 
     CriticalAlarmMiniChart(Context context) {
@@ -39,6 +48,15 @@ final class CriticalAlarmMiniChart extends View {
     }
 
     private void initialize() {
+        historyColor = color(R.color.lifeprompt_on_surface);
+        targetColor = color(R.color.lifeprompt_primary);
+        targetBandFill = color(R.color.lifeprompt_target_band_fill);
+        targetBandStroke = color(R.color.lifeprompt_target_band_stroke);
+        gridColor = color(R.color.lifeprompt_outline_variant);
+        mutedColor = color(R.color.lifeprompt_on_surface_variant);
+        surfaceColor = color(R.color.lifeprompt_surface);
+        outlineColor = color(R.color.lifeprompt_outline);
+        accent = color(R.color.lifeprompt_glucose_low);
         setMinimumHeight(dp(164));
         setBackgroundColor(Color.TRANSPARENT);
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
@@ -112,18 +130,18 @@ final class CriticalAlarmMiniChart extends View {
                 top, bottom);
         paint.reset();
         paint.setAntiAlias(true);
-        paint.setColor(withAlpha(TARGET_COLOR, 31));
+        paint.setColor(targetBandFill);
         paint.setStyle(Paint.Style.FILL);
         canvas.drawRoundRect(new RectF(left, targetTop, right, targetBottom),
-                dp(5), dp(5), paint);
-        paint.setColor(withAlpha(TARGET_COLOR, 82));
+                dp(RETRO_CORNER_RADIUS_DP), dp(RETRO_CORNER_RADIUS_DP), paint);
+        paint.setColor(targetBandStroke);
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(dp(1));
         canvas.drawLine(left, targetTop, right, targetTop, paint);
         canvas.drawLine(left, targetBottom, right, targetBottom, paint);
 
         float nowX = x(data.nowMs, minTime, maxTime, left, right);
-        paint.setColor(withAlpha(Color.WHITE, 80));
+        paint.setColor(withAlpha(outlineColor, 128));
         paint.setStrokeWidth(dp(1));
         paint.setPathEffect(new DashPathEffect(
                 new float[]{dp(3), dp(4)}, 0f));
@@ -134,7 +152,7 @@ final class CriticalAlarmMiniChart extends View {
             drawForecastBand(canvas, data.forecast, minTime, maxTime,
                     minValue, maxValue, left, right, top, bottom);
         }
-        drawLine(canvas, data.history, HISTORY_COLOR, false,
+        drawLine(canvas, data.history, historyColor, false,
                 minTime, maxTime, minValue, maxValue,
                 left, right, top, bottom);
         if (data.hasForecast()) {
@@ -152,17 +170,17 @@ final class CriticalAlarmMiniChart extends View {
         paint.reset();
         paint.setAntiAlias(true);
         paint.setTextSize(sp(10));
-        paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        paint.setTypeface(retroTypeface(Typeface.BOLD));
         float y = Math.max(dp(15), sp(10) + dp(3));
         float cursor = left;
-        cursor = legendItem(canvas, cursor, y, HISTORY_COLOR,
+        cursor = legendItem(canvas, cursor, y, historyColor,
                 getContext().getString(R.string.critical_alarm_chart_recent));
         if (data.hasForecast() && cursor < right - dp(90)) {
             cursor = legendItem(canvas, cursor + dp(10), y, accent,
                     getContext().getString(R.string.critical_alarm_chart_forecast));
         }
         if (cursor < right - dp(72)) {
-            legendItem(canvas, cursor + dp(10), y, TARGET_COLOR,
+            legendItem(canvas, cursor + dp(10), y, targetColor,
                     getContext().getString(R.string.critical_alarm_chart_target));
         }
     }
@@ -172,7 +190,7 @@ final class CriticalAlarmMiniChart extends View {
         paint.setColor(color);
         paint.setStyle(Paint.Style.FILL);
         canvas.drawCircle(x + dp(3), baseline - dp(3), dp(3), paint);
-        paint.setColor(MUTED_COLOR);
+        paint.setColor(mutedColor);
         canvas.drawText(label, x + dp(10), baseline, paint);
         return x + dp(10) + paint.measureText(label);
     }
@@ -182,7 +200,7 @@ final class CriticalAlarmMiniChart extends View {
         paint.reset();
         paint.setAntiAlias(true);
         paint.setStyle(Paint.Style.STROKE);
-        paint.setColor(withAlpha(GRID_COLOR, 175));
+        paint.setColor(withAlpha(gridColor, 175));
         paint.setStrokeWidth(dp(1));
         for (int index = 0; index < 4; index++) {
             float y = top + (bottom - top) * index / 3f;
@@ -192,9 +210,10 @@ final class CriticalAlarmMiniChart extends View {
             float x = left + (right - left) * index / 3f;
             canvas.drawLine(x, top, x, bottom, paint);
         }
-        paint.setColor(withAlpha(Color.WHITE, 42));
+        paint.setColor(withAlpha(outlineColor, 96));
+        paint.setStrokeWidth(dp(RETRO_FRAME_STROKE_DP));
         canvas.drawRoundRect(new RectF(left, top, right, bottom),
-                dp(4), dp(4), paint);
+                dp(RETRO_CORNER_RADIUS_DP), dp(RETRO_CORNER_RADIUS_DP), paint);
     }
 
     private void drawForecastBand(Canvas canvas,
@@ -269,11 +288,11 @@ final class CriticalAlarmMiniChart extends View {
         paint.reset();
         paint.setAntiAlias(true);
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(0xFF0B0E0F);
+        paint.setColor(surfaceColor);
         canvas.drawCircle(x, y, dp(6.5f), paint);
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(dp(1));
-        paint.setColor(withAlpha(Color.WHITE, 170));
+        paint.setColor(outlineColor);
         canvas.drawCircle(x, y, dp(5f), paint);
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(accent);
@@ -285,7 +304,8 @@ final class CriticalAlarmMiniChart extends View {
         paint.reset();
         paint.setAntiAlias(true);
         paint.setTextSize(sp(9));
-        paint.setColor(MUTED_COLOR);
+        paint.setTypeface(retroTypeface(Typeface.NORMAL));
+        paint.setColor(mutedColor);
         String past = getContext().getString(
                 R.string.critical_alarm_chart_past_axis,
                 data.historyMinutes);
@@ -321,8 +341,9 @@ final class CriticalAlarmMiniChart extends View {
         paint.setAntiAlias(true);
         float centerY = getHeight() * .46f;
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(MUTED_COLOR);
+        paint.setColor(mutedColor);
         paint.setTextSize(sp(12));
+        paint.setTypeface(retroTypeface(Typeface.NORMAL));
         float maximumWidth = Math.max(dp(80), getWidth() - dp(32));
         if (paint.measureText(label) > maximumWidth) {
             paint.setTextSize(Math.max(sp(9), paint.getTextSize()
@@ -433,5 +454,13 @@ final class CriticalAlarmMiniChart extends View {
     private float sp(float value) {
         return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, value,
                 getResources().getDisplayMetrics());
+    }
+
+    private int color(int resource) {
+        return ContextCompat.getColor(getContext(), resource);
+    }
+
+    static Typeface retroTypeface(int style) {
+        return ClinicalUi.retroTypeface(style);
     }
 }

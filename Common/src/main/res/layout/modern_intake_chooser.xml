@@ -5,7 +5,8 @@
     android:layout_height="match_parent"
     android:background="@color/modern_secondary_background"
     android:clickable="true"
-    android:focusable="true">
+    android:focusable="true"
+    android:theme="@style/ModernDashboardThemeOverlay">
 
     <LinearLayout
         android:id="@+id/intake_page"
@@ -39,7 +40,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:fontFamily="sans-serif-medium"
+                    android:fontFamily="monospace"
                     android:includeFontPadding="false"
                     android:text="@string/intake_flow_title"
                     android:textColor="@color/modern_secondary_text_primary"
@@ -98,7 +99,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="32dp"
                     android:layout_marginBottom="18dp"
-                    android:fontFamily="sans-serif-medium"
+                    android:fontFamily="monospace"
                     android:gravity="center"
                     android:text="@string/intake_choose_prompt"
                     android:textColor="@color/modern_secondary_text_primary"

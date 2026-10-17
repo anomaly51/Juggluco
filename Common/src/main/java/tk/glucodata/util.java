@@ -123,17 +123,7 @@ static  Locale getReslocale() {
         }
     }
 static public Locale getlocale() {
-	final var locales= AppCompatDelegate.getApplicationLocales();
-	if(locales.isEmpty())  {
-//		final var lang=Locale.getDefault();
-		final var lang=getReslocale();
-		{if(doLog) {Log.i("getlocale","Locale.getDefault()="+lang);};};
-		return lang;
-		}
-	final var lang2=locales.get(0);
-	{if(doLog) {Log.i("getlocale" ,"getApplicationLocales()="+lang2);};};
-	return lang2;
-
+	return AppLanguage.regionalLocale();
 	}
 
 

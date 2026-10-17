@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.robolectric.Shadows.shadowOf;
 
 import android.app.Application;
 import android.content.Context;
@@ -27,6 +28,7 @@ public class CriticalAlarmAudioReliabilityTest {
     private Application application;
     private AudioManager audio;
     private int originalVolume;
+    private boolean originalMuted;
 
     @Before
     public void setUp() {
@@ -35,6 +37,8 @@ public class CriticalAlarmAudioReliabilityTest {
                 Context.AUDIO_SERVICE);
         assertNotNull(audio);
         originalVolume = audio.getStreamVolume(AudioManager.STREAM_ALARM);
+        originalMuted = audio.isStreamMute(AudioManager.STREAM_ALARM);
+        shadowOf(audio).setIsStreamMute(AudioManager.STREAM_ALARM, false);
         application.getSharedPreferences(
                 CriticalAlarmAudioReliability.PREFS_NAME,
                 Context.MODE_PRIVATE).edit().clear().commit();
@@ -44,9 +48,25 @@ public class CriticalAlarmAudioReliabilityTest {
     public void tearDown() {
         CriticalAlarmAudioReliability.restoreAlarmVolume(application);
         audio.setStreamVolume(AudioManager.STREAM_ALARM, originalVolume, 0);
+        shadowOf(audio).setIsStreamMute(AudioManager.STREAM_ALARM,
+                originalMuted);
         application.getSharedPreferences(
                 CriticalAlarmAudioReliability.PREFS_NAME,
                 Context.MODE_PRIVATE).edit().clear().commit();
+    }
+
+    @Test
+    public void watchdogWakeLockHasBoundedLeaseAndExplicitStop() {
+        PowerManager.WakeLock lease = CriticalAlarmAudioReliability
+                .acquireAudioWatchdogWakeLock(application);
+        assertNotNull(lease);
+        assertTrue(lease.isHeld());
+        CriticalAlarmAudioReliability.renewAudioWatchdogWakeLock(lease);
+        assertTrue(lease.isHeld());
+        CriticalAlarmAudioReliability.releaseDeliveryWakeLock(lease);
+        assertFalse(lease.isHeld());
+        // A timed or already released lease must also be safe on cleanup.
+        CriticalAlarmAudioReliability.releaseDeliveryWakeLock(lease);
     }
 
     @Test
@@ -63,6 +83,120 @@ public class CriticalAlarmAudioReliabilityTest {
         assertTrue(CriticalAlarmAudioReliability
                 .restoreAlarmVolume(application));
         assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_ALARM));
+    }
+
+    @Test
+    public void mutedAudibleStreamIsUnmutedWithoutLoweringAndRestored() {
+        int maximum = audio.getStreamMaxVolume(AudioManager.STREAM_ALARM);
+        audio.setStreamVolume(AudioManager.STREAM_ALARM, maximum, 0);
+        shadowOf(audio).setIsStreamMute(AudioManager.STREAM_ALARM, true);
+
+        assertTrue(CriticalAlarmAudioReliability
+                .ensureAudibleAlarmVolume(application));
+        assertEquals(maximum,
+                audio.getStreamVolume(AudioManager.STREAM_ALARM));
+        assertFalse(audio.isStreamMute(AudioManager.STREAM_ALARM));
+
+        assertTrue(CriticalAlarmAudioReliability
+                .restoreAlarmVolume(application));
+        assertEquals(maximum,
+                audio.getStreamVolume(AudioManager.STREAM_ALARM));
+        assertTrue(audio.isStreamMute(AudioManager.STREAM_ALARM));
+    }
+
+    @Test
+    public void repeatedWatchdogUnmuteKeepsTheFirstMutedStateForRestore() {
+        int maximum = audio.getStreamMaxVolume(AudioManager.STREAM_ALARM);
+        int floor = CriticalAlarmAudioReliability.minimumAudibleIndex(maximum);
+        audio.setStreamVolume(AudioManager.STREAM_ALARM, 0, 0);
+        shadowOf(audio).setIsStreamMute(AudioManager.STREAM_ALARM, true);
+
+        assertTrue(CriticalAlarmAudioReliability
+                .ensureAudibleAlarmVolume(application));
+        assertFalse(audio.isStreamMute(AudioManager.STREAM_ALARM));
+        assertEquals(floor,
+                audio.getStreamVolume(AudioManager.STREAM_ALARM));
+
+        shadowOf(audio).setIsStreamMute(AudioManager.STREAM_ALARM, true);
+        assertTrue(CriticalAlarmAudioReliability
+                .ensureAudibleAlarmVolume(application));
+        assertFalse(audio.isStreamMute(AudioManager.STREAM_ALARM));
+
+        assertTrue(CriticalAlarmAudioReliability
+                .restoreAlarmVolume(application));
+        assertEquals(0, audio.getStreamVolume(AudioManager.STREAM_ALARM));
+        assertTrue(audio.isStreamMute(AudioManager.STREAM_ALARM));
+    }
+
+    @Test
+    public void manualMuteOfOriginallyUnmutedStreamIsPreserved() {
+        int maximum = audio.getStreamMaxVolume(AudioManager.STREAM_ALARM);
+        int floor = CriticalAlarmAudioReliability.minimumAudibleIndex(maximum);
+        audio.setStreamVolume(AudioManager.STREAM_ALARM, 0, 0);
+        assertTrue(CriticalAlarmAudioReliability
+                .ensureAudibleAlarmVolume(application));
+        assertEquals(floor,
+                audio.getStreamVolume(AudioManager.STREAM_ALARM));
+
+        shadowOf(audio).setIsStreamMute(AudioManager.STREAM_ALARM, true);
+
+        assertFalse(CriticalAlarmAudioReliability
+                .restoreAlarmVolume(application));
+        assertEquals(floor,
+                audio.getStreamVolume(AudioManager.STREAM_ALARM));
+        assertTrue(audio.isStreamMute(AudioManager.STREAM_ALARM));
+        assertTrue(application.getSharedPreferences(
+                CriticalAlarmAudioReliability.PREFS_NAME,
+                Context.MODE_PRIVATE).getAll().isEmpty());
+    }
+
+    @Test
+    public void postRestoreManualUnmuteIsNotOverwrittenByRetry() {
+        int maximum = audio.getStreamMaxVolume(AudioManager.STREAM_ALARM);
+        audio.setStreamVolume(AudioManager.STREAM_ALARM, maximum, 0);
+        shadowOf(audio).setIsStreamMute(AudioManager.STREAM_ALARM, true);
+        assertTrue(CriticalAlarmAudioReliability
+                .ensureAudibleAlarmVolume(application));
+        CriticalAlarmAudioReliability.RestorePlan plan =
+                CriticalAlarmAudioReliability.prepareAlarmVolumeRestore(
+                        application, "ended-token");
+        assertNotNull(plan);
+        assertTrue(plan.originalMuted);
+        assertTrue(CriticalAlarmAudioReliability
+                .applyPreparedAlarmVolumeRestore(application, plan));
+        assertTrue(audio.isStreamMute(AudioManager.STREAM_ALARM));
+
+        shadowOf(audio).setIsStreamMute(AudioManager.STREAM_ALARM, false);
+
+        assertTrue(CriticalAlarmAudioReliability
+                .retryPreparedAlarmVolumeRestore(application, plan, false));
+        assertFalse(audio.isStreamMute(AudioManager.STREAM_ALARM));
+    }
+
+    @Test
+    public void recognizableOemReassertionRestoresOriginalMuteAgain() {
+        int maximum = audio.getStreamMaxVolume(AudioManager.STREAM_ALARM);
+        int floor = CriticalAlarmAudioReliability.minimumAudibleIndex(maximum);
+        int before = Math.max(0, floor - 2);
+        audio.setStreamVolume(AudioManager.STREAM_ALARM, before, 0);
+        shadowOf(audio).setIsStreamMute(AudioManager.STREAM_ALARM, true);
+        assertTrue(CriticalAlarmAudioReliability
+                .ensureAudibleAlarmVolume(application));
+        CriticalAlarmAudioReliability.RestorePlan plan =
+                CriticalAlarmAudioReliability.prepareAlarmVolumeRestore(
+                        application, "ended-token");
+        assertNotNull(plan);
+        assertTrue(CriticalAlarmAudioReliability
+                .applyPreparedAlarmVolumeRestore(application, plan));
+
+        shadowOf(audio).setIsStreamMute(AudioManager.STREAM_ALARM, false);
+        audio.setStreamVolume(AudioManager.STREAM_ALARM, plan.forcedVolume, 0);
+
+        assertTrue(CriticalAlarmAudioReliability
+                .retryPreparedAlarmVolumeRestore(application, plan, false));
+        assertEquals(before,
+                audio.getStreamVolume(AudioManager.STREAM_ALARM));
+        assertTrue(audio.isStreamMute(AudioManager.STREAM_ALARM));
     }
 
     @Test

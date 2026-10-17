@@ -61,9 +61,18 @@ public final class IntakeBackendSettings {
             Insets bars=insets.getInsets(WindowInsetsCompat.Type.systemBars()
                     |WindowInsetsCompat.Type.displayCutout()
                     |WindowInsetsCompat.Type.ime());
-            page.setPadding(bars.left,bars.top,bars.right,bars.bottom);
+            int availableWidth=Math.max(0,view.getWidth()-bars.left-bars.right);
+            int readable=ClinicalUi.readableHorizontalGutter(activity,
+                    availableWidth,16);
+            int builtIn=ClinicalUi.dp(activity,16);
+            int extra=Math.max(0,readable-builtIn);
+            page.setPadding(bars.left+extra,bars.top,bars.right+extra,
+                    bars.bottom);
             return insets;
         });
+        ClinicalUi.reapplyInsetsOnWidthChanges(root);
+        ViewCompat.setAccessibilityPaneTitle(root,activity.getString(
+                R.string.intake_backend_settings_title));
 
         root.findViewById(R.id.intake_backend_close).setOnClickListener(view->close(true));
         test.setOnClickListener(view->testConnection());
@@ -72,7 +81,7 @@ public final class IntakeBackendSettings {
                 new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT),false);
         MainActivity.setonback(()->close(false));
         ViewCompat.requestApplyInsets(root);
-        activity.lightBars(false);
+        activity.themeLightBars();
     }
 
     private boolean storeFields() {
@@ -147,6 +156,6 @@ public final class IntakeBackendSettings {
         ViewCompat.setOnApplyWindowInsetsListener(root,null);
         ViewParent parent=root.getParent();
         if(parent instanceof ViewGroup) ((ViewGroup)parent).removeView(root);
-        activity.lightBars(false);
+        activity.themeLightBars();
     }
 }

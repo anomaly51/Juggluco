@@ -8,7 +8,6 @@ import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.media.AudioAttributes;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
@@ -28,6 +27,9 @@ import androidx.core.content.ContextCompat;
  * does not actually use.</p>
  */
 final class CriticalAlarmDiagnostics {
+    // AOSP Settings exposes this intent action without a public SDK constant.
+    // startSettings retains the general Settings fallback for OEM variants.
+    static final String ACTION_DND_MODE_SETTINGS = "android.settings.ZEN_MODE_SETTINGS";
     static final String ACTUAL_LOW_CHANNEL_ID = "critical_actual_low_v2";
     static final String ACTUAL_HIGH_CHANNEL_ID = "critical_actual_high_v2";
     static final String PREDICTIVE_LOW_CHANNEL_ID =
@@ -65,9 +67,8 @@ final class CriticalAlarmDiagnostics {
                 : audio.getStreamVolume(AudioManager.STREAM_ALARM);
         int maxAlarmVolume = audio == null ? -1
                 : audio.getStreamMaxVolume(AudioManager.STREAM_ALARM);
-        boolean policyAccess = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
-                || (notifications != null
-                && notifications.isNotificationPolicyAccessGranted());
+        boolean policyAccess = notificationPolicyAccess(notifications);
+        int interruptionFilter = currentInterruptionFilter(notifications);
         boolean fullScreenAccess = fullScreenAccess(app, notifications);
         boolean overlayAccess = overlayAccess(app);
         boolean exactAlarmAccess = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
@@ -84,9 +85,34 @@ final class CriticalAlarmDiagnostics {
         ChannelReadiness signalLoss = channelReadiness(notifications,
                 CriticalGlucoseAlarm.selectedSignalLossChannelIds(app));
         return new Snapshot(postPermission, notificationsEnabled,
-                alarmVolume, maxAlarmVolume, policyAccess, fullScreenAccess,
+                alarmVolume, maxAlarmVolume, policyAccess, interruptionFilter,
+                fullScreenAccess,
                 overlayAccess, exactAlarmAccess, actual, predictive,
                 signalLoss, testHook != null);
+    }
+
+    private static boolean notificationPolicyAccess(
+            @Nullable NotificationManager manager) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+        if (manager == null) return false;
+        try {
+            return manager.isNotificationPolicyAccessGranted();
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
+    /** A missing system response must not be mistaken for DND being off. */
+    static int currentInterruptionFilter(
+            @Nullable NotificationManager manager) {
+        if (manager == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return NotificationManager.INTERRUPTION_FILTER_UNKNOWN;
+        }
+        try {
+            return manager.getCurrentInterruptionFilter();
+        } catch (RuntimeException unavailable) {
+            return NotificationManager.INTERRUPTION_FILTER_UNKNOWN;
+        }
     }
 
     private static boolean fullScreenAccess(Context context,
@@ -134,10 +160,10 @@ final class CriticalAlarmDiagnostics {
             present++;
             highImportance &= channel.getImportance()
                     >= NotificationManager.IMPORTANCE_HIGH;
-            AudioAttributes attributes = channel.getAudioAttributes();
-            alarmSound &= channel.getSound() != null
-                    && attributes != null
-                    && attributes.getUsage() == AudioAttributes.USAGE_ALARM;
+            // Critical sound is owned by the foreground MediaPlayer. Its
+            // presentation channel must stay silent to avoid an echoing second
+            // owner and OEM notification-shade cancellation semantics.
+            alarmSound &= channel.getSound() == null;
             bypassDnd &= channel.canBypassDnd();
         }
         return new ChannelReadiness(present == channelIds.length
@@ -180,8 +206,15 @@ final class CriticalAlarmDiagnostics {
     }
 
     static void openDndSettings(Context context) {
-        startSettings(context,
-                new Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS));
+        if (context == null) return;
+        NotificationManager manager = (NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
+        // A grant does not mean that the current DND mode permits alarms.
+        // Once granted, take the user to the actual mode settings instead of
+        // repeatedly opening the already-completed access grant screen.
+        startSettings(context, new Intent(notificationPolicyAccess(manager)
+                ? ACTION_DND_MODE_SETTINGS
+                : Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS));
     }
 
     static void openFullScreenSettings(Context context) {
@@ -270,6 +303,7 @@ final class CriticalAlarmDiagnostics {
         final int alarmVolume;
         final int maxAlarmVolume;
         final boolean dndPolicyAccess;
+        final int currentInterruptionFilter;
         final boolean fullScreenAccess;
         final boolean overlayAccess;
         final boolean exactAlarmAccess;
@@ -280,6 +314,7 @@ final class CriticalAlarmDiagnostics {
 
         Snapshot(boolean postPermission, boolean notificationsEnabled,
                 int alarmVolume, int maxAlarmVolume, boolean dndPolicyAccess,
+                int currentInterruptionFilter,
                 boolean fullScreenAccess, boolean overlayAccess,
                 boolean exactAlarmAccess,
                 ChannelReadiness actualChannels,
@@ -291,6 +326,7 @@ final class CriticalAlarmDiagnostics {
             this.alarmVolume = alarmVolume;
             this.maxAlarmVolume = maxAlarmVolume;
             this.dndPolicyAccess = dndPolicyAccess;
+            this.currentInterruptionFilter = currentInterruptionFilter;
             this.fullScreenAccess = fullScreenAccess;
             this.overlayAccess = overlayAccess;
             this.exactAlarmAccess = exactAlarmAccess;
@@ -302,18 +338,22 @@ final class CriticalAlarmDiagnostics {
 
         Snapshot(boolean postPermission, boolean notificationsEnabled,
                 int alarmVolume, int maxAlarmVolume, boolean dndPolicyAccess,
+                int currentInterruptionFilter,
                 boolean fullScreenAccess, boolean overlayAccess,
                 boolean exactAlarmAccess,
                 ChannelReadiness actualChannels,
                 ChannelReadiness predictiveChannels, boolean testAvailable) {
             this(postPermission, notificationsEnabled, alarmVolume,
-                    maxAlarmVolume, dndPolicyAccess, fullScreenAccess,
+                    maxAlarmVolume, dndPolicyAccess, currentInterruptionFilter,
+                    fullScreenAccess,
                     overlayAccess, exactAlarmAccess, actualChannels,
                     predictiveChannels, actualChannels, testAvailable);
         }
 
         static Snapshot unavailable() {
-            return new Snapshot(false, false, -1, -1, false, false, false,
+            return new Snapshot(false, false, -1, -1, false,
+                    NotificationManager.INTERRUPTION_FILTER_UNKNOWN,
+                    false, false,
                     false, ChannelReadiness.missing(),
                     ChannelReadiness.missing(), ChannelReadiness.missing(),
                     false);
@@ -321,6 +361,31 @@ final class CriticalAlarmDiagnostics {
 
         boolean notificationAccess() {
             return postPermission && notificationsEnabled;
+        }
+
+        boolean dndBlocksAllAlarms() {
+            return currentInterruptionFilter
+                    == NotificationManager.INTERRUPTION_FILTER_NONE;
+        }
+
+        /** Presentation-channel compatibility and policy access are separate. */
+        boolean dndModeAllowsAlarmChannels() {
+            return currentInterruptionFilter
+                    == NotificationManager.INTERRUPTION_FILTER_ALL
+                    || currentInterruptionFilter
+                    == NotificationManager.INTERRUPTION_FILTER_ALARMS
+                    || currentInterruptionFilter
+                    == NotificationManager.INTERRUPTION_FILTER_PRIORITY;
+        }
+
+        /** Device delivery configuration only; never a model-eligibility gate. */
+        boolean deviceConfigured() {
+            return notificationAccess() && dndPolicyAccess
+                    && dndModeAllowsAlarmChannels()
+                    && fullScreenAccess && overlayAccess
+                    && actualChannels.ready() && actualChannels.bypassDnd
+                    && predictiveChannels.ready() && predictiveChannels.bypassDnd
+                    && signalLossChannels.ready() && signalLossChannels.bypassDnd;
         }
 
         boolean alarmVolumeAudible() {
@@ -354,7 +419,8 @@ final class CriticalAlarmDiagnostics {
 
         private boolean commonConfigured() {
             return notificationAccess() && alarmVolumeAudible()
-                    && dndPolicyAccess && fullScreenAccess && overlayAccess
+                    && dndPolicyAccess && dndModeAllowsAlarmChannels()
+                    && fullScreenAccess && overlayAccess
                     && exactAlarmAccess;
         }
     }

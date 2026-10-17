@@ -32,7 +32,6 @@ import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 import static android.widget.Spinner.MODE_DIALOG;
 import static android.widget.Spinner.MODE_DROPDOWN;
-import static androidx.core.os.LocaleListCompat.getEmptyLocaleList;
 import static tk.glucodata.Applic.DynamicTheme;
 import static tk.glucodata.Applic.isWearable;
 import static tk.glucodata.Applic.usedlocale;
@@ -61,6 +60,7 @@ import static tk.glucodata.util.getlocale;
 import static tk.glucodata.util.getradiobuttonId;
 
 import android.annotation.SuppressLint;
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.Application;
 import android.content.ComponentName;
@@ -77,6 +77,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.view.animation.DecelerateInterpolator;
 import android.widget.AdapterView;
 import android.widget.Button;
 
@@ -93,10 +94,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
-import androidx.appcompat.app.AppCompatDelegate;
 import androidx.appcompat.widget.SwitchCompat;
 import androidx.core.content.ContextCompat;
-import androidx.core.os.LocaleListCompat;
+import androidx.core.view.ViewCompat;
 import androidx.core.widget.NestedScrollView;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -204,13 +204,21 @@ private class Closerun implements Runnable {
            Applic.argToaster(activity, R.string.setunitfirst,Toast.LENGTH_SHORT);
            return;
            }
-        hidekeyboard();
-        finish();
-         activity.lightBars(!getInvertColors( ));
-        if(tk.glucodata.Menus.on)
-            tk.glucodata.Menus.show(activity);
-        }
-    };
+         hidekeyboard();
+         finish();
+         activity.themeLightBars();
+        boolean configurationDrain=MainActivity.isConfigurationBackDrain();
+        if(configurationDrain)
+             tk.glucodata.Menus.cancelReturnToMenu();
+        else if(shouldRestoreMoreAfterClose(tk.glucodata.Menus.on,false))
+             tk.glucodata.Menus.show(activity);
+         }
+     };
+
+static boolean shouldRestoreMoreAfterClose(boolean menuOpen,
+        boolean configurationBackDrain) {
+    return menuOpen&&!configurationBackDrain;
+    }
 private void makesettingsin(MainActivity act) {
         activity=act;
 
@@ -256,6 +264,30 @@ void layoutweg() {
 public static void closeview() {
     if(thisone!=null)
         thisone.finish();
+    }
+
+/** True while either the Settings hub or one of its category pages is attached. */
+public static boolean isShowing() {
+    return thisone!=null&&thisone.settinglayout!=null
+            &&thisone.settinglayout.getParent()!=null;
+    }
+
+/** Keeps the current Settings task and scroll position across Fold resizing. */
+public static void onConfigurationChanged() {
+    if(!isShowing()||isWearable)
+        return;
+    Settings settings=thisone;
+    settings.settinglayout.setBackgroundColor(ClinicalUi.window(settings.activity));
+    settings.settinglayout.setPadding(MainActivity.systembarLeft,
+            MainActivity.systembarTop,MainActivity.systembarRight,
+            MainActivity.systembarBottom);
+    if(settings.phoneSettingsLayout!=null) {
+        settings.phoneSettingsLayout.setBackgroundColor(
+                ClinicalUi.window(settings.activity));
+        applyPhoneContentPadding(settings.activity,settings.phoneSettingsLayout,
+                settings.settinglayout.getWidth(),16,false);
+        }
+    settings.settinglayout.requestLayout();
     }
 static void hideSystemUI() {
     }
@@ -306,6 +338,7 @@ static int getbackgroundcolor(Context context) {
 
 //HorizontalScrollView settinglayout=null;
 FrameLayout settinglayout=null;
+LinearLayout phoneSettingsLayout=null;
     CheckDirectionRadio mmolL;
     CheckDirectionRadio mgdl;
 
@@ -1005,11 +1038,19 @@ private static void clinicalSyncExpandable(boolean enabled,View... details) {
     }
 
 private static void clinicalAlarmSettings(MainActivity context,View parent) {
+    showGlucoseAlerts(context,()-> {
+        parent.setVisibility(VISIBLE);
+        tk.glucodata.help.hidekeyboard(context);
+        });
+    }
+
+/** Shared direct route used by both Settings and the phone More sheet. */
+public static void showGlucoseAlerts(MainActivity context,Runnable onClose) {
     clinicalNormalizeUnifiedAlarms();
     GlucoseAlertSettingsPage.show(context,()-> {
         clinicalNormalizeUnifiedAlarms();
-        parent.setVisibility(VISIBLE);
-        tk.glucodata.help.hidekeyboard(context);
+        if(onClose!=null)
+            onClose.run();
         });
     }
 
@@ -1265,8 +1306,6 @@ new View[]{isvalue},new View[]{ringisvalue},new View[]{alarmis,alarmtype},new Vi
 final private static String  codestr=String.valueOf(BuildConfig.VERSION_CODE);
 
 
-static private final List<String> supportedlanguages= Arrays.asList("Language","ar","be","de","en","es","fr","hi","it","ja","nl","pl","pt","ru","sv","tr","uk","uz","zh");
-
 static public Spinner getGenSpin(Activity context) {
     var spin=  new Spinner(context,isWearable?MODE_DIALOG: MODE_DROPDOWN);
     avoidSpinnerDropdownFocus(spin);
@@ -1280,44 +1319,21 @@ static public Spinner getGenSpin(Activity context) {
      return spin;
      }
 
-static private Spinner languagespinner(MainActivity context) {
-   var spin=  getGenSpin(context);
-//   spin.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
- //  spin.setTextDirection(View.TEXT_DIRECTION_LTR);
-    var locales=AppCompatDelegate.getApplicationLocales();
-    int prepos;
-    if(locales.isEmpty()||(prepos=supportedlanguages.indexOf(locales.get(0).getLanguage()))<1)
-        prepos=0;
-    final int pos=prepos;
-    spin.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-        @Override
-        public  void onItemSelected (AdapterView<?> parent, View view, int position, long id) {
-            if(position!=pos) {
-               var newlocale=(position==0)?getEmptyLocaleList():LocaleListCompat.forLanguageTags(supportedlanguages.get(position));
-               AppCompatDelegate.setApplicationLocales(newlocale);
-               }
-            }
-        @Override
-        public  void onNothingSelected (AdapterView<?> parent) {
-
-        } });
-
-    supportedlanguages.set(0,context.getString(R.string.languagename));
-   final var adapt=new LabelAdapter<String>(context,supportedlanguages,0);
-    spin.setAdapter(adapt);
-//    adapt.setDropDownViewResource(R.layout.spinner_dialog_item_center);
-
-//    var pos=supportedlanguages.indexOf(getlocale().getLanguage()); if(pos<0) pos=0;
-    spin.setSelection(pos);
-
-//       spin.setPadding(0,0,0,0);
-    return spin;
+/** The interface language is fixed; this value is information, not a picker. */
+private static TextView languageDisplay(MainActivity context) {
+    TextView language=ClinicalUi.body(context,"English");
+    language.setMinimumHeight(ClinicalUi.dp(context,48));
+    language.setGravity(Gravity.CENTER_VERTICAL);
+    language.setClickable(false);
+    language.setFocusable(false);
+    return language;
     }
 static void mkrangelabel(TextView view,int res,float low, float high) {
      view.setText(view.getContext().getString(res)+" "+float2string(low)+"-"+float2string(high));
    }
 
-private static void clinicalDisplaySettings(MainActivity context,Settings settings) {
+private static void clinicalDisplaySettings(MainActivity context,Settings settings,
+        Runnable dismissSettingsForDestination) {
     EditText graphLow=new EditText(context);
     EditText graphHigh=new EditText(context);
     EditText targetLow=new EditText(context);
@@ -1415,7 +1431,7 @@ private static void clinicalDisplaySettings(MainActivity context,Settings settin
         context.selectionSystemUI();
         });
 
-    Spinner language=languagespinner(context);
+    TextView language=languageDisplay(context);
     Button close=clinicalHeaderButton(context,R.string.closename);
     LinearLayout content=clinicalScreenContent(context);
     content.addView(ClinicalUi.header(context,
@@ -1425,9 +1441,7 @@ private static void clinicalDisplaySettings(MainActivity context,Settings settin
             ClinicalUi.dp(context,6));
     content.addView(intro);
 
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_graph_readings_section)));
-    content.addView(ClinicalUi.card(context,
+    LinearLayout graphDataCard=ClinicalUi.card(context,
             clinicalToggleRow(context,graphScans,
                     context.getString(R.string.settings_graph_scans_hint)),
             clinicalToggleRow(context,graphCalibratedScans,
@@ -1439,42 +1453,24 @@ private static void clinicalDisplaySettings(MainActivity context,Settings settin
             clinicalToggleRow(context,graphHistory,
                     context.getString(R.string.settings_graph_history_hint)),
             clinicalToggleRow(context,graphCalibratedHistory,
-                    context.getString(R.string.settings_graph_calibrated_history_hint))));
-
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_graph_records_section)));
-    content.addView(ClinicalUi.card(context,
+                    context.getString(R.string.settings_graph_calibrated_history_hint)),
             clinicalToggleRow(context,graphAmounts,
                     context.getString(R.string.settings_graph_amounts_hint)),
             clinicalToggleRow(context,graphMeals,
-                    context.getString(R.string.settings_graph_meals_hint))));
+                    context.getString(R.string.settings_graph_meals_hint)));
 
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_graph_presentation_section)));
-    content.addView(ClinicalUi.card(context,
-            clinicalToggleRow(context,graphFloating,
-                    context.getString(R.string.settings_graph_floating_hint)),
-            clinicalToggleRow(context,graphDarkMode,
-                    context.getString(R.string.settings_graph_dark_hint)),
-            clinicalToggleRow(context,graphSystemUi,
-                    context.getString(R.string.settings_graph_system_ui_hint))));
-
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_ranges_section)));
     LinearLayout graphRow=clinicalRangeRow(context,R.string.graphrange,graphLow,graphHigh);
     LinearLayout targetRow=clinicalRangeRow(context,R.string.targetrange,targetLow,targetHigh);
     LinearLayout thresholdRow=ClinicalUi.fieldRow(context,
             context.getString(R.string.threshold),threshold);
-    content.addView(ClinicalUi.card(context,graphRow,targetRow,thresholdRow));
+    LinearLayout rangesCard=ClinicalUi.card(context,graphRow,targetRow,thresholdRow);
 
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_chart_section)));
-    content.addView(ClinicalUi.card(context,
+    LinearLayout behaviorCard=ClinicalUi.card(context,
             clinicalToggleRow(context,manualTime,
                     context.getString(R.string.settings_manual_time_hint)),
             clinicalToggleRow(context,axisLeft,null),
             clinicalToggleRow(context,predict,null),
-            clinicalToggleRow(context,clampNow,null)));
+            clinicalToggleRow(context,clampNow,null));
 
     LinearLayout colors=ClinicalUi.actionRow(context,context.getString(R.string.colors),
             context.getString(R.string.settings_colors_hint));
@@ -1482,17 +1478,32 @@ private static void clinicalDisplaySettings(MainActivity context,Settings settin
             context.getString(R.string.settings_theme_hint));
     LinearLayout iob=ClinicalUi.actionRow(context,"IOB",
             context.getString(R.string.settings_iob_hint));
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_appearance_section)));
-    content.addView(ClinicalUi.card(context,
-            colors,theme,clinicalLabeledSpinner(context,R.string.languagename,language),
-            clinicalToggleRow(context,twelveHour,null),iob));
+    LinearLayout appearanceCard=ClinicalUi.card(context,
+            clinicalToggleRow(context,graphFloating,
+                    context.getString(R.string.settings_graph_floating_hint)),
+            clinicalToggleRow(context,graphDarkMode,
+                    context.getString(R.string.settings_graph_dark_hint)),
+            clinicalToggleRow(context,graphSystemUi,
+                    context.getString(R.string.settings_graph_system_ui_hint)),
+            colors,theme,ClinicalUi.fieldRow(context,context.getString(R.string.languagename),language),
+            clinicalToggleRow(context,twelveHour,null),iob);
+
+    content.addView(clinicalDisclosure(context,
+            R.string.settings_graph_data_disclosure,
+            R.string.settings_graph_data_disclosure_summary,graphDataCard,false));
+    content.addView(clinicalDisclosure(context,
+            R.string.settings_ranges_section,
+            R.string.settings_ranges_disclosure_summary,rangesCard,false));
+    content.addView(clinicalDisclosure(context,
+            R.string.settings_chart_section,
+            R.string.settings_chart_disclosure_summary,behaviorCard,false));
+    content.addView(clinicalDisclosure(context,
+            R.string.settings_appearance_section,
+            R.string.settings_appearance_disclosure_summary,appearanceCard,false));
 
     LinearLayout displayHelp=ClinicalUi.actionRow(context,
             context.getString(R.string.helpname),context.getString(R.string.settings_display_help_hint));
-    content.addView(ClinicalUi.sectionLabel(context,
-            context.getString(R.string.settings_support_section)));
-    content.addView(ClinicalUi.card(context,displayHelp));
+    content.addView(displayHelp,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
 
     ScrollView screen=ClinicalUi.scrollScreen(context,content);
     context.addMyContentView(screen,new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
@@ -1522,7 +1533,10 @@ private static void clinicalDisplaySettings(MainActivity context,Settings settin
         });
     colors.setOnClickListener(view->{
         MainActivity.doonback();
-        settings.finish();
+        if(dismissSettingsForDestination!=null)
+            dismissSettingsForDestination.run();
+        else
+            settings.finish();
         SetColors.show(context);
         });
     theme.setOnClickListener(view->SelectTheme.show(context,screen));
@@ -1533,7 +1547,7 @@ private static void clinicalDisplaySettings(MainActivity context,Settings settin
 static private void displaysettings(MainActivity context,Settings settings) {
 
     if(useClinicalPhoneChild(isWearable)) {
-        clinicalDisplaySettings(context,settings);
+        clinicalDisplaySettings(context,settings,null);
         return;
         }
 
@@ -1607,7 +1621,7 @@ static private void displaysettings(MainActivity context,Settings settings) {
       
       var close=getbutton(context,R.string.closename);
 
-    var langspin=languagespinner(context);
+    var langspin=languageDisplay(context);
       Layout lay;
     if(isWearable)  {
       var iob=getcheckbox(context,"IOB",Natives.getIOB());
@@ -1753,7 +1767,8 @@ private static int settingsDp(float value) {
 /** Contract shared by the programmatic phone settings screens and their tests. */
 static final int PHONE_SETTINGS_MIN_TOUCH_DP=48;
 static final int PHONE_GRAPH_DISPLAY_TOGGLE_COUNT=11;
-static final int PHONE_LEGACY_ACTION_COUNT=9;
+static final int PHONE_LEGACY_ACTION_COUNT=7;
+static final int PHONE_SETTINGS_CATEGORY_COUNT=6;
 
 static boolean useClinicalPhoneChild(boolean wearable) {
     return !wearable;
@@ -1773,12 +1788,216 @@ private static Button clinicalHeaderButton(Context context,int label) {
 
 private static LinearLayout clinicalScreenContent(MainActivity context) {
     LinearLayout content=ClinicalUi.verticalContent(context);
-    content.setPaddingRelative(
-            MainActivity.systembarLeft+ClinicalUi.dp(context,20),
-            MainActivity.systembarTop+ClinicalUi.dp(context,8),
-            MainActivity.systembarRight+ClinicalUi.dp(context,20),
-            MainActivity.systembarBottom+ClinicalUi.dp(context,30));
+    applyPhoneContentPadding(context,content,0,20,true);
+    content.addOnLayoutChangeListener((view,left,top,right,bottom,
+            oldLeft,oldTop,oldRight,oldBottom)-> {
+        if(right-left!=oldRight-oldLeft)
+            applyPhoneContentPadding(context,content,right-left,20,true);
+        });
     return content;
+    }
+
+private static void applyPhoneContentPadding(MainActivity context,
+        LinearLayout content,int widthPx,int compactGutterDp,
+        boolean includeSystemBars) {
+    int available=widthPx>0
+            ?Math.max(0,widthPx-MainActivity.systembarLeft
+                    -MainActivity.systembarRight)
+            :0;
+    int horizontal=ClinicalUi.readableHorizontalGutter(context,available,
+            compactGutterDp);
+    content.setPaddingRelative(
+            (includeSystemBars?MainActivity.systembarLeft:0)+horizontal,
+            (includeSystemBars?MainActivity.systembarTop:0)
+                    +ClinicalUi.dp(context,8),
+            (includeSystemBars?MainActivity.systembarRight:0)+horizontal,
+            (includeSystemBars?MainActivity.systembarBottom:0)
+                    +ClinicalUi.dp(context,30));
+    }
+
+/**
+ * One reusable, predictable drill-down page for the phone Settings hub.  The
+ * page itself owns one Back callback while it is visible.  Closing it restores
+ * the exact hub instance and therefore also preserves the hub's scroll/state.
+ */
+private static final class PhoneSettingsPage {
+    final MainActivity context;
+    final View hub;
+    final ScrollView screen;
+    final Button back;
+    final TextView title;
+    View returnFocus;
+    boolean open;
+
+    PhoneSettingsPage(MainActivity context,View hub,int titleRes,int introRes,
+            View... blocks) {
+        this.context=context;
+        this.hub=hub;
+        back=ClinicalUi.button(context,context.getString(R.string.settings_back),
+                ClinicalUi.ButtonRole.SECONDARY);
+        back.setMinimumHeight(ClinicalUi.dp(context,PHONE_SETTINGS_MIN_TOUCH_DP));
+        LinearLayout content=clinicalScreenContent(context);
+        title=ClinicalUi.title(context,context.getString(titleRes));
+        content.addView(phoneSettingsChildHeader(context,title,back));
+        if(introRes!=0) {
+            TextView intro=ClinicalUi.body(context,context.getString(introRes));
+            intro.setPaddingRelative(ClinicalUi.dp(context,4),0,
+                    ClinicalUi.dp(context,4),ClinicalUi.dp(context,8));
+            content.addView(intro);
+            }
+        for(View block:blocks)
+            if(block!=null)
+                content.addView(block);
+        screen=ClinicalUi.scrollScreen(context,content);
+        ViewCompat.setAccessibilityPaneTitle(screen,context.getString(titleRes));
+        back.setOnClickListener(view->context.doonback());
+        }
+
+    void show(View source) {
+        if(open)
+            return;
+        open=true;
+        returnFocus=source;
+        hub.setVisibility(GONE);
+        screen.scrollTo(0,0);
+        context.addMyContentView(screen,
+                new ViewGroup.LayoutParams(MATCH_PARENT,MATCH_PARENT));
+        context.setonback(this::close);
+        context.themeLightBars();
+        animatePhoneSettingsPageIn(screen);
+        screen.post(()->screen.sendAccessibilityEvent(
+                android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED));
+        }
+
+    void close() {
+        if(!open)
+            return;
+        open=false;
+        screen.animate().cancel();
+        hub.setVisibility(VISIBLE);
+        removeContentView(screen);
+        context.themeLightBars();
+        View focus=returnFocus;
+        returnFocus=null;
+        if(focus!=null)
+            hub.post(focus::requestFocus);
+        }
+
+    /** Removes this page's callback before a native graph destination opens. */
+    void dismissForNativeDestination() {
+        if(!open)
+            return;
+        context.poponback();
+        close();
+        }
+    }
+
+private static LinearLayout phoneSettingsChildHeader(Context context,
+        TextView title,Button back) {
+    LinearLayout header=new LinearLayout(context);
+    header.setOrientation(LinearLayout.HORIZONTAL);
+    header.setGravity(Gravity.CENTER_VERTICAL);
+    header.setMinimumHeight(ClinicalUi.dp(context,72));
+    back.setCompoundDrawablesRelativeWithIntrinsicBounds(
+            R.drawable.baseline_arrow_back_20,0,0,0);
+    back.setCompoundDrawablePadding(ClinicalUi.dp(context,6));
+    back.setCompoundDrawableTintList(android.content.res.ColorStateList.valueOf(
+            ClinicalUi.accent(context)));
+    header.addView(back,new LinearLayout.LayoutParams(WRAP_CONTENT,WRAP_CONTENT));
+    LinearLayout.LayoutParams titleParams=new LinearLayout.LayoutParams(
+            0,WRAP_CONTENT,1.0f);
+    titleParams.setMarginStart(ClinicalUi.dp(context,12));
+    title.setLayoutParams(titleParams);
+    header.addView(title);
+    return header;
+    }
+
+private static void animatePhoneSettingsPageIn(View page) {
+    boolean animationsEnabled=Build.VERSION.SDK_INT<Build.VERSION_CODES.O
+            ||ValueAnimator.areAnimatorsEnabled();
+    if(!animationsEnabled) {
+        page.setAlpha(1.0f);
+        page.setTranslationX(0.0f);
+        return;
+        }
+    float direction=page.getLayoutDirection()==View.LAYOUT_DIRECTION_RTL
+            ?-1.0f:1.0f;
+    page.animate().cancel();
+    page.setAlpha(0.0f);
+    page.setTranslationX(direction*ClinicalUi.dp(page.getContext(),12));
+    page.animate()
+            .alpha(1.0f)
+            .translationX(0.0f)
+            .setDuration(200L)
+            .setInterpolator(new DecelerateInterpolator())
+            .start();
+    }
+
+private static TextView phoneSettingsIntro(Context context,int textRes) {
+    TextView intro=ClinicalUi.body(context,context.getString(textRes));
+    intro.setPaddingRelative(ClinicalUi.dp(context,4),0,
+            ClinicalUi.dp(context,4),ClinicalUi.dp(context,10));
+    return intro;
+    }
+
+private static LinearLayout phoneSettingsHubRow(MainActivity context,
+        int titleRes,int subtitleRes) {
+    LinearLayout row=ClinicalUi.actionRow(context,context.getString(titleRes),
+            context.getString(subtitleRes));
+    row.setMinimumHeight(ClinicalUi.dp(context,72));
+    row.setContentDescription(context.getString(titleRes)+", "+
+            context.getString(subtitleRes));
+    View accentRail=new View(context);
+    accentRail.setBackgroundColor(ClinicalUi.accent(context));
+    accentRail.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+    LinearLayout.LayoutParams railParams=new LinearLayout.LayoutParams(
+            ClinicalUi.dp(context,3),ClinicalUi.dp(context,32));
+    railParams.setMarginEnd(ClinicalUi.dp(context,12));
+    row.addView(accentRail,0,railParams);
+    return row;
+    }
+
+private static TextView phoneSettingsPageSection(MainActivity context,
+        int textRes) {
+    return ClinicalUi.sectionLabel(context,context.getString(textRes));
+    }
+
+/** An openable group used on dense specialist pages. */
+private static LinearLayout clinicalDisclosure(MainActivity context,
+        int titleRes,int summaryRes,View details,boolean initiallyOpen) {
+    LinearLayout block=new LinearLayout(context);
+    block.setOrientation(LinearLayout.VERTICAL);
+    LinearLayout trigger=ClinicalUi.actionRow(context,
+            context.getString(titleRes),context.getString(summaryRes));
+    trigger.setMinimumHeight(ClinicalUi.dp(context,68));
+    trigger.setContentDescription(context.getString(titleRes)+", "+
+            context.getString(summaryRes));
+    trigger.setFocusable(true);
+    View chevron=trigger.getChildAt(1);
+    LinearLayout.LayoutParams detailParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    detailParams.topMargin=ClinicalUi.dp(context,6);
+    details.setLayoutParams(detailParams);
+    boolean[] expanded={initiallyOpen};
+    Runnable sync=()-> {
+        details.setVisibility(expanded[0]?VISIBLE:GONE);
+        chevron.setRotation(expanded[0]?90.0f:0.0f);
+        if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.R)
+            trigger.setStateDescription(context.getString(expanded[0]
+                    ?R.string.settings_expanded:R.string.settings_collapsed));
+        };
+    trigger.setOnClickListener(view-> {
+        expanded[0]=!expanded[0];
+        sync.run();
+        });
+    block.addView(trigger,new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+    block.addView(details);
+    LinearLayout.LayoutParams blockParams=new LinearLayout.LayoutParams(
+            MATCH_PARENT,WRAP_CONTENT);
+    blockParams.bottomMargin=ClinicalUi.dp(context,8);
+    block.setLayoutParams(blockParams);
+    sync.run();
+    return block;
     }
 
 private static void clinicalStyleInput(EditText input) {
@@ -1793,15 +2012,15 @@ private static void clinicalStyleInput(EditText input) {
     input.setMinWidth(ClinicalUi.dp(context,76));
     input.setPaddingRelative(ClinicalUi.dp(context,12),0,
             ClinicalUi.dp(context,12),0);
-    input.setBackground(ClinicalUi.surface(context,false,true));
+    input.setBackground(ClinicalUi.controlSurface(context));
     }
 
 private static void clinicalStyleSpinner(Spinner spinner) {
     Context context=spinner.getContext();
-    spinner.setMinimumHeight(ClinicalUi.dp(context,52));
+    spinner.setMinimumHeight(ClinicalUi.dp(context,PHONE_SETTINGS_MIN_TOUCH_DP));
     spinner.setPaddingRelative(ClinicalUi.dp(context,12),0,
             ClinicalUi.dp(context,12),0);
-    spinner.setBackground(ClinicalUi.surface(context,false,true));
+    spinner.setBackground(ClinicalUi.controlSurface(context));
     }
 
 private static void clinicalStyleAction(Button button) {
@@ -1811,100 +2030,34 @@ private static void clinicalStyleAction(Button button) {
     button.setTextColor(ClinicalUi.primaryText(context));
     button.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
     button.setTextAlignment(View.TEXT_ALIGNMENT_VIEW_START);
-    button.setMinimumHeight(ClinicalUi.dp(context,58));
+    button.setMinimumHeight(ClinicalUi.dp(context,56));
     button.setPaddingRelative(ClinicalUi.dp(context,16),ClinicalUi.dp(context,8),
             ClinicalUi.dp(context,16),ClinicalUi.dp(context,8));
-    button.setBackground(ClinicalUi.surface(context,false,true));
+    button.setBackground(ClinicalUi.rowSurface(context));
     button.setStateListAnimator(null);
     }
 
 private static LinearLayout clinicalToggleRow(MainActivity context,
         CheckDirectionBox legacy,CharSequence subtitle) {
-    CharSequence title=legacy.getText();
-    LinearLayout row=new LinearLayout(context);
-    row.setOrientation(LinearLayout.HORIZONTAL);
-    row.setGravity(Gravity.CENTER_VERTICAL);
-    row.setMinimumHeight(ClinicalUi.dp(context,subtitle==null?60:72));
-    row.setPaddingRelative(ClinicalUi.dp(context,16),ClinicalUi.dp(context,8),
-            ClinicalUi.dp(context,8),ClinicalUi.dp(context,8));
-    row.setBackground(ClinicalUi.surface(context,false,true));
-
-    LinearLayout copy=new LinearLayout(context);
-    copy.setOrientation(LinearLayout.VERTICAL);
-    copy.setGravity(Gravity.CENTER_VERTICAL);
-    TextView label=new TextView(context);
-    label.setText(title);
-    label.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
-    label.setTextColor(ClinicalUi.primaryText(context));
-    copy.addView(label);
-    if(subtitle!=null&&subtitle.length()>0) {
-        TextView detail=ClinicalUi.body(context,subtitle);
-        detail.setTextSize(TypedValue.COMPLEX_UNIT_SP,13.0f);
-        detail.setPadding(0,ClinicalUi.dp(context,2),0,0);
-        copy.addView(detail);
-        }
-    row.addView(copy,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
-
-    SwitchCompat toggle=new SwitchCompat(context);
-    toggle.setShowText(false);
-    toggle.setSwitchMinWidth(ClinicalUi.dp(context,42));
-    toggle.setMinimumWidth(ClinicalUi.dp(context,56));
-    toggle.setMinimumHeight(ClinicalUi.dp(context,PHONE_SETTINGS_MIN_TOUCH_DP));
-    toggle.setPadding(ClinicalUi.dp(context,7),0,ClinicalUi.dp(context,7),0);
-    toggle.setContentDescription(title);
-    toggle.setThumbTintList(ContextCompat.getColorStateList(context,
-            R.color.modern_settings_switch_thumb));
-    toggle.setTrackTintList(ContextCompat.getColorStateList(context,
-            R.color.modern_settings_switch_track));
-    toggle.setEnabled(legacy.isEnabled());
-    toggle.setChecked(legacy.isChecked());
-    toggle.setOnCheckedChangeListener((button,isChecked)-> {
-        if(legacy.isChecked()!=isChecked)
-            legacy.setChecked(isChecked);
-        });
-    row.setEnabled(legacy.isEnabled());
-    row.setVisibility(legacy.getVisibility());
-    row.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-    row.setOnClickListener(view->toggle.toggle());
-    row.addView(toggle,new LinearLayout.LayoutParams(WRAP_CONTENT,
-            ClinicalUi.dp(context,PHONE_SETTINGS_MIN_TOUCH_DP)));
-    return row;
+    return ClinicalUi.toggleRow(context,legacy,subtitle);
     }
 
 private static CheckDirectionBox clinicalDirectToggle(MainActivity context,
         CheckDirectionBox toggle) {
-    toggle.setMinimumHeight(ClinicalUi.dp(context,64));
+    toggle.setMinimumHeight(ClinicalUi.dp(context,60));
     toggle.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
     toggle.setTextColor(ClinicalUi.primaryText(context));
     toggle.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
     toggle.setPaddingRelative(ClinicalUi.dp(context,16),ClinicalUi.dp(context,7),
             ClinicalUi.dp(context,12),ClinicalUi.dp(context,7));
-    toggle.setBackground(ClinicalUi.surface(context,false,true));
+    toggle.setBackground(ClinicalUi.rowSurface(context));
     if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.LOLLIPOP)
-        toggle.setButtonTintList(ContextCompat.getColorStateList(context,
-                R.color.modern_settings_choice_control));
+        toggle.setButtonTintList(ClinicalUi.selectionTint(context));
     return toggle;
     }
 
 private static LinearLayout clinicalExpandableCard(Context context,View... rows) {
-    LinearLayout card=new LinearLayout(context);
-    card.setOrientation(LinearLayout.VERTICAL);
-    card.setBackground(ClinicalUi.surface(context,false,false));
-    card.setPadding(ClinicalUi.dp(context,6),ClinicalUi.dp(context,6),
-            ClinicalUi.dp(context,6),ClinicalUi.dp(context,6));
-    boolean first=true;
-    for(View row:rows) {
-        if(row==null)
-            continue;
-        if(!first)
-            card.addView(ClinicalUi.divider(context));
-        ViewGroup.LayoutParams current=row.getLayoutParams();
-        row.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT,
-                current==null?WRAP_CONTENT:current.height));
-        card.addView(row);
-        first=false;
-        }
-    return card;
+    return ClinicalUi.card(context,rows);
     }
 
 private static TextView clinicalUnitLabel(Context context) {
@@ -1932,27 +2085,11 @@ private static LinearLayout clinicalLabeledSpinner(MainActivity context,int labe
     }
 
 private static TextView phoneSettingsTitle(Context context) {
-    TextView title=new TextView(context);
-    title.setText(R.string.settings);
-    title.setTextColor(Color.rgb(242,244,243));
-    title.setTextSize(TypedValue.COMPLEX_UNIT_SP,30.0f);
-    title.setTypeface(title.getTypeface(),android.graphics.Typeface.BOLD);
-    title.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
-    title.setMinHeight(settingsDp(64.0f));
-    title.setIncludeFontPadding(false);
-    title.setLayoutParams(new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
-    return title;
+    return ClinicalUi.title(context,context.getString(R.string.settings));
     }
 
 private static TextView phoneSettingsSection(Context context,int text) {
-    TextView section=new TextView(context);
-    section.setText(text);
-    section.setAllCaps(false);
-    section.setTextColor(Color.rgb(137,146,149));
-    section.setTextSize(TypedValue.COMPLEX_UNIT_SP,13.0f);
-    section.setTypeface(section.getTypeface(),android.graphics.Typeface.BOLD);
-    section.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
-    section.setPaddingRelative(settingsDp(4.0f),settingsDp(20.0f),settingsDp(4.0f),settingsDp(8.0f));
+    TextView section=ClinicalUi.sectionLabel(context,context.getString(text));
     section.setLayoutParams(new ViewGroup.MarginLayoutParams(MATCH_PARENT,WRAP_CONTENT));
     return section;
     }
@@ -1967,8 +2104,9 @@ private static void stylePhoneSettingsAction(View view,boolean fullWidth) {
         }
     view.setLayoutParams(params);
     view.setMinimumHeight(settingsDp(fullWidth?56.0f:48.0f));
-    view.setBackgroundResource(fullWidth
-            ?R.drawable.modern_settings_item:R.drawable.modern_settings_close);
+    view.setBackground(fullWidth
+            ?ClinicalUi.rowSurface(view.getContext())
+            :ClinicalUi.controlSurface(view.getContext()));
     view.setPaddingRelative(settingsDp(fullWidth?16.0f:14.0f),settingsDp(6.0f),settingsDp(fullWidth?14.0f:14.0f),settingsDp(6.0f));
     if(view instanceof TextView text) {
         text.setTextSize(TypedValue.COMPLEX_UNIT_SP,fullWidth?16.0f:14.0f);
@@ -1976,8 +2114,12 @@ private static void stylePhoneSettingsAction(View view,boolean fullWidth) {
         text.setTextAlignment(fullWidth
                 ?View.TEXT_ALIGNMENT_VIEW_START:View.TEXT_ALIGNMENT_CENTER);
         text.setAllCaps(false);
-        text.setSingleLine(true);
-        text.setTextColor(Color.rgb(236,239,238));
+        text.setSingleLine(!fullWidth);
+        text.setMaxLines(fullWidth?2:1);
+        text.setTextColor(fullWidth?ClinicalUi.primaryText(view.getContext())
+                :ClinicalUi.accent(view.getContext()));
+        text.setTypeface(android.graphics.Typeface.create("monospace",
+                android.graphics.Typeface.NORMAL));
         if(fullWidth)
             text.setCompoundDrawablesRelativeWithIntrinsicBounds(
                     0,0,R.drawable.modern_settings_chevron,0);
@@ -1989,8 +2131,8 @@ private static void stylePhoneSettingsAction(View view,boolean fullWidth) {
 private static void stylePhoneSettingsUnit(View view) {
     if(view==null)
         return;
-    view.setMinimumHeight(settingsDp(44.0f));
-    view.setBackgroundResource(R.drawable.modern_settings_choice);
+    view.setMinimumHeight(settingsDp(48.0f));
+    view.setBackground(ClinicalUi.controlSurface(view.getContext()));
     view.setPaddingRelative(settingsDp(12.0f),settingsDp(4.0f),settingsDp(12.0f),settingsDp(4.0f));
     ViewGroup.MarginLayoutParams params=new ViewGroup.MarginLayoutParams(WRAP_CONTENT,WRAP_CONTENT);
     params.setMarginStart(settingsDp(2.0f));
@@ -1999,12 +2141,10 @@ private static void stylePhoneSettingsUnit(View view) {
     if(view instanceof TextView text) {
         text.setTextSize(TypedValue.COMPLEX_UNIT_SP,14.0f);
         text.setGravity(Gravity.CENTER_VERTICAL);
-        text.setTextColor(ContextCompat.getColorStateList(view.getContext(),
-                R.color.modern_settings_choice_text));
+        text.setTextColor(ClinicalUi.primaryText(view.getContext()));
         }
     if(view instanceof androidx.appcompat.widget.AppCompatRadioButton choice)
-        choice.setSupportButtonTintList(ContextCompat.getColorStateList(view.getContext(),
-                R.color.modern_settings_choice_control));
+        choice.setSupportButtonTintList(ClinicalUi.selectionTint(view.getContext()));
     }
 
 private static LinearLayout phoneSettingsHeader(Context context,TextView title,
@@ -2012,10 +2152,10 @@ private static LinearLayout phoneSettingsHeader(Context context,TextView title,
     LinearLayout header=new LinearLayout(context);
     header.setOrientation(LinearLayout.HORIZONTAL);
     header.setGravity(Gravity.CENTER_VERTICAL);
-    header.setMinimumHeight(settingsDp(68.0f));
+    header.setMinimumHeight(settingsDp(64.0f));
     header.addView(title);
     stylePhoneSettingsAction(close,false);
-    close.setTextColor(Color.rgb(199,205,203));
+    close.setTextColor(ClinicalUi.accent(context));
     close.setMinWidth(settingsDp(64.0f));
     header.addView(close);
     return header;
@@ -2028,7 +2168,7 @@ private static LinearLayout phoneSettingsUnitRow(Context context,TextView label,
     row.setGravity(Gravity.CENTER_VERTICAL);
     row.setMinimumHeight(settingsDp(60.0f));
     row.setPaddingRelative(settingsDp(16.0f),settingsDp(6.0f),settingsDp(6.0f),settingsDp(6.0f));
-    row.setBackgroundResource(R.drawable.modern_settings_item);
+    row.setBackground(ClinicalUi.rowSurface(context));
     label.setPadding(0,0,settingsDp(8.0f),0);
     label.setLayoutParams(new LinearLayout.LayoutParams(0,WRAP_CONTENT,1.0f));
     row.addView(label);
@@ -2041,80 +2181,15 @@ private static LinearLayout phoneSettingsUnitRow(Context context,TextView label,
 
 private static LinearLayout phoneSettingsToggleRow(Context context,
         CheckDirectionBox control) {
-    CharSequence labelText=control.getText();
-    TextView label=new TextView(context);
-    label.setText(labelText);
-    label.setTextColor(Color.rgb(236,239,238));
-    label.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
-    label.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
-    label.setSingleLine(false);
-    label.setLayoutParams(new LinearLayout.LayoutParams(0,MATCH_PARENT,1.0f));
-
-    SwitchCompat toggle=new SwitchCompat(context);
-    toggle.setShowText(false);
-    toggle.setSwitchMinWidth(settingsDp(42.0f));
-    toggle.setMinimumWidth(settingsDp(52.0f));
-    toggle.setMinimumHeight(settingsDp(48.0f));
-    toggle.setPadding(settingsDp(6.0f),0,settingsDp(6.0f),0);
-    toggle.setContentDescription(labelText);
-    toggle.setThumbTintList(ContextCompat.getColorStateList(context,
-            R.color.modern_settings_switch_thumb));
-    toggle.setTrackTintList(ContextCompat.getColorStateList(context,
-            R.color.modern_settings_switch_track));
-    toggle.setEnabled(control.isEnabled());
-    toggle.setChecked(control.isChecked());
-    toggle.setOnCheckedChangeListener((button,isChecked)-> {
-        if(control.isChecked()!=isChecked)
-            control.setChecked(isChecked);
-        });
-    toggle.setLayoutParams(new LinearLayout.LayoutParams(
-            WRAP_CONTENT,settingsDp(48.0f)));
-
-    LinearLayout row=new LinearLayout(context);
-    row.setOrientation(LinearLayout.HORIZONTAL);
-    row.setGravity(Gravity.CENTER_VERTICAL);
-    row.setMinimumHeight(settingsDp(56.0f));
-    row.setPaddingRelative(settingsDp(16.0f),0,settingsDp(6.0f),0);
-    row.setBackgroundResource(R.drawable.modern_settings_item);
-    row.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-    row.setVisibility(control.getVisibility());
-    row.setOnClickListener(view->toggle.toggle());
-    row.addView(label);
-    row.addView(toggle);
-    return row;
+    return ClinicalUi.toggleRow(context,control,null);
     }
 
 private static View phoneSettingsDivider(Context context) {
-    View divider=new View(context);
-    divider.setBackgroundColor(Color.rgb(41,47,49));
-    LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(
-            MATCH_PARENT,settingsDp(1.0f));
-    params.setMarginStart(settingsDp(16.0f));
-    params.setMarginEnd(settingsDp(16.0f));
-    divider.setLayoutParams(params);
-    divider.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-    return divider;
+    return ClinicalUi.divider(context);
     }
 
 private static LinearLayout phoneSettingsGroup(Context context,View... rows) {
-    LinearLayout group=new LinearLayout(context);
-    group.setOrientation(LinearLayout.VERTICAL);
-    group.setBackgroundResource(R.drawable.modern_settings_group);
-    group.setPadding(settingsDp(4.0f),settingsDp(4.0f),settingsDp(4.0f),settingsDp(4.0f));
-    group.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
-    boolean first=true;
-    for(View row:rows) {
-        if(row==null||row.getVisibility()==GONE)
-            continue;
-        if(!first)
-            group.addView(phoneSettingsDivider(context));
-        ViewGroup.LayoutParams params=row.getLayoutParams();
-        row.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT,
-                params==null?WRAP_CONTENT:params.height));
-        group.addView(row);
-        first=false;
-        }
-    return group;
+    return ClinicalUi.card(context,rows);
     }
 
 private static void restorePhoneSettingsButtons(ViewGroup group) {
@@ -2133,11 +2208,6 @@ private static void clinicalLegacySettings(MainActivity context,Settings setting
         View parent) {
     parent.setVisibility(GONE);
     Button close=clinicalHeaderButton(context,R.string.closename);
-    LinearLayout list=ClinicalUi.actionRow(context,context.getString(R.string.list),
-            context.getString(R.string.settings_legacy_list_hint));
-    LinearLayout statistics=ClinicalUi.actionRow(context,
-            context.getString(R.string.statistics),
-            context.getString(R.string.settings_legacy_statistics_hint));
     LinearLayout lastScan=ClinicalUi.actionRow(context,
             context.getString(R.string.last_scan),
             context.getString(R.string.settings_legacy_last_scan_hint));
@@ -2167,7 +2237,7 @@ private static void clinicalLegacySettings(MainActivity context,Settings setting
     content.addView(intro);
     content.addView(ClinicalUi.sectionLabel(context,
             context.getString(R.string.settings_legacy_records_section)));
-    content.addView(ClinicalUi.card(context,list,statistics,lastScan,export));
+    content.addView(ClinicalUi.card(context,lastScan,export));
     content.addView(ClinicalUi.sectionLabel(context,
             context.getString(R.string.settings_legacy_utilities_section)));
     content.addView(ClinicalUi.card(context,watch,talk,floating,reminders,labels));
@@ -2191,10 +2261,6 @@ private static void clinicalLegacySettings(MainActivity context,Settings setting
         settings.hidekeyboard();
         settings.finish();
         };
-    list.setOnClickListener(view->
-            LegacySettingsRoutes.showList(context,dismissSettings));
-    statistics.setOnClickListener(view->
-            LegacySettingsRoutes.showStatistics(context,dismissSettings));
     lastScan.setOnClickListener(view->
             LegacySettingsRoutes.showLastScan(context,dismissSettings));
     watch.setOnClickListener(view->LegacySettingsRoutes.showWatch(context));
@@ -2220,7 +2286,12 @@ private    void mksettings(MainActivity context) {
         mmolL.setOnClickListener(v-> {
          ((Applic) context.getApplication()).setunit(1);
                   mgdl.setChecked(false);
-                 recreate();
+                 if(isWearable)
+                     recreate();
+                 else {
+                     setvalues();
+                     context.requestRender();
+                     }
                 });
 
             mmolL.setText(R.string.mmolL);
@@ -2228,7 +2299,12 @@ private    void mksettings(MainActivity context) {
         mgdl.setOnClickListener(v-> {
             ((Applic) context.getApplication()).setunit(2);
             mmolL.setChecked(false);
-              recreate();
+            if(isWearable)
+                recreate();
+            else {
+                setvalues();
+                context.requestRender();
+                }
            });
 
         mgdl.setText(R.string.mgdL);
@@ -2323,7 +2399,7 @@ private    void mksettings(MainActivity context) {
            context.poponback();
             hidekeyboard();
             finish();
-     context.lightBars(!getInvertColors( ));
+     context.themeLightBars();
          if(tk.glucodata.Menus.on) tk.glucodata.Menus.show(context);
 
             });
@@ -2340,7 +2416,6 @@ private    void mksettings(MainActivity context) {
 
 
     View[][] views;
-    LinearLayout phoneSettingsLayout=null;
     final String advhelp=isWearable?null:Natives.advanced();
 
         var calibration=  getbutton(context,R.string.calibration);
@@ -2403,7 +2478,7 @@ private    void mksettings(MainActivity context) {
     else {
         var about=getbutton(context,R.string.aboutname);
         about.setOnClickListener(v-> tk.glucodata.GlucoseCurve.doabout(context));
-        var intro=getbutton(context,"Intro");
+        var intro=getbutton(context,R.string.settings_guide);
         intro.setOnClickListener(v-> help(R.string.introhelp,context));
         if(advhelp!=null) {
             advanced=new Button(context);
@@ -2421,47 +2496,116 @@ private    void mksettings(MainActivity context) {
         mirror.setOnClickListener(view->new Backup().realmkbackupview(context,false));
         Button intakeBackend=getbutton(context,R.string.intake_backend_settings_title);
         intakeBackend.setOnClickListener(view->IntakeBackendSettings.show(context));
-        Button legacy=getbutton(context,R.string.settings_legacy_title);
-        legacy.setOnClickListener(view->
-                clinicalLegacySettings(context,this,thelayout[0]));
 
         Button logview=null;
-        if(doLog) {
+        if(doLog)
             logview=getbutton(context,R.string.logging);
-            logview.setOnClickListener(v->LogConfig.make(context,thelayout[0]));
-                }
 
         TextView title=phoneSettingsTitle(context);
         displayview.setText(R.string.settings_display_title);
-        TextView glucoseSection=phoneSettingsSection(context,R.string.settings_section_glucose);
-        TextView alertsSection=phoneSettingsSection(context,R.string.settings_section_alerts);
-        TextView connectionsSection=phoneSettingsSection(context,
-                R.string.settings_section_connections);
-        TextView preferencesSection=phoneSettingsSection(context,R.string.settings_section_preferences);
-        TextView technicalSection=phoneSettingsSection(context,
-                R.string.settings_section_technical);
-        TextView legacySection=phoneSettingsSection(context,R.string.settings_legacy_title);
 
         TextView unitLabel=(TextView)row0[0];
-        unitLabel.setTextColor(Color.rgb(170,177,179));
+        unitLabel.setTextColor(ClinicalUi.secondaryText(context));
         unitLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP,14.0f);
         unitLabel.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
 
-        for(View action:new View[]{calibration,displayview,alarmbut,exchanges,
-                intakeBackend,mirror,legacy})
+        for(View action:new View[]{calibration,displayview,alarmbut,numalarm,
+                exchanges,intakeBackend,mirror,about,intro,changelabels})
             stylePhoneSettingsAction(action,true);
         if(logview!=null)
             stylePhoneSettingsAction(logview,true);
 
+        // Root = a short task map.  Controls live one level deeper so opening
+        // Settings no longer means scanning every switch in the application.
+        phoneSettingsLayout=new LinearLayout(context);
+        phoneSettingsLayout.setOrientation(LinearLayout.VERTICAL);
+        phoneSettingsLayout.setBackgroundColor(ClinicalUi.window(context));
+        ViewCompat.setAccessibilityPaneTitle(phoneSettingsLayout,
+                context.getString(R.string.settings));
+        phoneSettingsLayout.addView(phoneSettingsHeader(context,title,close),
+                new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
+        phoneSettingsLayout.addView(phoneSettingsIntro(context,
+                R.string.settings_hub_intro));
+
+        LinearLayout glucoseEntry=phoneSettingsHubRow(context,
+                R.string.settings_category_glucose,
+                R.string.settings_category_glucose_summary);
+        LinearLayout alertsEntry=phoneSettingsHubRow(context,
+                R.string.settings_category_alerts,
+                R.string.settings_category_alerts_summary);
+        LinearLayout connectionsEntry=phoneSettingsHubRow(context,
+                R.string.settings_category_connections,
+                R.string.settings_category_connections_summary);
+        LinearLayout dataEntry=phoneSettingsHubRow(context,
+                R.string.settings_category_data,
+                R.string.settings_category_data_summary);
+        LinearLayout behaviorEntry=phoneSettingsHubRow(context,
+                R.string.settings_category_behavior,
+                R.string.settings_category_behavior_summary);
+        LinearLayout advancedEntry=phoneSettingsHubRow(context,
+                R.string.settings_category_advanced,
+                R.string.settings_category_advanced_summary);
+        phoneSettingsLayout.addView(ClinicalUi.card(context,glucoseEntry,
+                alertsEntry,connectionsEntry,dataEntry,behaviorEntry,
+                advancedEntry));
+
+        final LinearLayout settingsHub=phoneSettingsLayout;
         LinearLayout unitRow=phoneSettingsUnitRow(context,unitLabel,mmolL,mgdl);
-        LinearLayout glucoseGroup=phoneSettingsGroup(context,
+        LinearLayout forecastAction=ClinicalUi.actionRow(context,
+                context.getString(R.string.settings_forecast_title),
+                context.getString(R.string.settings_forecast_summary));
+        PhoneSettingsPage glucosePage=new PhoneSettingsPage(context,settingsHub,
+                R.string.settings_category_glucose,
+                R.string.settings_category_glucose_intro,
+                phoneSettingsPageSection(context,R.string.settings_category_basics),
+                phoneSettingsGroup(context,
                 unitRow,
                 calibration,
                 phoneSettingsToggleRow(context,glucosenotify),
-                displayview);
-        LinearLayout alertsGroup=phoneSettingsGroup(context,alarmbut);
-        LinearLayout connectionsGroup=phoneSettingsGroup(context,
-                intakeBackend,exchanges,mirror);
+                displayview),
+                phoneSettingsPageSection(context,R.string.settings_forecast_section),
+                phoneSettingsGroup(context,forecastAction));
+        displayview.setOnClickListener(view-> {
+            int unit=mmolL.isChecked()?1:(mgdl.isChecked()?2:0);
+            if(unit==0) {
+                Applic.argToaster(context,R.string.setunitfirst,Toast.LENGTH_SHORT);
+                return;
+                }
+            clinicalDisplaySettings(context,this,()-> {
+                glucosePage.dismissForNativeDestination();
+                context.poponback();
+                hidekeyboard();
+                finish();
+                });
+            });
+        forecastAction.setOnClickListener(view->context.showForecastDetails());
+
+        PhoneSettingsPage alertsPage=new PhoneSettingsPage(context,settingsHub,
+                R.string.settings_category_alerts,
+                R.string.settings_category_alerts_intro,
+                phoneSettingsPageSection(context,R.string.settings_category_alert_rules),
+                phoneSettingsGroup(context,alarmbut,numalarm));
+
+        PhoneSettingsPage connectionsPage=new PhoneSettingsPage(context,settingsHub,
+                R.string.settings_category_connections,
+                R.string.settings_category_connections_intro,
+                phoneSettingsPageSection(context,R.string.settings_category_services),
+                phoneSettingsGroup(context,intakeBackend,exchanges,mirror));
+
+        LinearLayout lastScanAction=ClinicalUi.actionRow(context,
+                context.getString(R.string.last_scan),
+                context.getString(R.string.settings_legacy_last_scan_hint));
+        LinearLayout exportAction=ClinicalUi.actionRow(context,
+                context.getString(R.string.export),
+                context.getString(R.string.settings_legacy_export_hint));
+        LinearLayout labelsAction=ClinicalUi.actionRow(context,
+                context.getString(R.string.numberlabels),
+                context.getString(R.string.settings_legacy_labels_hint));
+        PhoneSettingsPage dataPage=new PhoneSettingsPage(context,settingsHub,
+                R.string.settings_category_data,
+                R.string.settings_category_data_intro,
+                phoneSettingsPageSection(context,R.string.settings_category_history),
+                phoneSettingsGroup(context,lastScanAction,exportAction,labelsAction));
 
         java.util.ArrayList<View> preferenceRows=new java.util.ArrayList<>();
         preferenceRows.add(phoneSettingsToggleRow(context,googlescan));
@@ -2470,31 +2614,100 @@ private    void mksettings(MainActivity context) {
             preferenceRows.add(phoneSettingsToggleRow(context,globalscan));
             preferenceRows.add(phoneSettingsToggleRow(context,camera));
             }
-        LinearLayout preferencesGroup=phoneSettingsGroup(context,
-                preferenceRows.toArray(new View[0]));
-        LinearLayout technicalGroup=logview==null?null:
-                phoneSettingsGroup(context,logview);
-        LinearLayout legacyGroup=phoneSettingsGroup(context,legacy);
+        LinearLayout watchAction=ClinicalUi.actionRow(context,
+                context.getString(R.string.watches),
+                context.getString(R.string.settings_legacy_watch_hint));
+        LinearLayout talkAction=ClinicalUi.actionRow(context,
+                context.getString(R.string.talk),
+                context.getString(R.string.settings_legacy_talk_hint));
+        LinearLayout floatingAction=ClinicalUi.actionRow(context,
+                context.getString(R.string.floatglucose),
+                context.getString(R.string.settings_legacy_floating_hint));
+        PhoneSettingsPage behaviorPage=new PhoneSettingsPage(context,settingsHub,
+                R.string.settings_category_behavior,
+                R.string.settings_category_behavior_intro,
+                phoneSettingsPageSection(context,R.string.settings_category_input),
+                phoneSettingsGroup(context,preferenceRows.toArray(new View[0])),
+                phoneSettingsPageSection(context,R.string.settings_category_devices),
+                phoneSettingsGroup(context,watchAction,talkAction,floatingAction));
 
-        phoneSettingsLayout=new LinearLayout(context);
-        phoneSettingsLayout.setOrientation(LinearLayout.VERTICAL);
-        phoneSettingsLayout.setBackgroundColor(Color.rgb(11,13,14));
-        phoneSettingsLayout.addView(phoneSettingsHeader(context,title,close),
-                new LinearLayout.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
-        phoneSettingsLayout.addView(glucoseSection);
-        phoneSettingsLayout.addView(glucoseGroup);
-        phoneSettingsLayout.addView(alertsSection);
-        phoneSettingsLayout.addView(alertsGroup);
-        phoneSettingsLayout.addView(connectionsSection);
-        phoneSettingsLayout.addView(connectionsGroup);
-        phoneSettingsLayout.addView(preferencesSection);
-        phoneSettingsLayout.addView(preferencesGroup);
-        if(technicalGroup!=null) {
-            phoneSettingsLayout.addView(technicalSection);
-            phoneSettingsLayout.addView(technicalGroup);
+        java.util.ArrayList<View> advancedRows=new java.util.ArrayList<>();
+        if(logview!=null)
+            advancedRows.add(logview);
+        if(advanced!=null) {
+            stylePhoneSettingsAction(advanced,true);
+            advancedRows.add(advanced);
             }
-        phoneSettingsLayout.addView(legacySection);
-        phoneSettingsLayout.addView(legacyGroup);
+        advancedRows.add(help);
+        advancedRows.add(intro);
+        advancedRows.add(about);
+        for(View row:advancedRows)
+            stylePhoneSettingsAction(row,true);
+        PhoneSettingsPage advancedPage=new PhoneSettingsPage(context,settingsHub,
+                R.string.settings_category_advanced,
+                R.string.settings_category_advanced_intro,
+                phoneSettingsPageSection(context,R.string.settings_category_support),
+                phoneSettingsGroup(context,advancedRows.toArray(new View[0])));
+
+        glucoseEntry.setOnClickListener(view->glucosePage.show(glucoseEntry));
+        alertsEntry.setOnClickListener(view->alertsPage.show(alertsEntry));
+        connectionsEntry.setOnClickListener(view->connectionsPage.show(connectionsEntry));
+        dataEntry.setOnClickListener(view->dataPage.show(dataEntry));
+        behaviorEntry.setOnClickListener(view->behaviorPage.show(behaviorEntry));
+        advancedEntry.setOnClickListener(view->advancedPage.show(advancedEntry));
+
+        calibration.setOnClickListener(view->Calibration.show(context,
+                glucosePage.screen));
+        alarmbut.setOnClickListener(view-> {
+            int unit=mmolL.isChecked()?1:(mgdl.isChecked()?2:0);
+            if(unit==0) {
+                Applic.argToaster(context,R.string.setunitfirst,Toast.LENGTH_SHORT);
+                return;
+                }
+            alarmsettings(context,alertsPage.screen);
+            });
+        numalarm.setOnClickListener(view->
+                new tk.glucodata.setNumAlarm().mkviews(context,alertsPage.screen));
+        exchanges.setOnClickListener(view->exchanges(context,
+                connectionsPage.screen));
+
+        Runnable dismissSettingsForNative=()-> {
+            dataPage.dismissForNativeDestination();
+            context.poponback();
+            hidekeyboard();
+            finish();
+            };
+        lastScanAction.setOnClickListener(view-> {
+            if(!LegacySettingsRoutes.showLastScan(context,dismissSettingsForNative))
+                Applic.argToaster(context,R.string.settings_last_scan_unavailable,
+                        Toast.LENGTH_SHORT);
+            });
+        exportAction.setOnClickListener(view-> {
+            GlucoseCurve curve=Applic.app.curve;
+            if(curve!=null)
+                curve.dialogs.showexport(context,curve.getWidth(),curve.getHeight(),
+                        dataPage.screen);
+            });
+        labelsAction.setOnClickListener(view->
+                new LabelsClass(context).mklabellayout(dataPage.screen));
+
+        watchAction.setOnClickListener(view->LegacySettingsRoutes.showWatch(context));
+        talkAction.setOnClickListener(view->tk.glucodata.Talker.config(context,false));
+        floatingAction.setOnClickListener(view->
+                tk.glucodata.FloatingConfig.show(context,behaviorPage.screen));
+        if(logview!=null) {
+            Button finalLogview=logview;
+            finalLogview.setOnClickListener(view->LogConfig.make(context,
+                    advancedPage.screen));
+            }
+        if(advanced!=null) {
+            Button finalAdvanced=advanced;
+            finalAdvanced.setOnClickListener(view-> {
+                EnableControls(advancedPage.screen,false);
+                help(advhelp,context,unused->
+                        EnableControls(advancedPage.screen,true));
+                });
+            }
         views=null;
         }
 
@@ -2515,11 +2728,10 @@ private    void mksettings(MainActivity context) {
             lay=phoneSettingsLayout;
             }
 
-     exchanges.setOnClickListener(v->{
-        exchanges(context,lay);
-        });
+     if(isWearable)
+         exchanges.setOnClickListener(v->exchanges(context,lay));
     thelayout[0]=lay;
-        if(advhelp!=null) {
+        if(isWearable&&advhelp!=null) {
             advanced.setOnClickListener(v -> {
                 EnableControls(thelayout[0],false);
                 help(advhelp, (MainActivity) (v.getContext()),l->
@@ -2531,7 +2743,7 @@ private    void mksettings(MainActivity context) {
 
 
         lay.setBackgroundColor(isWearable
-                ?colorwindowbackground:Color.rgb(11,13,14));
+                ?colorwindowbackground:ClinicalUi.window(context));
 /*var    horlayout= new HorizontalScrollView(context);
     horlayout.addView(lay);
     horlayout.setHorizontalScrollBarEnabled(false);
@@ -2552,7 +2764,7 @@ private    void mksettings(MainActivity context) {
         // Keep every scrolled row inside the safe content area. Insets on the
         // child itself scroll away and let controls collide with the status or
         // navigation bars at the ends of the list.
-        scroller.setBackgroundColor(Color.rgb(11,13,14));
+        scroller.setBackgroundColor(ClinicalUi.window(context));
         scroller.setPadding(MainActivity.systembarLeft,MainActivity.systembarTop,
                 MainActivity.systembarRight,MainActivity.systembarBottom);
         }
@@ -2564,26 +2776,32 @@ private    void mksettings(MainActivity context) {
     if(isWearable) {
    //   lay.setPadding((int)(tk.glucodata.GlucoseCurve.metrics.density*14.0),(int)(tk.glucodata.GlucoseCurve.metrics.density*11.0),(int)(tk.glucodata.GlucoseCurve.metrics.density*14.0),pad);
       lay.setPaddingRelative((int)(tk.glucodata.GlucoseCurve.metrics.density*5.5),(int)(tk.glucodata.GlucoseCurve.metrics.density*11.0),(int)(tk.glucodata.GlucoseCurve.metrics.density*14.0),pad);
-        }
+     }
      else {
-       final int phoneHorizontal=settingsDp(18.0f);
-       final int phoneVertical=settingsDp(12.0f);
-       lay.setPadding(phoneHorizontal,phoneVertical,phoneHorizontal,phoneVertical);
+       applyPhoneContentPadding(context,(LinearLayout)lay,
+               context.getResources().getDisplayMetrics().widthPixels,16,false);
+       lay.addOnLayoutChangeListener((view,left,top,right,bottom,
+               oldLeft,oldTop,oldRight,oldBottom)-> {
+           if(right-left!=oldRight-oldLeft)
+               applyPhoneContentPadding(context,(LinearLayout)lay,
+                       right-left,16,false);
+           });
       }
 
     final    int laywidth=MATCH_PARENT;
      context.addMyContentView(settinglayout, new ViewGroup.LayoutParams( laywidth ,MATCH_PARENT));
-    numalarm.setOnClickListener(v-> {
-        new tk.glucodata.setNumAlarm().mkviews(context,settinglayout);
-        });
-    displayview.setOnClickListener(v-> {
-        int unit=mmolL.isChecked()?1:(mgdl.isChecked()?2:0);
-        if(unit==0) {
-            Applic.argToaster(context, R.string.setunitfirst,Toast.LENGTH_SHORT);
-           return;
-           }
-         displaysettings(context,this);
-         });
+    if(isWearable)
+        numalarm.setOnClickListener(v->
+                new tk.glucodata.setNumAlarm().mkviews(context,settinglayout));
+    if(isWearable)
+        displayview.setOnClickListener(v-> {
+            int unit=mmolL.isChecked()?1:(mgdl.isChecked()?2:0);
+            if(unit==0) {
+                Applic.argToaster(context,R.string.setunitfirst,Toast.LENGTH_SHORT);
+                return;
+                }
+            displaysettings(context,this);
+            });
         }
     else {
         settinglayout.setVisibility(VISIBLE);

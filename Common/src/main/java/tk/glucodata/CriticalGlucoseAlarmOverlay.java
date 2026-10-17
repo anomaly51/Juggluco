@@ -197,8 +197,8 @@ final class CriticalGlucoseAlarmOverlay {
         if (surface == null) {
             surface = new CriticalAlarmSurface(app);
             surface.setFocusableInTouchMode(true);
-            surface.setOnKeyListener((view, keyCode, event) ->
-                    keyCode == KeyEvent.KEYCODE_BACK);
+            surface.setHardwareKeyHandler(event ->
+                    dispatchHardwareKey(app, event));
         }
         String token = session.token;
         surface.bind(session, false, chartData,
@@ -210,6 +210,8 @@ final class CriticalGlucoseAlarmOverlay {
                         }
                     }
                 });
+        surface.setVolumeDownProgress(token,
+                CriticalAlarmVolumeKeyController.progress(app, token));
         if (surface.getParent() == null) {
             WindowManager manager = (WindowManager)
                     app.getSystemService(Context.WINDOW_SERVICE);
@@ -232,6 +234,22 @@ final class CriticalGlucoseAlarmOverlay {
         }
         visibleToken = token;
         surface.requestFocus();
+    }
+
+    private static boolean dispatchHardwareKey(Context app, KeyEvent event) {
+        if (event == null) return false;
+        // Back never dismisses or acknowledges this forced alarm surface.
+        if (event.getKeyCode() == KeyEvent.KEYCODE_BACK) return true;
+        String token = visibleToken;
+        CriticalAlarmVolumeKeyController.Result result =
+                CriticalAlarmVolumeKeyController.dispatch(app, token, event);
+        if (!result.consumed) return false;
+        CriticalAlarmSurface current = surface;
+        if (result.advanced && current != null) {
+            current.setVolumeDownProgress(token, result.progress);
+        }
+        if (result.acknowledged) removeWindow();
+        return true;
     }
 
     private static WindowManager.LayoutParams layoutParams() {

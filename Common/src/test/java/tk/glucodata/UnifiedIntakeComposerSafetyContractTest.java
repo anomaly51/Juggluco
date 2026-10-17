@@ -94,9 +94,11 @@ public class UnifiedIntakeComposerSafetyContractTest {
                 "private void retryPendingIntakeTurn()");
 
         assertTrue(send.contains(
-                "if (!controlTurn && !mealTimeExplicitForNextTurn)"));
+                "if (!controlTurn && !structuredTurn"));
+        assertTrue(send.contains("&& !mealTimeExplicitForNextTurn)"));
         assertTrue(send.contains("mealOccurredAtMs = System.currentTimeMillis()"));
-        assertTrue(send.contains("? System.currentTimeMillis() : mealOccurredAtMs"));
+        assertTrue(send.contains(
+                ": controlTurn ? System.currentTimeMillis() : mealOccurredAtMs"));
         assertTrue(send.contains("rememberPendingTurn(clientTurnId, occurredAtMs"));
     }
 
@@ -170,10 +172,10 @@ public class UnifiedIntakeComposerSafetyContractTest {
         assertTrue(source.contains(
                 "boolean enabled = !busy && retryClientTurnId.isEmpty()"));
         assertTrue(repository.contains("IntakeChatStateStore.hasPendingTurn"));
-        assertTrue(repository.contains("public boolean configure"));
+        assertTrue(repository.contains("public synchronized boolean configure"));
         assertTrue(settings.contains("if(!repository.configure"));
-        assertTrue(store.contains("ageMs < 0L"
-                + " || ageMs > PENDING_MEDIA_TTL_MS"));
+        assertTrue(store.contains(
+                "hasPersistedMedia && ageMs > PENDING_MEDIA_TTL_MS"));
     }
 
     @Test
@@ -303,7 +305,7 @@ public class UnifiedIntakeComposerSafetyContractTest {
         assertTrue(restore.contains(
                 "if (pending.controlKind != CONTROL_NONE)"));
         assertTrue(persist.contains("if (retryClientTurnId.isEmpty())"));
-        assertTrue(persist.contains("IntakeChatStateStore.clear(activity)"));
+        assertTrue(persist.contains("IntakeChatStateStore.clearIfOwned(activity"));
         assertTrue(persist.contains("Collections.emptyList()"));
         assertFalse(persist.contains("chatLines"));
         assertTrue(store.contains("STATE_SCHEMA_VERSION = 3"));
@@ -375,8 +377,8 @@ public class UnifiedIntakeComposerSafetyContractTest {
         assertTrue(russian.contains("intake_chat_unavailable_hint"));
         assertFalse(english.contains("name=\"intake_chat_action_edit"));
         assertFalse(russian.contains("name=\"intake_chat_action_edit"));
-        assertTrue(english.contains("Say or type what should change"));
-        assertTrue(russian.contains("Скажите или напишите, что исправить"));
+        assertTrue(english.contains("Tap this card to adjust"));
+        assertTrue(russian.contains("Нажмите на карточку, чтобы изменить"));
         assertTrue(layout.contains("android:textSize=\"13sp\""));
     }
 

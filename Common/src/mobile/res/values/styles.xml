@@ -7,26 +7,26 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowContentOverlay">@null</item>
         <item name="android:windowSwipeToDismiss">false</item>
-        <item name="android:windowBackground">#0B1216</item>
-        <item name="android:colorBackground">#0B1216</item>
-        <item name="android:statusBarColor">#081014</item>
-        <item name="android:navigationBarColor">#081014</item>
+        <item name="android:windowBackground">@color/lifeprompt_background</item>
+        <item name="android:colorBackground">@color/lifeprompt_background</item>
+        <item name="android:statusBarColor">@color/lifeprompt_background</item>
+        <item name="android:navigationBarColor">@color/lifeprompt_background</item>
 
-        <!-- Quiet clinical defaults. Every legacy theme can still override its palette. -->
-        <item name="colorPrimary">#68C8C1</item>
-        <item name="colorPrimaryDark">#081014</item>
-        <item name="colorAccent">#76D5CC</item>
-        <item name="android:colorAccent">#76D5CC</item>
-        <item name="colorControlActivated">#76D5CC</item>
-        <item name="android:colorControlActivated">#76D5CC</item>
-        <item name="colorControlNormal">#82979E</item>
-        <item name="android:colorControlNormal">#82979E</item>
-        <item name="colorButtonNormal">#14242A</item>
-        <item name="android:colorButtonNormal">#14242A</item>
-        <item name="android:textColorPrimary">#E7F0F2</item>
-        <item name="android:textColorSecondary">#A9BBC0</item>
-        <item name="android:textColorHint">#80949A</item>
-        <item name="android:fontFamily">sans-serif</item>
+        <!-- One amber-terminal system shared by XML and legacy Java screens. -->
+        <item name="colorPrimary">@color/lifeprompt_primary</item>
+        <item name="colorPrimaryDark">@color/lifeprompt_primary_container</item>
+        <item name="colorAccent">@color/lifeprompt_primary</item>
+        <item name="android:colorAccent">@color/lifeprompt_primary</item>
+        <item name="colorControlActivated">@color/lifeprompt_primary</item>
+        <item name="android:colorControlActivated">@color/lifeprompt_primary</item>
+        <item name="colorControlNormal">@color/lifeprompt_secondary</item>
+        <item name="android:colorControlNormal">@color/lifeprompt_secondary</item>
+        <item name="colorButtonNormal">@color/lifeprompt_surface_container_low</item>
+        <item name="android:colorButtonNormal">@color/lifeprompt_surface_container_low</item>
+        <item name="android:textColorPrimary">@color/lifeprompt_on_background</item>
+        <item name="android:textColorSecondary">@color/lifeprompt_on_surface_variant</item>
+        <item name="android:textColorHint">@color/lifeprompt_secondary</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:disabledAlpha">0.38</item>
 
         <item name="android:textViewStyle">@style/MyTextViewStyle</item>
@@ -46,17 +46,17 @@
         <item name="android:alertDialogTheme">@style/MyDarkAlertDialogTheme</item>
 
         <item name="themedButtonBackground">@drawable/modern_component_button</item>
-        <item name="colorButtonBackground">#14242A</item>
-        <item name="colorButtonStroke">?attr/colorControlActivated</item>
-        <item name="buttonCornerRadius">14dp</item>
-        <item name="buttonStrokeWidth">1dp</item>
-        <item name="colorButtonText">#EAF7F5</item>
-        <item name="colorSpinnerDropdownText">#E7F0F2</item>
-        <item name="colorControlHighlight">#3376D5CC</item>
+        <item name="colorButtonBackground">@color/lifeprompt_surface_container_low</item>
+        <item name="colorButtonStroke">@color/lifeprompt_outline</item>
+        <item name="buttonCornerRadius">@dimen/lifeprompt_radius_md</item>
+        <item name="buttonStrokeWidth">@dimen/lifeprompt_outline_width</item>
+        <item name="colorButtonText">@color/lifeprompt_primary</item>
+        <item name="colorSpinnerDropdownText">@color/lifeprompt_on_surface</item>
+        <item name="colorControlHighlight">@color/lifeprompt_primary_container</item>
         <item name="colorDialogBackground">?android:attr/windowBackground</item>
-        <item name="colorDialogBorder">#467876</item>
+        <item name="colorDialogBorder">@color/lifeprompt_outline_variant</item>
         <item name="colorHelpBackground">?android:attr/windowBackground</item>
-        <item name="colorHelpBorder">#68C8C1</item>
+        <item name="colorHelpBorder">@color/lifeprompt_primary</item>
         <item name="colorMirrorConnection">@color/yellow</item>
 
     </style>
@@ -68,8 +68,8 @@
         <item name="android:colorBackground">?android:attr/windowBackground</item>
         <item name="android:statusBarColor">?android:attr/windowBackground</item>
         <item name="android:navigationBarColor">?android:attr/windowBackground</item>
-        <item name="android:textColorSecondary">#526269</item>
-        <item name="android:textColorHint">#718087</item>
+        <item name="android:textColorSecondary">@color/lifeprompt_on_surface_variant</item>
+        <item name="android:textColorHint">@color/lifeprompt_secondary</item>
         <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
         <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">true</item>
         <item name="alertDialogTheme">@style/MyLightAlertDialogTheme</item>
@@ -83,14 +83,16 @@
         <item name="android:buttonStyle">@style/mybuttonstyle</item>
         <item name="isAppLightTheme">false</item>
         <item name="android:colorBackground">?android:attr/windowBackground</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">false</item>
     </style>
 
     <style name="MySpinnerDropDownItemStyle" parent="android:Widget.DropDownItem.Spinner">
         <item name="android:gravity">start|center_vertical</item>
         <item name="android:textAlignment">gravity</item>
-        <item name="android:minHeight">48dp</item>
-        <item name="android:paddingStart">16dp</item>
-        <item name="android:paddingEnd">20dp</item>
+        <item name="android:minHeight">@dimen/lifeprompt_touch_target</item>
+        <item name="android:paddingStart">@dimen/lifeprompt_space_md</item>
+        <item name="android:paddingEnd">@dimen/lifeprompt_space_lg</item>
         <item name="android:paddingTop">10dp</item>
         <item name="android:paddingBottom">10dp</item>
         <item name="android:textSize">16sp</item>
@@ -101,22 +103,22 @@
         <item name="android:textAllCaps">false</item>
         <item name="android:textColor">?attr/colorButtonText</item>
         <item name="android:textSize">14sp</item>
-        <item name="android:fontFamily">sans-serif-medium</item>
-        <item name="android:letterSpacing">0.01</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:letterSpacing">0.04</item>
     </style>
 
     <style name="textAppearanceButtonDark" parent="@android:style/TextAppearance.Material.Widget.Button">
         <item name="android:textAllCaps">false</item>
-        <item name="android:textColor">#07120A</item>
+        <item name="android:textColor">@color/lifeprompt_on_primary</item>
         <item name="android:textSize">14sp</item>
-        <item name="android:fontFamily">sans-serif-medium</item>
-        <item name="android:letterSpacing">0.01</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:letterSpacing">0.04</item>
     </style>
 
     <style name="MyTextViewStyle" parent="android:Widget.TextView">
         <item name="android:textColor">?android:attr/textColorPrimary</item>
         <item name="android:textSize">16sp</item>
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:includeFontPadding">false</item>
         <item name="android:lineSpacingExtra">2dp</item>
     </style>
@@ -125,20 +127,20 @@
         <item name="android:textColor">?android:attr/textColorPrimary</item>
         <item name="android:textSize">16sp</item>
         <item name="android:gravity">center_vertical</item>
-        <item name="android:minWidth">48dp</item>
-        <item name="android:minHeight">48dp</item>
-        <item name="android:paddingStart">8dp</item>
-        <item name="android:paddingEnd">12dp</item>
+        <item name="android:minWidth">@dimen/lifeprompt_touch_target</item>
+        <item name="android:minHeight">@dimen/lifeprompt_touch_target</item>
+        <item name="android:paddingStart">@dimen/lifeprompt_space_xs</item>
+        <item name="android:paddingEnd">@dimen/lifeprompt_space_sm</item>
     </style>
 
     <style name="MyRadioButtonStyle" parent="@android:style/Widget.Material.CompoundButton.RadioButton">
         <item name="android:textColor">?android:attr/textColorPrimary</item>
         <item name="android:textSize">16sp</item>
         <item name="android:gravity">center_vertical</item>
-        <item name="android:minWidth">48dp</item>
-        <item name="android:minHeight">48dp</item>
-        <item name="android:paddingStart">8dp</item>
-        <item name="android:paddingEnd">12dp</item>
+        <item name="android:minWidth">@dimen/lifeprompt_touch_target</item>
+        <item name="android:minHeight">@dimen/lifeprompt_touch_target</item>
+        <item name="android:paddingStart">@dimen/lifeprompt_space_xs</item>
+        <item name="android:paddingEnd">@dimen/lifeprompt_space_sm</item>
     </style>
 
     <style name="mybuttonstyle" parent="@android:style/Widget.Button">
@@ -147,16 +149,16 @@
         <item name="android:textColor">?attr/colorButtonText</item>
         <item name="android:textAllCaps">false</item>
         <item name="android:textSize">14sp</item>
-        <item name="android:fontFamily">sans-serif-medium</item>
-        <item name="android:letterSpacing">0.01</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:letterSpacing">0.04</item>
         <item name="android:gravity">center</item>
         <item name="android:includeFontPadding">false</item>
-        <item name="android:paddingStart">20dp</item>
-        <item name="android:paddingEnd">20dp</item>
-        <item name="android:paddingTop">10dp</item>
-        <item name="android:paddingBottom">10dp</item>
+        <item name="android:paddingStart">@dimen/lifeprompt_space_lg</item>
+        <item name="android:paddingEnd">@dimen/lifeprompt_space_lg</item>
+        <item name="android:paddingTop">@dimen/lifeprompt_space_xs</item>
+        <item name="android:paddingBottom">@dimen/lifeprompt_space_xs</item>
         <item name="android:minWidth">64dp</item>
-        <item name="android:minHeight">48dp</item>
+        <item name="android:minHeight">@dimen/lifeprompt_touch_target</item>
     </style>
 
     <style name="ModernEditTextStyle" parent="@android:style/Widget.Material.EditText">
@@ -165,11 +167,11 @@
         <item name="android:textColor">?android:attr/textColorPrimary</item>
         <item name="android:textColorHint">?android:attr/textColorHint</item>
         <item name="android:textSize">16sp</item>
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:gravity">center_vertical</item>
-        <item name="android:minHeight">48dp</item>
-        <item name="android:paddingStart">12dp</item>
-        <item name="android:paddingEnd">12dp</item>
+        <item name="android:minHeight">@dimen/lifeprompt_touch_target</item>
+        <item name="android:paddingStart">@dimen/lifeprompt_space_sm</item>
+        <item name="android:paddingEnd">@dimen/lifeprompt_space_sm</item>
         <item name="android:paddingTop">8dp</item>
         <item name="android:paddingBottom">8dp</item>
     </style>
@@ -179,8 +181,8 @@
         <item name="android:backgroundTint">@null</item>
         <item name="android:popupBackground">?android:attr/windowBackground</item>
         <item name="android:gravity">start|center_vertical</item>
-        <item name="android:minHeight">48dp</item>
-        <item name="android:paddingStart">12dp</item>
+        <item name="android:minHeight">@dimen/lifeprompt_touch_target</item>
+        <item name="android:paddingStart">@dimen/lifeprompt_space_sm</item>
         <item name="android:paddingEnd">44dp</item>
         <item name="android:paddingTop">8dp</item>
         <item name="android:paddingBottom">8dp</item>
@@ -188,20 +190,20 @@
 
     <style name="ModernImageButtonStyle" parent="@android:style/Widget.Material.ImageButton">
         <item name="android:background">?android:attr/selectableItemBackgroundBorderless</item>
-        <item name="android:minWidth">48dp</item>
-        <item name="android:minHeight">48dp</item>
-        <item name="android:padding">12dp</item>
+        <item name="android:minWidth">@dimen/lifeprompt_touch_target</item>
+        <item name="android:minHeight">@dimen/lifeprompt_touch_target</item>
+        <item name="android:padding">@dimen/lifeprompt_space_sm</item>
     </style>
 
     <style name="MyDarkAlertDialogTheme" parent="Theme.AppCompat.Dialog.Alert">
         <item name="android:windowBackground">@drawable/clinical_dialog_window</item>
-        <item name="android:windowElevation">18dp</item>
+        <item name="android:windowElevation">0dp</item>
         <item name="android:windowMinWidthMajor">88%</item>
         <item name="android:windowMinWidthMinor">88%</item>
         <item name="android:backgroundDimEnabled">true</item>
         <item name="android:backgroundDimAmount">0.72</item>
-        <item name="android:colorAccent">#5ACB85</item>
-        <item name="colorAccent">#5ACB85</item>
+        <item name="android:colorAccent">@color/lifeprompt_primary</item>
+        <item name="colorAccent">@color/lifeprompt_primary</item>
         <item name="android:textViewStyle">@style/MyDialogTextViewStyle</item>
         <item name="android:buttonStyle">@style/mybuttonstyle</item>
         <item name="buttonBarButtonStyle">@style/mybuttonstyle</item>
@@ -222,7 +224,7 @@
         <item name="android:paddingBottom">0dp</item>
         <item name="android:textColor">?android:attr/textColorPrimary</item>
         <item name="android:textSize">16sp</item>
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">monospace</item>
         <item name="android:lineSpacingExtra">2dp</item>
     </style>
 
@@ -715,33 +717,33 @@
     <!-- DEFAULT/SYSTEM THEMES                     -->
     <!-- ========================================= -->
 <style name="AppTheme.ClinicalDark" parent="AppTheme.Base.Dark">
-    <item name="android:windowBackground">#0B0D0E</item>
-    <item name="android:colorBackground">#0B0D0E</item>
-    <item name="android:statusBarColor">#0B0D0E</item>
-    <item name="android:navigationBarColor">#0B0D0E</item>
-    <item name="android:textColorPrimary">#F2F4F3</item>
-    <item name="android:textColor">#F2F4F3</item>
-    <item name="android:textColorSecondary">#9BA19F</item>
-    <item name="android:textColorHint">#767D79</item>
-    <item name="colorPrimary">#5ACB85</item>
-    <item name="colorPrimaryDark">#0B0D0E</item>
-    <item name="colorAccent">#5ACB85</item>
-    <item name="android:colorAccent">#5ACB85</item>
-    <item name="colorControlActivated">#5ACB85</item>
-    <item name="android:colorControlActivated">#5ACB85</item>
-    <item name="colorControlNormal">#8D9691</item>
-    <item name="android:colorControlNormal">#8D9691</item>
-    <item name="colorButtonNormal">#171A1B</item>
-    <item name="android:colorButtonNormal">#171A1B</item>
-    <item name="colorButtonBackground">#171A1B</item>
-    <item name="colorButtonStroke">#303638</item>
-    <item name="colorButtonText">#F2F4F3</item>
-    <item name="buttonCornerRadius">14dp</item>
-    <item name="buttonStrokeWidth">1dp</item>
-    <item name="colorControlHighlight">#335ACB85</item>
-    <item name="colorSpinnerDropdownText">#F2F4F3</item>
-    <item name="colorDialogBorder">#303638</item>
-    <item name="colorHelpBorder">#5ACB85</item>
+    <item name="android:windowBackground">@color/lifeprompt_background</item>
+    <item name="android:colorBackground">@color/lifeprompt_background</item>
+    <item name="android:statusBarColor">@color/lifeprompt_background</item>
+    <item name="android:navigationBarColor">@color/lifeprompt_background</item>
+    <item name="android:textColorPrimary">@color/lifeprompt_on_background</item>
+    <item name="android:textColor">@color/lifeprompt_on_background</item>
+    <item name="android:textColorSecondary">@color/lifeprompt_on_surface_variant</item>
+    <item name="android:textColorHint">@color/lifeprompt_secondary</item>
+    <item name="colorPrimary">@color/lifeprompt_primary</item>
+    <item name="colorPrimaryDark">@color/lifeprompt_background</item>
+    <item name="colorAccent">@color/lifeprompt_primary</item>
+    <item name="android:colorAccent">@color/lifeprompt_primary</item>
+    <item name="colorControlActivated">@color/lifeprompt_primary</item>
+    <item name="android:colorControlActivated">@color/lifeprompt_primary</item>
+    <item name="colorControlNormal">@color/lifeprompt_secondary</item>
+    <item name="android:colorControlNormal">@color/lifeprompt_secondary</item>
+    <item name="colorButtonNormal">@color/lifeprompt_surface_container_low</item>
+    <item name="android:colorButtonNormal">@color/lifeprompt_surface_container_low</item>
+    <item name="colorButtonBackground">@color/lifeprompt_surface_container_low</item>
+    <item name="colorButtonStroke">@color/lifeprompt_outline</item>
+    <item name="colorButtonText">@color/lifeprompt_primary</item>
+    <item name="buttonCornerRadius">@dimen/lifeprompt_radius_md</item>
+    <item name="buttonStrokeWidth">@dimen/lifeprompt_outline_width</item>
+    <item name="colorControlHighlight">@color/lifeprompt_primary_container</item>
+    <item name="colorSpinnerDropdownText">@color/lifeprompt_on_surface</item>
+    <item name="colorDialogBorder">@color/lifeprompt_outline_variant</item>
+    <item name="colorHelpBorder">@color/lifeprompt_primary</item>
 </style>
 
 <!-- Retained for source/resource compatibility; DEFAULT now uses ClinicalDark. -->

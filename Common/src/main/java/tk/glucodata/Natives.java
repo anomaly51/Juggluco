@@ -73,7 +73,7 @@ public static native boolean hasBluetooth(byte[] sensorident,byte[] patchinfo);
      public static native void setgraphhours(int hours);
      public static native int getgraphhours();
      /** Replaces the transient backend-backed food/insulin graph projection. */
-     public static native void setTimelineEvents(int[] keys,long[] timesMs,
+     public static native void setGraphEvents(int[] keys,long[] timesMs,
              float[] carbsGrams,float[] insulinUnits,int[] eventFlags);
      /** Replaces the transient backend forecast, expressed in canonical mg/dL. */
      public static native void setForecast(long[] timesMs,float[] medianMgDl,
@@ -106,10 +106,22 @@ public static native boolean hasBluetooth(byte[] sensorident,byte[] patchinfo);
       * [timestampMs, mgDl, Float.floatToIntBits(rateMgDlPerMinute)].
       */
      public static native long[] forecastReadings(long afterMs,int limit);
+     /**
+      * Returns the enabled glucose presentation layers for an inclusive time
+      * window, plus at most one real reading immediately before and after it.
+      * Rows are chronological flat quintuples:
+      * [timestampMs, Float.floatToIntBits(displayMgDl), sourceKind,
+      * Float.floatToIntBits(rateMgDlPerMinute), sensorSeriesId]. Source kind
+      * uses 1 for history, 2 for stream and 3 for scan; bit 0x100 marks a
+      * calibrated layer. sensorSeriesId is the stable non-negative native
+      * sensor index and must be combined with sourceKind to identify a series.
+      */
+     public static native long[] dashboardChartReadings(long startMs,long endMs,
+             int limit);
      /** Returns a non-zero render key when the coordinates hit an intake marker. */
-     public static native int timelineEventAt(float x,float y);
+     public static native int graphEventAt(float x,float y);
      /** Returns every stable render key represented by the tapped marker. */
-     public static native int[] timelineEventsAt(float x,float y);
+     public static native int[] graphEventsAt(float x,float y);
      public static native int setfilesdir(String dir,String country,String nativedir);
 //     public static native void calccurvegegs();
   public static native void startthreads();
@@ -128,15 +140,22 @@ public static native void startsensors( );
      public static native void nextday(int day);
 //       public static native void savestate();
     public static native int translate(float dx,float dy,float yold,float y);
+    /** Pans horizontally by a fraction of the visible graph width. */
+    public static native int translateGraphFraction(float deltaFraction);
     public static native void lockGraphYRangeForPan();
     public static native int mouseScale(float dx,float xold, float x);
     public static native void flingX(float vol);
     public static native void xscale(float scalex, float midx);
+    /** Zooms around a normalized graph focus in the inclusive range 0..1. */
+    public static native void xscaleGraphFraction(float scale,
+            float focusFraction);
     public static native boolean isbutton(float x, float y);
     public static native long tap(float x, float y);
     public static native long longpress(float x, float y);
     public static native long graphscrub(float x, float y);
     public static native long getstarttime();
+    /** Full right edge of the graph viewport, including its forecast horizon. */
+    public static native long getgraphviewendtime();
 
     public static native long oldestdatatime();
 
@@ -271,15 +290,6 @@ public static native boolean islogcat( );
 public static native String advanced();
 public static native boolean exportdata(int type,int fd,float showdays);
 //public static native void setlibversion(String version);
-public static native int getcolumns(int width);
-
-public static native int  numcontrol(int w,int h);
-public static native void endnumlist( );
-public static native void forwardnumlist( );
-public static native void backwardnumlist( );
-public static native void firstpage( );
-
-public static native void lastpage( );
 public static native String getLibraryName();
 //s/^extern.*JNIEXPORT[         ]*j*\([a-zA-Z]*\)[ ]*JNICALL[      ]*fromjava(\([^)]*\))(JNIEnv[^,]*,[^,)]*[,)]\([^){]*\)[^a-zA-Z0-9]*$/public static native \1 \2(\3);/g
 
@@ -450,9 +460,6 @@ public static native int cpmeal(int mealptr);
 public static native void setlastcolor(int color);
 public static native int getlastcolor();
 
-public static native void summarygraph(boolean val);
-public static native boolean analysedays(int days,boolean history);
-public static native void endstats( );
 public static native boolean setgarminid(String id);
 public static native String getgarminid( );
 public static native String getdefaultid( );
@@ -509,6 +516,11 @@ public static native int getLibreVersion(long dataptr);
 public static native void USenabledStreaming(byte[] sensorident,byte[] jauth,byte[] address);
 public static native void closedynlib( );
 public static native strGlucose lastglucose();
+/**
+ * Returns recent valid poll timestamps, in milliseconds and chronological
+ * order, from the same current sensor selected by {@link #lastglucose()}.
+ */
+public static native long[] recentCurrentSensorReadingTimes(int limit);
 public static native byte[] getmynetinfo(String name,boolean create,int watchhassensor,boolean galaxy,int setnums);
 public static native boolean setmynetinfo(String name,byte[] jar,boolean galaxy);
 
@@ -757,8 +769,6 @@ public static native void setLibreIsViewed(boolean val);
 public static native boolean getLibreIsViewed( );
 public static native void setRTL(boolean val);
 public static native boolean getRTL( );
-public static native boolean makepercentages( );
-public static native void makenumbers();
 public static native void settouchtalk(boolean val);
 public static native boolean gettouchtalk( );
 public static native boolean getsystemui( );
@@ -908,10 +918,6 @@ public static native void setSoundType(int val);
 public static native int getSoundType( );
 
 //public static native boolean siTransmitterScan(long dataptr,String scancode);
-public static native long percentileEndtime(int days);
-public static native int getAnalysedays( );
-
-public static native boolean getAnalysehistory( );
 public static native void onCreate();
 public static native void setbloodvar(byte val);
 public static native byte getbloodvar( );

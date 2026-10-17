@@ -32,6 +32,7 @@ import static tk.glucodata.Natives.getisalarm;
 import static tk.glucodata.Notify.penmutable;
 import static tk.glucodata.Notify.stopalarmrequest;
 import static tk.glucodata.Notify.unitlabel;
+import android.graphics.Typeface;
 
 import android.annotation.SuppressLint;
 import android.app.PendingIntent;
@@ -68,6 +69,7 @@ RemoteGlucose(float gl,float notwidth,float xper,int whiteonblack,boolean giveti
 
    glucosesize=gl;
    glucosePaint=new Paint();
+   glucosePaint.setTypeface(Typeface.create("monospace", Typeface.NORMAL));
    glucosePaint.setAntiAlias(true);
    glucosePaint.setTextAlign(Paint.Align.LEFT);
    float notheight=glucosesize*0.8f;

@@ -9,7 +9,8 @@
     android:paddingStart="20dp"
     android:paddingTop="12dp"
     android:paddingEnd="20dp"
-    android:paddingBottom="24dp">
+    android:paddingBottom="24dp"
+    android:theme="@style/ModernDashboardThemeOverlay">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -23,7 +24,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:fontFamily="sans-serif"
+            android:fontFamily="monospace"
             android:textColor="?android:attr/textColorPrimary"
             android:textSize="28sp"
             android:textStyle="bold" />
@@ -146,9 +147,9 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:backgroundTint="#5ACB85"
+            android:backgroundTint="@color/lifeprompt_primary"
             android:text="@string/save"
             android:textAllCaps="false"
-            android:textColor="#07120A" />
+            android:textColor="@color/lifeprompt_on_primary" />
     </LinearLayout>
 </GridLayout>

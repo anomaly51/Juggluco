@@ -43,8 +43,13 @@ final class IntakeChatCardHistory {
 
     void accept(IntakeChatTurn turn) {
         if (turn == null) return;
-        Status tombstoneStatus = turn.events.isEmpty()
-                ? Status.DELETED : Status.REPLACED;
+        // A replacement is only unambiguous when one old record is retired
+        // and one new record is returned.  Legacy compound turns can delete
+        // one record while creating an unrelated second record; presenting
+        // that tombstone as "replaced" would be misleading.
+        Status tombstoneStatus = turn.deletedEventIds.size() == 1
+                && turn.events.size() == 1
+                ? Status.REPLACED : Status.DELETED;
         for (String deletedEventId : turn.deletedEventIds) {
             Card card = find(deletedEventId);
             if (card != null) card.status = tombstoneStatus;

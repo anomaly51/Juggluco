@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="critical_alarm_banner_low">Low glucose</string>
+    <string name="critical_alarm_banner_high">High glucose</string>
+    <string name="critical_alarm_banner_predictive_low">Low glucose ahead</string>
+    <string name="critical_alarm_banner_predictive_high">High glucose ahead</string>
+    <string name="critical_alarm_banner_experimental">Experimental forecast</string>
+    <string name="critical_alarm_banner_test">Test · not a glucose alert</string>
+    <string name="critical_alarm_banner_signal">Signal lost</string>
+    <string name="critical_alarm_banner_no_reading">No glucose reading</string>
+    <string name="critical_alarm_banner_measured_now">Measured just now</string>
+    <string name="critical_alarm_banner_measured_minutes">Measured %1$d min ago</string>
+    <string name="critical_alarm_banner_measured_stale">Last reading · %1$d min ago</string>
     <string name="critical_alarm_channel_actual_low">Urgent current low glucose</string>
     <string name="critical_alarm_channel_actual_low_description">Alarm-stream sound and lock-screen presentation for a current low glucose alert</string>
     <string name="critical_alarm_channel_actual_high">Urgent current high glucose</string>
@@ -27,6 +38,11 @@
     <string name="critical_alarm_status_test">Delivery and screen preview</string>
     <string name="critical_alarm_instruction">Check your glucose and follow your agreed care plan. This alert never calculates insulin or carbohydrates.</string>
     <string name="critical_alarm_ack_button">Stop sound</string>
+    <string name="critical_alarm_volume_down_hint">Press Volume Down 5 times</string>
+    <plurals name="critical_alarm_volume_down_remaining">
+        <item quantity="one">%1$d press remaining</item>
+        <item quantity="other">%1$d presses remaining</item>
+    </plurals>
     <string name="critical_alarm_snooze_button">Remind me in 5 minutes</string>
     <string name="critical_alarm_open_graph_button">Open glucose graph</string>
     <string name="critical_alarm_ack_action">Stop sound</string>
@@ -44,7 +60,7 @@
     <string name="critical_alarm_signal_loss_body">Juggluco has not received a new sensor reading within the configured time.</string>
     <string name="critical_alarm_signal_loss_instruction">Check the sensor and phone connection. If needed, verify glucose with your meter and follow your agreed care plan.</string>
 
-    <string name="critical_alarm_chart_title">Glucose timeline</string>
+    <string name="critical_alarm_chart_title">Glucose graph</string>
     <string name="critical_alarm_chart_subtitle_recent">Recent %1$d minutes</string>
     <string name="critical_alarm_chart_subtitle_forecast">Recent %1$d min · forecast up to %2$d min</string>
     <string name="critical_alarm_chart_private_hint">Trend preview is visible · unlock for the exact value</string>
@@ -54,8 +70,8 @@
     <string name="critical_alarm_chart_past_axis">−%1$d min</string>
     <string name="critical_alarm_chart_now_axis">Now</string>
     <string name="critical_alarm_chart_future_axis">+%1$d min</string>
-    <string name="critical_alarm_chart_empty">Timeline data is temporarily unavailable</string>
-    <string name="critical_alarm_chart_locked">Unlock to view the glucose timeline</string>
+    <string name="critical_alarm_chart_empty">Graph data is temporarily unavailable</string>
+    <string name="critical_alarm_chart_locked">Unlock to view the glucose graph</string>
     <string name="critical_alarm_chart_description_recent">Chart of recent glucose readings and the target range</string>
     <string name="critical_alarm_chart_description_forecast">Chart of recent glucose readings, target range, and a %1$d-minute forecast</string>
     <string name="critical_alarm_chart_accessibility_latest">Latest %1$s. %2$s</string>

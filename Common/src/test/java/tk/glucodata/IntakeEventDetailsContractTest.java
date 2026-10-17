@@ -155,7 +155,8 @@ public class IntakeEventDetailsContractTest {
         assertTrue(listener.contains("pushIntakeEventsToGraph(events)"));
         assertTrue(listener.contains(
                 "forecastRepository.refreshAfterConfirmedIntake()"));
-        assertTrue(listener.contains("activity.requestRender()"));
+        assertTrue(listener.contains("requestLegacyGraphRenderIfActive()"));
+        assertFalse(listener.contains("activity.requestRender()"));
 
         String deleteUi = between(sheet, "private void deleteConfirmed()",
                 "private void setBusy");

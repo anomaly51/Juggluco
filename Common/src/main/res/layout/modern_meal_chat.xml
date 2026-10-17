@@ -3,9 +3,11 @@
     android:id="@+id/intake_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/modern_secondary_background"
+    android:background="@color/lifeprompt_background"
     android:clickable="true"
-    android:focusable="true">
+    android:focusable="false"
+    android:importantForAccessibility="no"
+    android:theme="@style/ModernDashboardThemeOverlay">
 
     <LinearLayout
         android:id="@+id/intake_page"
@@ -14,83 +16,44 @@
         android:orientation="vertical">
 
         <LinearLayout
+            android:id="@+id/intake_chat_header"
             android:layout_width="match_parent"
-            android:layout_height="64dp"
+            android:layout_height="wrap_content"
             android:gravity="center_vertical"
+            android:minHeight="48dp"
             android:orientation="horizontal"
-            android:paddingStart="12dp"
+            android:paddingStart="20dp"
             android:paddingEnd="12dp">
 
-            <ImageButton
-                android:id="@+id/intake_back_button"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:background="@drawable/intake_button_secondary"
-                android:contentDescription="@string/intake_back"
-                android:padding="12dp"
-                android:rotation="180"
-                android:src="@drawable/modern_secondary_chevron" />
-
-            <LinearLayout
+            <TextView
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
                 android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/meal_chat_title"
-                    android:textColor="@color/modern_secondary_text_primary"
-                    android:textSize="19sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="1dp"
-                    android:maxLines="1"
-                    android:text="@string/meal_chat_subtitle"
-                    android:textColor="@color/modern_secondary_text_muted"
-                    android:textSize="10sp" />
-            </LinearLayout>
+                android:fontFamily="monospace"
+                android:letterSpacing="0.08"
+                android:text="@string/intake_thumb_title"
+                android:textColor="@color/lifeprompt_on_surface"
+                android:textSize="16sp"
+                android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/intake_backend_status"
                 android:layout_width="wrap_content"
                 android:layout_height="48dp"
-                android:background="@drawable/intake_chip"
+                android:background="?android:attr/selectableItemBackground"
                 android:clickable="true"
+                android:ellipsize="end"
                 android:focusable="true"
                 android:gravity="center"
-                android:maxWidth="116dp"
-                android:maxLines="2"
+                android:maxWidth="120dp"
+                android:maxLines="1"
                 android:minWidth="80dp"
                 android:paddingStart="8dp"
                 android:paddingEnd="8dp"
                 android:text="@string/intake_backend_checking"
-                android:textAlignment="center"
-                android:textColor="@color/modern_secondary_text_secondary"
-                android:textSize="10sp"
-                android:textStyle="bold" />
+                android:textColor="@color/lifeprompt_on_surface_variant"
+                android:textSize="12sp" />
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/meal_chat_time"
-            android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:layout_marginStart="12dp"
-            android:layout_marginEnd="12dp"
-            android:background="@drawable/intake_button_secondary"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center_vertical"
-            android:paddingStart="13dp"
-            android:paddingEnd="13dp"
-            android:textColor="@color/modern_secondary_text_primary"
-            android:textSize="12sp"
-            android:textStyle="bold" />
 
         <ScrollView
             android:id="@+id/meal_chat_scroll"
@@ -100,10 +63,10 @@
             android:clipToPadding="false"
             android:fillViewport="true"
             android:overScrollMode="never"
-            android:paddingStart="12dp"
-            android:paddingTop="12dp"
-            android:paddingEnd="12dp"
-            android:paddingBottom="10dp"
+            android:paddingStart="16dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="16dp"
             android:scrollbars="none">
 
             <LinearLayout
@@ -112,6 +75,38 @@
                 android:layout_height="wrap_content"
                 android:gravity="bottom"
                 android:orientation="vertical">
+
+                <LinearLayout
+                    android:id="@+id/intake_empty_state"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:paddingStart="8dp"
+                    android:paddingTop="24dp"
+                    android:paddingEnd="8dp"
+                    android:paddingBottom="24dp">
+
+                    <TextView
+                        android:id="@+id/intake_start_title"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
+                        android:lineSpacingExtra="2dp"
+                        android:text="@string/intake_thumb_empty_title"
+                        android:textColor="@color/lifeprompt_on_surface"
+                        android:textSize="24sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/intake_start_subtitle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:lineSpacingExtra="3dp"
+                        android:text="@string/intake_thumb_empty_subtitle"
+                        android:textColor="@color/lifeprompt_on_surface_variant"
+                        android:textSize="15sp" />
+                </LinearLayout>
 
                 <LinearLayout
                     android:id="@+id/meal_chat_messages"
@@ -131,10 +126,10 @@
                     android:id="@+id/meal_chat_proposal"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="5dp"
-                    android:layout_marginBottom="5dp"
-                    android:background="@drawable/intake_chat_proposal"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="8dp"
                     android:accessibilityLiveRegion="polite"
+                    android:background="@drawable/intake_chat_proposal"
                     android:orientation="vertical"
                     android:padding="16dp"
                     android:visibility="gone">
@@ -144,7 +139,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="@string/intake_chat_action_saved"
-                        android:textColor="@color/modern_secondary_accent"
+                        android:textColor="@color/lifeprompt_primary"
                         android:textSize="13sp"
                         android:textStyle="bold" />
 
@@ -152,27 +147,27 @@
                         android:id="@+id/meal_chat_proposal_meal"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
+                        android:layout_marginTop="5dp"
                         android:lineSpacingExtra="2dp"
-                        android:textColor="@color/modern_secondary_text_primary"
-                        android:textSize="20sp"
+                        android:textColor="@color/lifeprompt_on_surface"
+                        android:textSize="19sp"
                         android:textStyle="bold" />
 
                     <TextView
                         android:id="@+id/meal_chat_proposal_carbs"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="5dp"
-                        android:textColor="@color/modern_secondary_text_secondary"
-                        android:textSize="13sp" />
+                        android:layout_marginTop="3dp"
+                        android:textColor="@color/lifeprompt_on_surface_variant"
+                        android:textSize="14sp" />
 
                     <TextView
                         android:id="@+id/meal_chat_proposal_absorption"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="6dp"
-                        android:textColor="@color/modern_secondary_accent"
-                        android:textSize="12sp"
+                        android:textColor="@color/lifeprompt_primary"
+                        android:textSize="13sp"
                         android:visibility="gone" />
 
                     <TextView
@@ -180,30 +175,20 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="5dp"
-                        android:textColor="@color/modern_secondary_text_muted"
-                        android:textSize="12sp"
+                        android:textColor="@color/lifeprompt_on_surface_variant"
+                        android:textSize="13sp"
                         android:visibility="gone" />
 
                     <TextView
                         android:id="@+id/meal_chat_proposal_time"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:background="@drawable/intake_chip"
-                        android:clickable="false"
+                        android:layout_marginTop="7dp"
                         android:ellipsize="end"
-                        android:focusable="false"
-                        android:gravity="center_vertical"
                         android:maxLines="2"
-                        android:minHeight="48dp"
-                        android:paddingStart="12dp"
-                        android:paddingTop="8dp"
-                        android:paddingEnd="12dp"
-                        android:paddingBottom="8dp"
                         android:text="@string/meal_chat_proposal_time_action"
-                        android:textColor="@color/modern_secondary_text_primary"
+                        android:textColor="@color/lifeprompt_on_surface_variant"
                         android:textSize="13sp"
-                        android:textStyle="bold"
                         android:visibility="gone" />
 
                     <TextView
@@ -212,41 +197,47 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
                         android:lineSpacingExtra="2dp"
-                        android:textColor="@color/modern_secondary_warning"
-                        android:textSize="12sp"
+                        android:textColor="@color/lifeprompt_tertiary"
+                        android:textSize="13sp"
                         android:visibility="gone" />
 
                     <TextView
                         android:id="@+id/meal_chat_proposal_hint"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="9dp"
+                        android:layout_marginTop="10dp"
+                        android:background="@drawable/intake_quick_action"
+                        android:gravity="center_vertical"
+                        android:minHeight="48dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
                         android:text="@string/intake_chat_correction_hint"
-                        android:textColor="@color/modern_secondary_text_muted"
-                        android:textSize="12sp" />
+                        android:textColor="@color/lifeprompt_on_surface_variant"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
 
                     <LinearLayout
                         android:id="@+id/intake_chat_action_buttons"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        android:baselineAligned="false"
+                        android:layout_marginTop="8dp"
+                        android:gravity="end"
                         android:orientation="horizontal">
 
                         <Button
                             android:id="@+id/meal_chat_confirm"
-                            android:layout_width="match_parent"
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:background="@drawable/intake_action_undo"
                             android:maxLines="2"
                             android:minHeight="48dp"
-                            android:minWidth="0dp"
-                            android:paddingStart="12dp"
-                            android:paddingEnd="12dp"
+                            android:minWidth="120dp"
+                            android:paddingStart="16dp"
+                            android:paddingEnd="16dp"
                             android:stateListAnimator="@null"
                             android:text="@string/intake_chat_action_delete"
                             android:textAllCaps="false"
-                            android:textColor="@color/modern_secondary_danger"
+                            android:textColor="@color/lifeprompt_error"
                             android:textSize="14sp"
                             android:textStyle="bold" />
                     </LinearLayout>
@@ -254,203 +245,779 @@
             </LinearLayout>
         </ScrollView>
 
-        <HorizontalScrollView
-            android:id="@+id/meal_chat_attachment_scroll"
-            android:layout_width="match_parent"
-            android:layout_height="82dp"
-            android:clipToPadding="false"
-            android:fillViewport="false"
-            android:overScrollMode="never"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:scrollbars="none"
-            android:visibility="gone">
-
-            <LinearLayout
-                android:id="@+id/meal_chat_attachments"
-                android:layout_width="wrap_content"
-                android:layout_height="82dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal" />
-        </HorizontalScrollView>
-
-        <TextView
-            android:id="@+id/meal_chat_safety"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="12dp"
-            android:layout_marginEnd="12dp"
-            android:layout_marginBottom="6dp"
-            android:contentDescription="@string/meal_chat_safety"
-            android:gravity="center"
-            android:maxLines="2"
-            android:text="@string/meal_chat_safety_compact"
-            android:textColor="@color/modern_secondary_text_muted"
-            android:textSize="10sp" />
-
-        <Button
-            android:id="@+id/intake_chat_reconcile"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginStart="12dp"
-            android:layout_marginEnd="12dp"
-            android:layout_marginBottom="8dp"
-            android:accessibilityLiveRegion="polite"
-            android:background="@drawable/intake_action_undo"
-            android:stateListAnimator="@null"
-            android:text="@string/intake_chat_reconcile"
-            android:textAllCaps="false"
-            android:textColor="@color/modern_secondary_danger"
-            android:textSize="13sp"
-            android:textStyle="bold"
-            android:visibility="gone" />
-
         <LinearLayout
+            android:id="@+id/intake_thumb_dock"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:gravity="center_horizontal"
+            android:background="@drawable/intake_thumb_dock"
             android:orientation="vertical"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:paddingBottom="9dp">
+            android:paddingStart="12dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="8dp">
 
-            <TextView
-                android:id="@+id/intake_chat_inline_error"
-                android:layout_width="match_parent"
+            <Button
+                android:id="@+id/intake_chat_latest"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="2dp"
-                android:layout_marginEnd="2dp"
+                android:layout_gravity="center_horizontal"
                 android:layout_marginBottom="8dp"
-                android:accessibilityLiveRegion="assertive"
-                android:background="@drawable/intake_safety_notice"
-                android:clickable="true"
-                android:focusable="true"
-                android:gravity="center_vertical"
+                android:background="@drawable/intake_quick_action"
                 android:minHeight="48dp"
-                android:paddingStart="13dp"
-                android:paddingTop="9dp"
-                android:paddingEnd="13dp"
-                android:paddingBottom="9dp"
-                android:textColor="@color/modern_secondary_warning"
-                android:textSize="12sp"
-                android:textStyle="bold"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:stateListAnimator="@null"
+                android:text="@string/intake_thumb_latest"
+                android:textAllCaps="false"
+                android:textColor="@color/lifeprompt_on_surface"
+                android:textSize="14sp"
                 android:visibility="gone" />
 
-            <FrameLayout
-                android:id="@+id/meal_chat_voice"
-                android:layout_width="72dp"
+            <HorizontalScrollView
+                android:id="@+id/meal_chat_attachment_scroll"
+                android:layout_width="match_parent"
                 android:layout_height="72dp"
-                android:background="@drawable/intake_voice_primary"
-                android:clickable="true"
-                android:contentDescription="@string/meal_chat_voice"
-                android:elevation="6dp"
-                android:focusable="true">
+                android:layout_marginBottom="8dp"
+                android:clipToPadding="false"
+                android:fillViewport="false"
+                android:overScrollMode="never"
+                android:scrollbars="none"
+                android:visibility="gone">
 
-                <ProgressBar
-                    android:id="@+id/meal_chat_voice_progress"
-                    style="?android:attr/progressBarStyleSmall"
-                    android:layout_width="44dp"
-                    android:layout_height="44dp"
-                    android:layout_gravity="center"
-                    android:indeterminate="true"
-                    android:importantForAccessibility="no"
+                <LinearLayout
+                    android:id="@+id/meal_chat_attachments"
+                    android:layout_width="wrap_content"
+                    android:layout_height="72dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal" />
+            </HorizontalScrollView>
+
+            <TextView
+                    android:id="@+id/intake_chat_inline_error"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="8dp"
+                    android:accessibilityLiveRegion="assertive"
+                    android:background="@drawable/intake_safety_notice"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="48dp"
+                    android:paddingStart="13dp"
+                    android:paddingTop="9dp"
+                    android:paddingEnd="13dp"
+                    android:paddingBottom="9dp"
+                    android:textColor="@color/lifeprompt_tertiary"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
+            <Button
+                    android:id="@+id/intake_chat_reconcile"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="start"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="8dp"
+                    android:accessibilityLiveRegion="polite"
+                    android:background="@drawable/intake_pending_review"
+                    android:minHeight="48dp"
+                    android:minWidth="160dp"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:stateListAnimator="@null"
+                    android:text="@string/intake_chat_reconcile"
+                    android:textAllCaps="false"
+                    android:textColor="@color/lifeprompt_tertiary"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
                     android:visibility="gone" />
 
-                <ImageView
-                    android:id="@+id/meal_chat_voice_icon"
-                    android:layout_width="29dp"
-                    android:layout_height="29dp"
-                    android:layout_gravity="center"
-                    android:importantForAccessibility="no"
-                    android:src="@drawable/intake_mic"
-                    android:tint="@color/modern_secondary_on_accent" />
-            </FrameLayout>
+            <tk.glucodata.IntakeEditorScrollView
+                android:id="@+id/intake_editor_scroll"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:fillViewport="false"
+                android:overScrollMode="never"
+                android:scrollbarStyle="insideInset"
+                android:scrollbars="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/intake_quick_editor"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="0dp"
+                    android:layout_marginBottom="0dp"
+                    android:background="@drawable/intake_quick_dock"
+                    android:orientation="vertical"
+                    android:padding="4dp">
+
+                    <LinearLayout
+                        android:id="@+id/intake_quick_toggle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="?android:attr/selectableItemBackground"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:minHeight="52dp"
+                        android:orientation="horizontal"
+                        android:paddingStart="12dp"
+                        android:paddingTop="6dp"
+                        android:paddingEnd="8dp"
+                        android:paddingBottom="6dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/intake_quick_title"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:maxLines="1"
+                                android:text="@string/intake_quick_entry_title"
+                                android:textColor="@color/lifeprompt_on_surface"
+                                android:textSize="14sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/intake_quick_subtitle"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:ellipsize="end"
+                                android:maxLines="1"
+                                android:text="@string/intake_quick_entry_subtitle"
+                                android:textColor="@color/lifeprompt_on_surface_variant"
+                                android:textSize="13sp" />
+                        </LinearLayout>
+
+                        <ImageView
+                            android:id="@+id/intake_quick_chevron"
+                            android:layout_width="32dp"
+                            android:layout_height="32dp"
+                            android:importantForAccessibility="no"
+                            android:padding="7dp"
+                            android:rotation="90"
+                            android:src="@drawable/modern_secondary_chevron"
+                            android:tint="@color/lifeprompt_on_surface_variant" />
+                    </LinearLayout>
+
+<LinearLayout
+                        android:id="@+id/intake_quick_body"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingStart="8dp"
+                        android:paddingTop="4dp"
+                        android:paddingEnd="8dp"
+                        android:paddingBottom="8dp"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/intake_quick_context"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:accessibilityLiveRegion="polite"
+                            android:minHeight="24dp"
+                            android:text="@string/intake_quick_new_insulin"
+                            android:textColor="@color/lifeprompt_on_surface_variant"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+
+                        <LinearLayout
+                            android:id="@+id/intake_quick_insulin_panel"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp"
+                                android:orientation="horizontal">
+                                <Button
+                                    android:id="@+id/intake_quick_novorapid"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:background="@drawable/intake_chip"
+                                    android:contentDescription="@string/intake_quick_novorapid_description"
+                                    android:minHeight="48dp"
+                                    android:minWidth="0dp"
+                                    android:stateListAnimator="@null"
+                                    android:text="@string/insulin_novorapid"
+                                    android:textAllCaps="false"
+                                    android:textColor="@color/lifeprompt_on_surface"
+                                    android:textSize="14sp"
+                                    android:textStyle="bold" />
+                                <Button
+                                    android:id="@+id/intake_quick_tresiba"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="8dp"
+                                    android:layout_weight="1"
+                                    android:background="@drawable/intake_chip"
+                                    android:contentDescription="@string/intake_quick_tresiba_description"
+                                    android:minHeight="48dp"
+                                    android:minWidth="0dp"
+                                    android:stateListAnimator="@null"
+                                    android:text="@string/insulin_tresiba"
+                                    android:textAllCaps="false"
+                                    android:textColor="@color/lifeprompt_on_surface"
+                                    android:textSize="14sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:layout_marginBottom="8dp"
+                            android:labelFor="@id/intake_quick_dose"
+                            android:text="@string/intake_thumb_dose_label"
+                            android:textColor="@color/lifeprompt_on_surface_variant"
+                            android:textSize="13sp" />
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal">
+                                <Button
+                                    android:id="@+id/intake_quick_dose_minus"
+                                    android:layout_width="48dp"
+                                    android:layout_height="48dp"
+                                    android:background="@drawable/intake_chip"
+                                    android:contentDescription="@string/intake_quick_dose_decrease"
+                                    android:minWidth="48dp"
+                                    android:padding="0dp"
+                                    android:stateListAnimator="@null"
+                                    android:text="−"
+                                    android:textAllCaps="false"
+                                    android:textColor="@color/lifeprompt_on_surface"
+                                    android:textSize="20sp" />
+                                <EditText
+                                    android:id="@+id/intake_quick_dose"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="8dp"
+                                    android:layout_weight="1"
+                                    android:background="@drawable/intake_thumb_input"
+                                    android:contentDescription="@string/intake_quick_dose_description"
+                                    android:gravity="center"
+                                    android:hint="@string/intake_quick_dose_hint"
+                                    android:imeOptions="actionDone|flagNoExtractUi"
+                                    android:inputType="numberDecimal"
+                                    android:maxLines="1"
+                                    android:minHeight="48dp"
+                                    android:minWidth="0dp"
+                                    android:paddingStart="8dp"
+                                    android:paddingEnd="8dp"
+                                    android:selectAllOnFocus="true"
+                                    android:textColor="@color/lifeprompt_on_surface"
+                                    android:textColorHint="@color/lifeprompt_on_surface_variant"
+                                    android:textSize="16sp" />
+                                <Button
+                                    android:id="@+id/intake_quick_dose_plus"
+                                    android:layout_width="48dp"
+                                    android:layout_height="48dp"
+                                    android:layout_marginStart="8dp"
+                                    android:background="@drawable/intake_chip"
+                                    android:contentDescription="@string/intake_quick_dose_increase"
+                                    android:minWidth="48dp"
+                                    android:padding="0dp"
+                                    android:stateListAnimator="@null"
+                                    android:text="+"
+                                    android:textAllCaps="false"
+                                    android:textColor="@color/lifeprompt_on_surface"
+                                    android:textSize="20sp" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/intake_quick_meal_panel"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:visibility="gone">
+                            <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:layout_marginBottom="8dp"
+                            android:labelFor="@id/intake_quick_meal_name"
+                            android:text="@string/intake_thumb_food_label"
+                            android:textColor="@color/lifeprompt_on_surface_variant"
+                            android:textSize="13sp" />
+                            <EditText
+                                android:id="@+id/intake_quick_meal_name"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:background="@drawable/intake_thumb_input"
+                                android:contentDescription="@string/intake_quick_meal_description"
+                                android:gravity="center_vertical"
+                                android:hint="@string/intake_quick_meal_hint"
+                                android:imeOptions="actionNext|flagNoExtractUi"
+                                android:inputType="textCapSentences"
+                                android:maxLines="1"
+                                android:minHeight="48dp"
+                                android:textColor="@color/lifeprompt_on_surface"
+                                android:textColorHint="@color/lifeprompt_on_surface_variant"
+                                android:textSize="16sp" />
+                            <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:layout_marginBottom="8dp"
+                            android:labelFor="@id/intake_quick_carbs"
+                            android:text="@string/intake_thumb_carbs_label"
+                            android:textColor="@color/lifeprompt_on_surface_variant"
+                            android:textSize="13sp" />
+                            <EditText
+                                    android:id="@+id/intake_quick_carbs"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+
+                                    android:background="@drawable/intake_thumb_input"
+                                    android:contentDescription="@string/intake_quick_carbs_description"
+                                    android:gravity="center_vertical"
+                                    android:hint="@string/intake_quick_carbs_hint"
+                                    android:imeOptions="actionDone|flagNoExtractUi"
+                                    android:inputType="numberDecimal"
+                                    android:maxLines="1"
+                                    android:minHeight="48dp"
+                                    android:textColor="@color/lifeprompt_on_surface"
+                                    android:textColorHint="@color/lifeprompt_on_surface_variant"
+                                    android:textSize="16sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:layout_marginBottom="8dp"
+
+                            android:text="@string/intake_thumb_time_label"
+                            android:textColor="@color/lifeprompt_on_surface_variant"
+                            android:textSize="13sp" />
+                        <LinearLayout
+                            android:id="@+id/intake_quick_time_scroll"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical">
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:baselineAligned="false"
+                                android:orientation="horizontal">
+                                <Button
+                                android:id="@+id/intake_quick_time_now"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+
+                                android:background="@drawable/intake_chip"
+                                android:maxLines="2"
+                                android:minHeight="48dp"
+                                android:minWidth="0dp"
+                                android:paddingStart="8dp"
+                                android:paddingTop="8dp"
+                                android:paddingEnd="8dp"
+                                android:paddingBottom="8dp"
+                                android:stateListAnimator="@null"
+                                android:text="@string/intake_quick_time_now"
+                                android:textAllCaps="false"
+                                android:textColor="@color/lifeprompt_on_surface"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+                                <Button
+                                android:id="@+id/intake_quick_time_5m"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:layout_marginStart="8dp"
+                                android:background="@drawable/intake_chip"
+                                android:maxLines="2"
+                                android:minHeight="48dp"
+                                android:minWidth="0dp"
+                                android:paddingStart="8dp"
+                                android:paddingTop="8dp"
+                                android:paddingEnd="8dp"
+                                android:paddingBottom="8dp"
+                                android:stateListAnimator="@null"
+                                android:text="@string/intake_quick_time_5m"
+                                android:textAllCaps="false"
+                                android:textColor="@color/lifeprompt_on_surface"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+                                <Button
+                                android:id="@+id/intake_quick_time_10m"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:layout_marginStart="8dp"
+                                android:background="@drawable/intake_chip"
+                                android:maxLines="2"
+                                android:minHeight="48dp"
+                                android:minWidth="0dp"
+                                android:paddingStart="8dp"
+                                android:paddingTop="8dp"
+                                android:paddingEnd="8dp"
+                                android:paddingBottom="8dp"
+                                android:stateListAnimator="@null"
+                                android:text="@string/intake_quick_time_10m"
+                                android:textAllCaps="false"
+                                android:textColor="@color/lifeprompt_on_surface"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+                            </LinearLayout>
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp"
+                                android:baselineAligned="false"
+                                android:orientation="horizontal">
+                                <Button
+                                android:id="@+id/intake_quick_time_15m"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+
+                                android:background="@drawable/intake_chip"
+                                android:maxLines="2"
+                                android:minHeight="48dp"
+                                android:minWidth="0dp"
+                                android:paddingStart="8dp"
+                                android:paddingTop="8dp"
+                                android:paddingEnd="8dp"
+                                android:paddingBottom="8dp"
+                                android:stateListAnimator="@null"
+                                android:text="@string/intake_quick_time_15m"
+                                android:textAllCaps="false"
+                                android:textColor="@color/lifeprompt_on_surface"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+                                <Button
+                                android:id="@+id/intake_quick_time_exact"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="2"
+                                android:layout_marginStart="8dp"
+                                android:background="@drawable/intake_chip"
+                                android:maxLines="2"
+                                android:minHeight="48dp"
+                                android:minWidth="0dp"
+                                android:paddingStart="8dp"
+                                android:paddingTop="8dp"
+                                android:paddingEnd="8dp"
+                                android:paddingBottom="8dp"
+                                android:stateListAnimator="@null"
+                                android:text="@string/intake_quick_time_exact"
+                                android:textAllCaps="false"
+                                android:textColor="@color/lifeprompt_on_surface"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                    </LinearLayout>
+                </LinearLayout>
+            </tk.glucodata.IntakeEditorScrollView>
+
+            <LinearLayout
+                android:id="@+id/intake_quick_submit_bar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                        <Button
+                            android:id="@+id/intake_quick_insulin_submit"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="0dp"
+                            android:background="@drawable/intake_button_primary"
+                            android:minHeight="56dp"
+                            android:paddingStart="16dp"
+                            android:paddingTop="8dp"
+                            android:paddingEnd="16dp"
+                            android:paddingBottom="8dp"
+                            android:stateListAnimator="@null"
+                            android:text="@string/intake_quick_add"
+                            android:textAllCaps="false"
+                            android:textColor="@color/lifeprompt_on_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+                        <Button
+                            android:id="@+id/intake_quick_meal_submit"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="0dp"
+                            android:background="@drawable/intake_button_primary"
+                            android:minHeight="56dp"
+                            android:paddingStart="16dp"
+                            android:paddingTop="8dp"
+                            android:paddingEnd="16dp"
+                            android:paddingBottom="8dp"
+                            android:stateListAnimator="@null"
+                            android:text="@string/intake_quick_add"
+                            android:textAllCaps="false"
+                            android:textColor="@color/lifeprompt_on_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold"
+                            android:visibility="gone" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/intake_thumb_shortcuts"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:baselineAligned="false"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <ImageButton
+                    android:id="@+id/intake_back_button"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="@drawable/intake_quick_action"
+                    android:contentDescription="@string/intake_back"
+                    android:padding="12dp"
+                    android:rotation="180"
+                    android:src="@drawable/modern_secondary_chevron"
+                    android:tint="@color/lifeprompt_on_surface" />
+
+                <Button
+                    android:id="@+id/intake_start_insulin"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/intake_quick_action"
+                    android:minHeight="48dp"
+                    android:minWidth="0dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:stateListAnimator="@null"
+                    android:text="@string/intake_thumb_insulin"
+                    android:textAllCaps="false"
+                    android:textColor="@color/lifeprompt_on_surface"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/intake_start_food"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/intake_quick_action"
+                    android:minHeight="48dp"
+                    android:minWidth="0dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:stateListAnimator="@null"
+                    android:text="@string/intake_thumb_food"
+                    android:textAllCaps="false"
+                    android:textColor="@color/lifeprompt_on_surface"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/intake_chat_voice_hint"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
-                android:layout_marginBottom="7dp"
-                android:text="@string/intake_chat_voice_hint"
-                android:textColor="@color/modern_secondary_text_secondary"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-
-            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:gravity="bottom"
-                android:orientation="horizontal">
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:text="@string/intake_chat_voice_hint"
+                android:textColor="@color/lifeprompt_on_surface_variant"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
 
-                <FrameLayout
-                    android:id="@+id/meal_chat_attach"
-                    android:layout_width="50dp"
-                    android:layout_height="50dp"
-                    android:background="@drawable/intake_button_secondary"
-                    android:clickable="true"
-                    android:contentDescription="@string/meal_chat_attach"
-                    android:focusable="true">
+            <LinearLayout
+                android:id="@+id/intake_composer_surface"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/intake_thumb_composer"
+                android:orientation="vertical"
+                android:padding="8dp">
 
-                    <ImageView
-                        android:layout_width="22dp"
-                        android:layout_height="22dp"
-                        android:layout_gravity="center"
-                        android:importantForAccessibility="no"
-                        android:src="@drawable/intake_add"
-                        android:tint="@color/modern_secondary_text_primary" />
-                </FrameLayout>
-
-                <EditText
-                    android:id="@+id/meal_chat_input"
-                    android:layout_width="0dp"
+                <LinearLayout
+                    android:id="@+id/intake_thumb_context"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="6dp"
-                    android:layout_weight="1"
-                    android:background="@drawable/intake_chat_input"
                     android:gravity="center_vertical"
-                    android:hint="@string/meal_chat_message_hint"
-                    android:imeOptions="actionSend|flagNoExtractUi"
-                    android:inputType="textCapSentences|textMultiLine"
-                    android:maxHeight="112dp"
-                    android:maxLines="4"
-                    android:minHeight="50dp"
-                    android:textColor="@color/modern_secondary_text_primary"
-                    android:textColorHint="@color/modern_secondary_text_muted"
-                    android:textSize="14sp" />
+                    android:orientation="horizontal">
 
-                <FrameLayout
-                    android:id="@+id/meal_chat_send"
-                    android:layout_width="54dp"
-                    android:layout_height="50dp"
-                    android:layout_marginStart="6dp"
-                    android:background="@drawable/intake_button_primary"
-                    android:clickable="true"
-                    android:contentDescription="@string/meal_chat_send"
-                    android:focusable="true">
+                    <TextView
+                        android:id="@+id/meal_chat_time"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="8dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/intake_quick_action"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:minHeight="48dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:textColor="@color/lifeprompt_on_surface_variant"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
 
-                    <ProgressBar
-                        android:id="@+id/meal_chat_send_progress"
-                        style="?android:attr/progressBarStyleSmall"
-                        android:layout_width="25dp"
-                        android:layout_height="25dp"
-                        android:layout_gravity="center"
-                        android:indeterminate="true"
-                        android:indeterminateTint="@color/modern_secondary_on_accent"
-                        android:indeterminateTintMode="src_in"
-                        android:importantForAccessibility="no"
-                        android:visibility="gone" />
+                    <FrameLayout
+                        android:id="@+id/meal_chat_attach"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:background="@drawable/intake_quick_action"
+                        android:clickable="true"
+                        android:contentDescription="@string/meal_chat_attach"
+                        android:focusable="true">
 
-                    <ImageView
-                        android:id="@+id/meal_chat_send_icon"
-                        android:layout_width="22dp"
-                        android:layout_height="22dp"
-                        android:layout_gravity="center"
-                        android:importantForAccessibility="no"
-                        android:src="@drawable/intake_send"
-                        android:tint="@color/modern_secondary_on_accent" />
-                </FrameLayout>
+                        <ImageView
+                            android:layout_width="24dp"
+                            android:layout_height="24dp"
+                            android:layout_gravity="center"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/intake_add"
+                            android:tint="@color/lifeprompt_on_surface" />
+                    </FrameLayout>
+
+                    <FrameLayout
+                        android:id="@+id/meal_chat_voice_secondary"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:layout_marginStart="8dp"
+                        android:background="@drawable/intake_quick_action"
+                        android:clickable="true"
+                        android:contentDescription="@string/meal_chat_voice"
+                        android:focusable="true"
+                        android:visibility="gone">
+
+                        <ImageView
+                            android:layout_width="24dp"
+                            android:layout_height="24dp"
+                            android:layout_gravity="center"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/intake_mic"
+                            android:tint="@color/lifeprompt_on_surface" />
+                    </FrameLayout>
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:gravity="bottom"
+                    android:orientation="horizontal">
+
+                    <EditText
+                        android:id="@+id/meal_chat_input"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="8dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/intake_thumb_input"
+                        android:contentDescription="@string/intake_thumb_input_label"
+                        android:gravity="center_vertical"
+                        android:hint="@string/meal_chat_message_hint"
+                        android:imeOptions="actionSend|flagNoExtractUi"
+                        android:inputType="textCapSentences|textMultiLine"
+                        android:maxHeight="120dp"
+                        android:maxLines="4"
+                        android:minHeight="64dp"
+                        android:paddingStart="12dp"
+                        android:paddingTop="12dp"
+                        android:paddingEnd="12dp"
+                        android:paddingBottom="12dp"
+                        android:textColor="@color/lifeprompt_on_surface"
+                        android:textColorHint="@color/lifeprompt_on_surface_variant"
+                        android:textSize="16sp" />
+
+                    <FrameLayout
+                        android:id="@+id/meal_chat_voice"
+                        android:layout_width="64dp"
+                        android:layout_height="64dp"
+                        android:background="@drawable/intake_voice_primary"
+                        android:clickable="true"
+                        android:contentDescription="@string/meal_chat_voice"
+                        android:focusable="true">
+
+                        <ProgressBar
+                            android:id="@+id/meal_chat_voice_progress"
+                            style="?android:attr/progressBarStyleSmall"
+                            android:layout_width="28dp"
+                            android:layout_height="28dp"
+                            android:layout_gravity="center"
+                            android:indeterminate="true"
+                            android:importantForAccessibility="no"
+                            android:visibility="gone" />
+
+                        <ImageView
+                            android:id="@+id/meal_chat_voice_icon"
+                            android:layout_width="28dp"
+                            android:layout_height="28dp"
+                            android:layout_gravity="center"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/intake_mic"
+                            android:tint="@color/lifeprompt_on_primary" />
+                    </FrameLayout>
+
+                    <FrameLayout
+                        android:id="@+id/meal_chat_send"
+                        android:layout_width="64dp"
+                        android:layout_height="64dp"
+                        android:background="@drawable/intake_button_primary"
+                        android:clickable="true"
+                        android:contentDescription="@string/meal_chat_send"
+                        android:focusable="true"
+                        android:visibility="gone">
+
+                        <ProgressBar
+                            android:id="@+id/meal_chat_send_progress"
+                            style="?android:attr/progressBarStyleSmall"
+                            android:layout_width="28dp"
+                            android:layout_height="28dp"
+                            android:layout_gravity="center"
+                            android:indeterminate="true"
+                            android:indeterminateTint="@color/lifeprompt_on_primary"
+                            android:indeterminateTintMode="src_in"
+                            android:importantForAccessibility="no"
+                            android:visibility="gone" />
+
+                        <ImageView
+                            android:id="@+id/meal_chat_send_icon"
+                            android:layout_width="28dp"
+                            android:layout_height="28dp"
+                            android:layout_gravity="center"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/intake_send"
+                            android:tint="@color/lifeprompt_on_primary" />
+                    </FrameLayout>
+                </LinearLayout>
             </LinearLayout>
+
+            <TextView
+                android:id="@+id/meal_chat_safety"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:contentDescription="@string/meal_chat_safety"
+                android:gravity="center"
+                android:maxLines="2"
+                android:text="@string/meal_chat_safety_compact"
+                android:textColor="@color/lifeprompt_on_surface_variant"
+                android:textSize="11sp" />
         </LinearLayout>
     </LinearLayout>
 </FrameLayout>

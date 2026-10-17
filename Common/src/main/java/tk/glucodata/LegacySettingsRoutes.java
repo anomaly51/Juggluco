@@ -10,28 +10,6 @@ package tk.glucodata;
 public final class LegacySettingsRoutes {
     private LegacySettingsRoutes() {}
 
-    public static boolean showList(MainActivity activity,Runnable dismissSettings) {
-        GlucoseCurve curve=Applic.app.curve;
-        if(curve==null)
-            return false;
-        dismissSettings.run();
-        activity.lightBars(!Natives.getInvertColors());
-        Natives.makenumbers();
-        activity.requestRender();
-        curve.getnumcontrol(activity);
-        return true;
-    }
-
-    public static boolean showStatistics(MainActivity activity,Runnable dismissSettings) {
-        if(!Natives.makepercentages())
-            return false;
-        dismissSettings.run();
-        activity.lightBars(!Natives.getInvertColors());
-        activity.requestRender();
-        Stats.mkstats(activity);
-        return true;
-    }
-
     public static boolean showLastScan(MainActivity activity,Runnable dismissSettings) {
         if(!Natives.showlastscan())
             return false;

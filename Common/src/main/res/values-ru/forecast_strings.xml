@@ -1,12 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="forecast_dashboard_unavailable">Прогноз</string>
-    <string name="forecast_dashboard_loading">Проверяем…</string>
-    <string name="forecast_dashboard_ready">%1$d мин</string>
-    <string name="forecast_dashboard_learning">Подготовка</string>
-    <string name="forecast_dashboard_preview">Демо</string>
-    <string name="forecast_dashboard_description">Статус прогноза: %1$s. Открыть подробности.</string>
-
     <string name="forecast_page_title">Прогноз глюкозы</string>
     <string name="forecast_page_subtitle">Расчётная динамика на следующие 120 минут</string>
     <string name="forecast_refresh">Обновить прогноз</string>
@@ -29,8 +22,31 @@
     <string name="forecast_backend_error">Не удалось обновить прогноз. Проверьте соединение и повторите попытку.</string>
     <string name="forecast_default_notice">Экспериментальная оценка. Еда, инсулин, активность, болезнь и погрешность сенсора могут изменить траекторию.</string>
 
+    <string name="forecast_outlook_label">ВЕРОЯТНАЯ ТРАЕКТОРИЯ</string>
+    <string name="forecast_outlook_waiting">Ожидаем прогноз</string>
+    <string name="forecast_outlook_value">%1$s %2$s %3$s</string>
+    <string name="forecast_outcome_waiting">Следующий пригодный прогноз появится здесь.</string>
+    <string name="forecast_outcome_target">Ожидаемый диапазон %1$s–%2$s %3$s · в целевой зоне</string>
+    <string name="forecast_outcome_range">Ожидаемый диапазон %1$s–%2$s %3$s</string>
+    <string name="forecast_outcome_low_possible">Возможен выход ниже цели примерно через %1$d мин</string>
+    <string name="forecast_outcome_low_likely">Вероятен выход ниже цели примерно через %1$d мин</string>
+    <string name="forecast_outcome_high_possible">Возможен выход выше цели примерно через %1$d мин</string>
+    <string name="forecast_outcome_high_likely">Вероятен выход выше цели примерно через %1$d мин</string>
+    <string name="forecast_generated_compact">Обновлено %1$s</string>
+    <string name="forecast_chart_now">Сейчас</string>
+    <string name="forecast_chart_minutes_ahead">+%1$d мин</string>
+    <string name="forecast_chart_waiting">Траектория прогноза пока недоступна</string>
+    <string name="forecast_chart_description">Прогноз от %1$s до %2$s %3$s на %4$d минут. Пунктир — вероятная траектория, полоса — диапазон неопределённости.</string>
+
     <string name="forecast_factors_title">Активные факторы</string>
     <string name="forecast_factors_empty">В прогнозе нет активной записанной еды или инсулина</string>
+    <string name="forecast_factors_summary_none">Нет активных записей еды или инсулина</string>
+    <plurals name="forecast_factors_summary_count">
+        <item quantity="one">%1$d активная запись влияет на траекторию</item>
+        <item quantity="few">%1$d активные записи влияют на траекторию</item>
+        <item quantity="many">%1$d активных записей влияют на траекторию</item>
+        <item quantity="other">%1$d активной записи влияют на траекторию</item>
+    </plurals>
     <string name="forecast_factor_meal">Еда</string>
     <string name="forecast_factor_rapid">NovoRapid</string>
     <string name="forecast_factor_long">Tresiba</string>
@@ -43,8 +59,8 @@
     <string name="forecast_factor_carbs_amount">%1$s г углеводов</string>
     <string name="forecast_factor_insulin_amount">%1$s ЕД</string>
     <string name="forecast_factor_amount_unknown">Количество недоступно</string>
-    <string name="forecast_factor_timeline_estimated">Запись %1$s · расчётное начало действия %2$s · пик %3$s–%4$s · окончание %5$s–%6$s</string>
-    <string name="forecast_factor_timeline">Начало %1$s · пик %2$s · окончание %3$s</string>
+    <string name="forecast_factor_action_window_estimated">Запись %1$s · расчётное начало действия %2$s · пик %3$s–%4$s · окончание %5$s–%6$s</string>
+    <string name="forecast_factor_action_window">Начало %1$s · пик %2$s · окончание %3$s</string>
     <string name="forecast_factor_remaining_minutes">Осталось примерно %1$d мин</string>
     <string name="forecast_factor_remaining_hours">Осталось примерно %1$d ч %2$d мин</string>
     <string name="forecast_factor_complete">Расчётное действие завершилось</string>
@@ -94,6 +110,10 @@
     <string name="forecast_mae_value_mmol">%1$.1f ммоль/л</string>
 
     <string name="forecast_model_title">Готовность прогноза</string>
+    <string name="forecast_model_details_title">Как рассчитан прогноз</string>
+    <string name="forecast_model_details_summary">Данные, фактическая ошибка и версия модели</string>
+    <string name="forecast_disclosure_open">Открыть: %1$s</string>
+    <string name="forecast_disclosure_close">Закрыть: %1$s</string>
     <string name="forecast_model_waiting">Пока недостаточно истории</string>
     <string name="forecast_training_summary">%1$s · %2$d из %3$d примеров</string>
     <string name="forecast_training_state_unknown">Ожидание</string>

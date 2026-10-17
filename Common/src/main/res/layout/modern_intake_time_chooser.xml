@@ -5,7 +5,8 @@
     android:layout_margin="16dp"
     android:fillViewport="false"
     android:overScrollMode="ifContentScrolls"
-    android:scrollbars="none">
+    android:scrollbars="none"
+    android:theme="@style/ModernDashboardThemeOverlay">
 
 <LinearLayout
     android:layout_width="match_parent"

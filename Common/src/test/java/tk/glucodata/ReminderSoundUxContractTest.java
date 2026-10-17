@@ -83,7 +83,7 @@ public class ReminderSoundUxContractTest {
                 "MainActivity.systembarBottom+ClinicalUi.dp(act,24)"));
         assertTrue(phoneScreen.contains("phoneRecycler.setNestedScrollingEnabled(false)"));
         assertTrue(phoneScreen.contains("listHost.setMinimumHeight(ClinicalUi.dp(act,420))"));
-        assertTrue(phoneScreen.contains("act.lightBars(false)"));
+        assertTrue(phoneScreen.contains("act.themeLightBars()"));
     }
 
     private static String source(String name) throws IOException {

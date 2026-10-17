@@ -6,7 +6,10 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.KeyEvent;
 import android.view.WindowManager;
+
+import androidx.core.content.ContextCompat;
 
 import java.lang.ref.WeakReference;
 
@@ -18,6 +21,11 @@ public final class CriticalGlucoseAlarmActivity extends Activity {
     private String token;
     private CriticalAlarmSurface surface;
     private Boolean lastLocked;
+
+    @Override
+    protected void attachBaseContext(android.content.Context base) {
+        super.attachBaseContext(AppLanguage.wrap(base));
+    }
 
     @Override
     protected void onCreate(Bundle state) {
@@ -40,8 +48,10 @@ public final class CriticalGlucoseAlarmActivity extends Activity {
                 // obscured-touch filtering on the actions remains enabled.
             }
         }
-        getWindow().setStatusBarColor(0xFF090B0D);
-        getWindow().setNavigationBarColor(0xFF07090A);
+        int retroCanvas = ContextCompat.getColor(this,
+                R.color.lifeprompt_background);
+        getWindow().setStatusBarColor(retroCanvas);
+        getWindow().setNavigationBarColor(retroCanvas);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerBackGuard();
         }
@@ -79,6 +89,18 @@ public final class CriticalGlucoseAlarmActivity extends Activity {
         // is the only visible way to end a critical presentation.
     }
 
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        CriticalAlarmVolumeKeyController.Result result =
+                CriticalAlarmVolumeKeyController.dispatch(this, token, event);
+        if (!result.consumed) return super.dispatchKeyEvent(event);
+        if (result.advanced && surface != null) {
+            surface.setVolumeDownProgress(token, result.progress);
+        }
+        if (result.acknowledged) finishSafely();
+        return true;
+    }
+
     @android.annotation.TargetApi(Build.VERSION_CODES.TIRAMISU)
     private void registerBackGuard() {
         // targetSdk 36 routes predictive Back around onBackPressed(). Consume
@@ -91,7 +113,7 @@ public final class CriticalGlucoseAlarmActivity extends Activity {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        // Re-reveal the value and timeline immediately after the user unlocks
+        // Re-reveal the value and graph immediately after the user unlocks
         // the device while this full-screen alarm remains in front.
         if (hasFocus && lastLocked != null
                 && lastLocked.booleanValue() != isDeviceLocked()) {
@@ -136,6 +158,8 @@ public final class CriticalGlucoseAlarmActivity extends Activity {
                         }
                     }
                 });
+        surface.setVolumeDownProgress(token,
+                CriticalAlarmVolumeKeyController.progress(this, token));
     }
 
     private boolean isDeviceLocked() {

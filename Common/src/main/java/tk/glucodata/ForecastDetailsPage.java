@@ -5,9 +5,7 @@ import static android.view.View.INVISIBLE;
 import static android.view.View.VISIBLE;
 import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 
-import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -16,6 +14,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import androidx.core.content.ContextCompat;
@@ -29,9 +28,12 @@ import java.util.Locale;
 
 /** Full-screen, read-only explanation of the personal forecast state. */
 final class ForecastDetailsPage {
+    private static final long FRESHNESS_TICK_MS = 30_000L;
+
     private final MainActivity activity;
     private final ForecastRepository repository;
     private final ForecastRepository.Listener listener = this::render;
+    private final Runnable freshnessTick = this::refreshTimeSensitiveContent;
 
     private View root;
     private View page;
@@ -40,6 +42,9 @@ final class ForecastDetailsPage {
     private TextView status;
     private TextView horizon;
     private TextView confidence;
+    private TextView outlook;
+    private TextView outcome;
+    private ForecastTrajectoryView trajectory;
     private TextView generated;
     private TextView error;
     private TextView conditional;
@@ -49,6 +54,17 @@ final class ForecastDetailsPage {
     private TextView accuracy30d;
     private TextView training;
     private TextView version;
+    private View factorsToggle;
+    private View factorsBody;
+    private TextView factorsSummary;
+    private TextView factorsChevron;
+    private View modelToggle;
+    private View modelBody;
+    private TextView modelChevron;
+    private ScrollView scroll;
+    private boolean factorsExpanded;
+    private boolean modelExpanded;
+    private ForecastRepository.State latestState;
     private boolean closed;
 
     private ForecastDetailsPage(MainActivity activity) {
@@ -68,14 +84,24 @@ final class ForecastDetailsPage {
     }
 
     private void show() {
+        inflatePage(true,0);
+        repository.addListener(listener);
+        repository.refreshNow();
+    }
+
+    private void inflatePage(boolean registerBack,int restoredScrollY) {
         root = LayoutInflater.from(activity).inflate(
                 R.layout.modern_forecast_details, null, false);
         page = root.findViewById(R.id.forecast_details_page);
+        scroll = root.findViewById(R.id.forecast_details_scroll);
         loading = root.findViewById(R.id.forecast_details_loading);
         refresh = root.findViewById(R.id.forecast_details_refresh);
         status = root.findViewById(R.id.forecast_details_status);
         horizon = root.findViewById(R.id.forecast_details_horizon);
         confidence = root.findViewById(R.id.forecast_details_confidence);
+        outlook = root.findViewById(R.id.forecast_details_outlook);
+        outcome = root.findViewById(R.id.forecast_details_outcome);
+        trajectory = root.findViewById(R.id.forecast_details_trajectory);
         generated = root.findViewById(R.id.forecast_details_generated);
         error = root.findViewById(R.id.forecast_details_error);
         conditional = root.findViewById(R.id.forecast_details_conditional);
@@ -85,10 +111,34 @@ final class ForecastDetailsPage {
         accuracy30d = root.findViewById(R.id.forecast_details_accuracy_30d);
         training = root.findViewById(R.id.forecast_details_training);
         version = root.findViewById(R.id.forecast_details_version);
+        factorsToggle = root.findViewById(R.id.forecast_details_factors_toggle);
+        factorsBody = root.findViewById(R.id.forecast_details_factors_body);
+        factorsSummary = root.findViewById(
+                R.id.forecast_details_factors_summary);
+        factorsChevron = root.findViewById(
+                R.id.forecast_details_factors_chevron);
+        modelToggle = root.findViewById(R.id.forecast_details_model_toggle);
+        modelBody = root.findViewById(R.id.forecast_details_model_body);
+        modelChevron = root.findViewById(R.id.forecast_details_model_chevron);
 
         root.findViewById(R.id.forecast_details_close)
                 .setOnClickListener(view -> close(true));
         refresh.setOnClickListener(view -> repository.refreshNow());
+        factorsToggle.setOnClickListener(view -> {
+            factorsExpanded = !factorsExpanded;
+            applyDisclosure(factorsToggle, factorsBody, factorsChevron,
+                    factorsExpanded, R.string.forecast_factors_title);
+        });
+        modelToggle.setOnClickListener(view -> {
+            modelExpanded = !modelExpanded;
+            applyDisclosure(modelToggle, modelBody, modelChevron,
+                    modelExpanded, R.string.forecast_model_details_title);
+        });
+        applyDisclosure(factorsToggle, factorsBody, factorsChevron,
+                factorsExpanded,
+                R.string.forecast_factors_title);
+        applyDisclosure(modelToggle, modelBody, modelChevron, modelExpanded,
+                R.string.forecast_model_details_title);
         ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
             Insets safe = insets.getInsets(
                     WindowInsetsCompat.Type.systemBars()
@@ -104,29 +154,25 @@ final class ForecastDetailsPage {
 
         activity.addMyContentView(root,
                 new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT), false);
-        MainActivity.setonback(() -> close(false));
-        repository.addListener(listener);
+        if (registerBack) MainActivity.setonback(() -> close(false));
         ViewCompat.requestApplyInsets(root);
-        activity.lightBars(false);
-        repository.refreshNow();
+        activity.themeLightBars();
+        if (restoredScrollY > 0) {
+            scroll.post(() -> scroll.scrollTo(0, restoredScrollY));
+        }
     }
 
     private void render(ForecastRepository.State state) {
         if (closed || root == null) return;
+        latestState = state;
         loading.setVisibility(state.loading ? VISIBLE : GONE);
         refresh.setEnabled(!state.loading);
         refresh.setVisibility(state.loading ? INVISIBLE : VISIBLE);
 
         ForecastSnapshot forecast = state.forecast;
         ForecastModelStatus model = state.model;
-        int statusLabel = state.loading ? R.string.forecast_refresh_loading
-                : statusLabel(state);
-        updateLiveStatus(status, activity.getString(statusLabel));
-        boolean ready = forecast.isGraphUsable(System.currentTimeMillis())
-                && state.error.isEmpty();
-        status.setTextColor(ContextCompat.getColor(activity, ready
-                ? R.color.modern_secondary_accent
-                : R.color.modern_secondary_text_secondary));
+        renderTimeSensitiveContent(state, System.currentTimeMillis());
+        scheduleFreshnessTick();
 
         if (!forecast.points.isEmpty() && forecast.horizonMinutes > 0) {
             horizon.setText(activity.getString(
@@ -143,9 +189,8 @@ final class ForecastDetailsPage {
         if (!forecast.points.isEmpty() && forecast.generatedAtMs > 0L
                 && forecast.basedOnReadingAtMs > 0L) {
             generated.setText(activity.getString(
-                    R.string.forecast_generated_at,
-                    dateTime(forecast.generatedAtMs),
-                    time(forecast.basedOnReadingAtMs)));
+                    R.string.forecast_generated_compact,
+                    time(forecast.generatedAtMs)));
         } else {
             generated.setText(R.string.forecast_not_generated);
         }
@@ -216,6 +261,174 @@ final class ForecastDetailsPage {
                         modelVersion));
     }
 
+    private void renderOutlook(ForecastSnapshot forecast, boolean ready,
+            long nowMs) {
+        int unit = displayUnit();
+        trajectory.setForecast(forecast, unit);
+        if (!ready || forecast.points.size() < 2) {
+            outlook.setText(R.string.forecast_outlook_waiting);
+            outcome.setText(R.string.forecast_outcome_waiting);
+            outlook.setTextColor(ContextCompat.getColor(activity,
+                    R.color.lifeprompt_on_surface));
+            outcome.setTextColor(ContextCompat.getColor(activity,
+                    R.color.lifeprompt_on_surface_variant));
+            trajectory.setVisibility(GONE);
+            trajectory.setContentDescription(activity.getString(
+                    R.string.forecast_chart_waiting));
+            return;
+        }
+
+        trajectory.setVisibility(VISIBLE);
+        ForecastSnapshot.Point first = forecast.points.get(0);
+        ForecastSnapshot.Point last = forecast.points.get(
+                forecast.points.size() - 1);
+        float starting = forecast.basedOnGlucoseMgDl == null
+                ? first.medianMgDl : forecast.basedOnGlucoseMgDl;
+        float delta = last.medianMgDl - starting;
+        String arrow = delta > 9f ? "↗" : delta < -9f ? "↘" : "→";
+        String startValue = glucose(starting, unit);
+        String endValue = glucose(last.medianMgDl, unit);
+        String unitName = unit == 1 ? "mmol/L" : "mg/dL";
+        outlook.setText(activity.getString(R.string.forecast_outlook_value,
+                startValue, arrow, endValue));
+        outlook.setTextColor(ContextCompat.getColor(activity,
+                glucoseColor(last.medianMgDl)));
+
+        ForecastSnapshot.ThresholdCrossing crossing = earliestFutureCrossing(
+                forecast.alertAssessment, nowMs, last.atMs);
+        if (crossing != null) {
+            boolean low = "low".equals(crossing.direction);
+            boolean likely = "likely".equals(crossing.evidence);
+            int label = low
+                    ? (likely ? R.string.forecast_outcome_low_likely
+                    : R.string.forecast_outcome_low_possible)
+                    : (likely ? R.string.forecast_outcome_high_likely
+                    : R.string.forecast_outcome_high_possible);
+            outcome.setText(activity.getString(label,
+                    remainingMinutes(crossing, nowMs)));
+            outcome.setTextColor(ContextCompat.getColor(activity, low
+                    ? R.color.lifeprompt_glucose_low
+                    : R.color.lifeprompt_glucose_high));
+        } else {
+            boolean fullyInside = true;
+            for (ForecastSnapshot.Point point : forecast.points) {
+                if (point.lowMgDl < ForecastSnapshot.AlertAssessment
+                        .DEFAULT_TARGET_LOW_MG_DL
+                        || point.highMgDl > ForecastSnapshot.AlertAssessment
+                        .DEFAULT_TARGET_HIGH_MG_DL) {
+                    fullyInside = false;
+                    break;
+                }
+            }
+            outcome.setText(activity.getString(fullyInside
+                            ? R.string.forecast_outcome_target
+                            : R.string.forecast_outcome_range,
+                    glucose(last.lowMgDl, unit),
+                    glucose(last.highMgDl, unit), unitName));
+            outcome.setTextColor(ContextCompat.getColor(activity, fullyInside
+                    ? R.color.lifeprompt_glucose_in_target
+                    : R.color.lifeprompt_on_surface_variant));
+        }
+        trajectory.setContentDescription(activity.getString(
+                R.string.forecast_chart_description, startValue, endValue,
+                unitName, forecast.horizonMinutes));
+    }
+
+    static ForecastSnapshot.ThresholdCrossing earliestFutureCrossing(
+            ForecastSnapshot.AlertAssessment assessment, long nowMs,
+            long chartEndMs) {
+        if (assessment == null) return null;
+        ForecastSnapshot.ThresholdCrossing[] candidates = {
+                assessment.lowLikely, assessment.lowPossible,
+                assessment.highLikely, assessment.highPossible
+        };
+        ForecastSnapshot.ThresholdCrossing earliest = null;
+        for (ForecastSnapshot.ThresholdCrossing candidate : candidates) {
+            if (candidate == null || candidate.crossingAtMs <= nowMs
+                    || candidate.crossingAtMs > chartEndMs) continue;
+            if (earliest == null || candidate.crossingAtMs
+                    < earliest.crossingAtMs) earliest = candidate;
+        }
+        return earliest;
+    }
+
+    static int remainingMinutes(ForecastSnapshot.ThresholdCrossing crossing,
+            long nowMs) {
+        if (crossing == null || crossing.crossingAtMs <= nowMs) return 0;
+        long remainingMs = crossing.crossingAtMs - nowMs;
+        long roundedUp = (remainingMs + 59_999L) / 60_000L;
+        return (int) Math.min(Integer.MAX_VALUE, roundedUp);
+    }
+
+    private void renderTimeSensitiveContent(ForecastRepository.State state,
+            long nowMs) {
+        ForecastSnapshot forecast = state.forecast;
+        boolean ready = forecast.isGraphUsable(nowMs) && state.error.isEmpty();
+        int statusLabel = state.loading ? R.string.forecast_refresh_loading
+                : !state.error.isEmpty() ? statusLabel(state)
+                : locallyStale(forecast, nowMs)
+                ? R.string.forecast_status_stale : statusLabel(state);
+        updateLiveStatus(status, activity.getString(statusLabel));
+        status.setSelected(ready);
+        status.setTextColor(ContextCompat.getColor(activity, ready
+                ? R.color.lifeprompt_on_primary_container
+                : R.color.lifeprompt_on_surface_variant));
+        renderOutlook(forecast, ready, nowMs);
+    }
+
+    private static boolean locallyStale(ForecastSnapshot forecast,
+            long nowMs) {
+        if (forecast == null || forecast.basedOnReadingAtMs <= 0L) return false;
+        String state = forecast.status;
+        if (!("ready".equalsIgnoreCase(state)
+                || "learning".equalsIgnoreCase(state)
+                || "cold_start".equalsIgnoreCase(state))) return false;
+        return nowMs - forecast.basedOnReadingAtMs
+                > ForecastSnapshot.MAX_GRAPH_AGE_MS;
+    }
+
+    private void scheduleFreshnessTick() {
+        if (root == null || closed) return;
+        root.removeCallbacks(freshnessTick);
+        root.postDelayed(freshnessTick, FRESHNESS_TICK_MS);
+    }
+
+    private void refreshTimeSensitiveContent() {
+        if (closed || root == null || latestState == null) return;
+        renderTimeSensitiveContent(latestState, System.currentTimeMillis());
+        scheduleFreshnessTick();
+    }
+
+    private static int glucoseColor(float valueMgDl) {
+        if (valueMgDl < ForecastSnapshot.AlertAssessment
+                .DEFAULT_TARGET_LOW_MG_DL) {
+            return R.color.lifeprompt_glucose_low;
+        }
+        if (valueMgDl > ForecastSnapshot.AlertAssessment
+                .DEFAULT_TARGET_HIGH_MG_DL) {
+            return R.color.lifeprompt_glucose_high;
+        }
+        return R.color.lifeprompt_glucose_in_target;
+    }
+
+    private static String glucose(float mgDl, int unit) {
+        return unit == 1
+                ? String.format(Locale.getDefault(), "%.1f",
+                        mgDl / Applic.mgdLmult)
+                : String.format(Locale.getDefault(), "%.0f", mgDl);
+    }
+
+    private void applyDisclosure(View toggle, View body, TextView chevron,
+            boolean expanded, int titleRes) {
+        body.setVisibility(expanded ? VISIBLE : GONE);
+        chevron.setText(expanded ? "⌃" : "⌄");
+        toggle.setSelected(expanded);
+        toggle.setContentDescription(activity.getString(expanded
+                        ? R.string.forecast_disclosure_close
+                        : R.string.forecast_disclosure_open,
+                activity.getString(titleRes)));
+    }
+
     static boolean updateLiveStatus(TextView view, CharSequence next) {
         if (view == null || TextUtils.equals(view.getText(), next)) {
             return false;
@@ -268,6 +481,7 @@ final class ForecastDetailsPage {
     private void renderFactors(java.util.List<ForecastSnapshot.Activity> values) {
         factors.removeAllViews();
         if (values == null || values.isEmpty()) {
+            factorsSummary.setText(R.string.forecast_factors_summary_none);
             factors.addView(factorEmptyView());
             return;
         }
@@ -279,97 +493,103 @@ final class ForecastDetailsPage {
             View card = factorCard(factor, now);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                     MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            if (shown > 0) params.topMargin = ClinicalUi.dp(activity, 10);
+            if (shown > 0) params.topMargin = ClinicalUi.dp(activity, 12);
             factors.addView(card, params);
             shown++;
         }
-        if (shown == 0) factors.addView(factorEmptyView());
+        if (shown == 0) {
+            factorsSummary.setText(R.string.forecast_factors_summary_none);
+            factors.addView(factorEmptyView());
+        } else {
+            factorsSummary.setText(activity.getResources().getQuantityString(
+                    R.plurals.forecast_factors_summary_count, shown, shown));
+        }
     }
 
     private View factorEmptyView() {
-        TextView empty = bodyText(13f,
-                R.color.modern_secondary_text_secondary, Typeface.NORMAL);
+        TextView empty = bodyText(14f,
+                R.color.lifeprompt_on_surface_variant, Typeface.NORMAL);
         empty.setText(R.string.forecast_factors_empty);
-        empty.setPadding(0, ClinicalUi.dp(activity, 3), 0,
-                ClinicalUi.dp(activity, 3));
+        empty.setLineSpacing(0f, 1.12f);
+        empty.setBackgroundResource(R.drawable.forecast_details_surface_card);
+        empty.setPadding(ClinicalUi.dp(activity, 16),
+                ClinicalUi.dp(activity, 16), ClinicalUi.dp(activity, 16),
+                ClinicalUi.dp(activity, 16));
         return empty;
     }
 
     private View factorCard(ForecastSnapshot.Activity factor, long now) {
         LinearLayout card = new LinearLayout(activity);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(ClinicalUi.dp(activity, 14),
-                ClinicalUi.dp(activity, 14), ClinicalUi.dp(activity, 14),
-                ClinicalUi.dp(activity, 13));
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(ContextCompat.getColor(activity,
-                R.color.modern_secondary_surface_raised));
-        background.setCornerRadius(ClinicalUi.dp(activity, 18));
-        int factorColor = factorColor(factor.kind);
-        background.setStroke(ClinicalUi.dp(activity, 1),
-                Color.argb(105, Color.red(factorColor),
-                        Color.green(factorColor), Color.blue(factorColor)));
-        card.setBackground(background);
+        card.setPadding(ClinicalUi.dp(activity, 16),
+                ClinicalUi.dp(activity, 16), ClinicalUi.dp(activity, 16),
+                ClinicalUi.dp(activity, 16));
+        card.setBackgroundResource(R.drawable.forecast_details_surface_card);
 
         LinearLayout header = new LinearLayout(activity);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setBaselineAligned(false);
         TextView title = bodyText(16f,
-                R.color.modern_secondary_text_primary, Typeface.BOLD);
+                R.color.lifeprompt_on_surface, Typeface.BOLD);
         title.setText(factorLabel(factor));
         header.addView(title, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         TextView amount = bodyText(12f,
-                R.color.modern_secondary_text_primary, Typeface.BOLD);
+                R.color.lifeprompt_on_primary_container, Typeface.BOLD);
         amount.setGravity(Gravity.CENTER);
-        amount.setMinHeight(ClinicalUi.dp(activity, 30));
-        amount.setPadding(ClinicalUi.dp(activity, 10), 0,
-                ClinicalUi.dp(activity, 10), 0);
-        amount.setBackgroundResource(R.drawable.intake_chip);
+        amount.setMinHeight(ClinicalUi.dp(activity, 36));
+        amount.setMaxLines(2);
+        amount.setPadding(ClinicalUi.dp(activity, 12),
+                ClinicalUi.dp(activity, 4), ClinicalUi.dp(activity, 12),
+                ClinicalUi.dp(activity, 4));
+        amount.setBackgroundResource(R.drawable.forecast_details_amount_chip);
         amount.setText(factorAmount(factor));
-        header.addView(amount, new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams amountParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        amountParams.leftMargin = ClinicalUi.dp(activity, 12);
+        header.addView(amount, amountParams);
         card.addView(header);
 
-        TextView explanation = bodyText(13f,
-                R.color.modern_secondary_text_secondary, Typeface.NORMAL);
-        explanation.setLineSpacing(0f, 1.12f);
+        TextView explanation = bodyText(14f,
+                R.color.lifeprompt_on_surface_variant, Typeface.NORMAL);
+        explanation.setLineSpacing(0f, 1.15f);
         explanation.setText(factorExplanation(factor));
         LinearLayout.LayoutParams explanationParams =
                 new LinearLayout.LayoutParams(MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT);
-        explanationParams.topMargin = ClinicalUi.dp(activity, 9);
+        explanationParams.topMargin = ClinicalUi.dp(activity, 12);
         card.addView(explanation, explanationParams);
 
-        TextView timeline = bodyText(12f,
-                R.color.modern_secondary_text_secondary, Typeface.NORMAL);
-        timeline.setText(factor.hasEstimatedActionWindow()
+        TextView actionWindow = bodyText(13f,
+                R.color.lifeprompt_on_surface_variant, Typeface.NORMAL);
+        actionWindow.setText(factor.hasEstimatedActionWindow()
                 ? activity.getString(
-                        R.string.forecast_factor_timeline_estimated,
+                        R.string.forecast_factor_action_window_estimated,
                         moment(factor.startMs, now),
                         moment(factor.effectiveOnsetMs(), now),
                         moment(factor.effectivePeakLowMs(), now),
                         moment(factor.effectivePeakHighMs(), now),
                         moment(factor.effectiveEndLowMs(), now),
                         moment(factor.effectiveEndHighMs(), now))
-                : activity.getString(R.string.forecast_factor_timeline,
+                : activity.getString(R.string.forecast_factor_action_window,
                         moment(factor.startMs, now),
                         moment(factor.peakMs, now),
                         moment(factor.endMs, now)));
-        LinearLayout.LayoutParams timelineParams =
+        LinearLayout.LayoutParams actionWindowParams =
                 new LinearLayout.LayoutParams(MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT);
-        timelineParams.topMargin = ClinicalUi.dp(activity, 10);
-        card.addView(timeline, timelineParams);
+        actionWindowParams.topMargin = ClinicalUi.dp(activity, 12);
+        card.addView(actionWindow, actionWindowParams);
 
         TextView remaining = bodyText(12f,
-                R.color.modern_secondary_text_muted, Typeface.BOLD);
+                R.color.lifeprompt_secondary, Typeface.BOLD);
         remaining.setText(remainingText(factor.effectiveEndHighMs(), now));
         LinearLayout.LayoutParams remainingParams =
                 new LinearLayout.LayoutParams(MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT);
-        remainingParams.topMargin = ClinicalUi.dp(activity, 4);
+        remainingParams.topMargin = ClinicalUi.dp(activity, 8);
         card.addView(remaining, remainingParams);
 
         ForecastActivityMiniChart chart =
@@ -380,32 +600,32 @@ final class ForecastDetailsPage {
                 R.string.forecast_factor_chart_description,
                 factorLabel(factor), contribution));
         LinearLayout.LayoutParams chartParams = new LinearLayout.LayoutParams(
-                MATCH_PARENT, ClinicalUi.dp(activity, 84));
-        chartParams.topMargin = ClinicalUi.dp(activity, 10);
+                MATCH_PARENT, ClinicalUi.dp(activity, 88));
+        chartParams.topMargin = ClinicalUi.dp(activity, 12);
         card.addView(chart, chartParams);
 
-        TextView contributionView = bodyText(12f,
-                R.color.modern_secondary_text_primary, Typeface.BOLD);
+        TextView contributionView = bodyText(13f,
+                R.color.lifeprompt_on_surface, Typeface.BOLD);
         contributionView.setText(contribution);
         card.addView(contributionView);
 
         float profileConfidence = factor.profileConfidence == null
                 ? factor.confidence : factor.profileConfidence;
-        TextView profile = bodyText(11f,
-                R.color.modern_secondary_text_muted, Typeface.NORMAL);
+        TextView profile = bodyText(12f,
+                R.color.lifeprompt_secondary, Typeface.NORMAL);
         profile.setText(activity.getString(R.string.forecast_factor_profile,
                 profileSource(factor.profileSource),
                 Math.round(profileConfidence * 100f)));
         LinearLayout.LayoutParams profileParams = new LinearLayout.LayoutParams(
                 MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        profileParams.topMargin = ClinicalUi.dp(activity, 7);
+        profileParams.topMargin = ClinicalUi.dp(activity, 8);
         card.addView(profile, profileParams);
 
         if (!factor.actionModel.isEmpty()
                 || factor.attributionConfidence != null
                 || !factor.identifiability.isEmpty()) {
-            TextView effective = bodyText(11f,
-                    R.color.modern_secondary_text_muted, Typeface.NORMAL);
+            TextView effective = bodyText(12f,
+                    R.color.lifeprompt_secondary, Typeface.NORMAL);
             float attribution = factor.attributionConfidence == null
                     ? factor.confidence : factor.attributionConfidence;
             effective.setText(activity.getString(
@@ -416,19 +636,19 @@ final class ForecastDetailsPage {
             LinearLayout.LayoutParams effectiveParams =
                     new LinearLayout.LayoutParams(MATCH_PARENT,
                             ViewGroup.LayoutParams.WRAP_CONTENT);
-            effectiveParams.topMargin = ClinicalUi.dp(activity, 3);
+            effectiveParams.topMargin = ClinicalUi.dp(activity, 4);
             card.addView(effective, effectiveParams);
         }
         if (factor.overlapCount > 0) {
-            TextView overlap = bodyText(11f,
-                    R.color.modern_secondary_text_muted, Typeface.BOLD);
+            TextView overlap = bodyText(12f,
+                    R.color.lifeprompt_secondary, Typeface.BOLD);
             overlap.setText(activity.getResources().getQuantityString(
                     R.plurals.forecast_factor_overlap,
                     factor.overlapCount, factor.overlapCount));
             LinearLayout.LayoutParams overlapParams =
                     new LinearLayout.LayoutParams(MATCH_PARENT,
                             ViewGroup.LayoutParams.WRAP_CONTENT);
-            overlapParams.topMargin = ClinicalUi.dp(activity, 4);
+            overlapParams.topMargin = ClinicalUi.dp(activity, 8);
             card.addView(overlap, overlapParams);
         }
         return card;
@@ -438,7 +658,7 @@ final class ForecastDetailsPage {
         TextView view = new TextView(activity);
         view.setTextSize(TypedValue.COMPLEX_UNIT_SP, size);
         view.setTextColor(ContextCompat.getColor(activity, color));
-        view.setTypeface(Typeface.create("sans-serif", style));
+        view.setTypeface(Typeface.create("monospace", style));
         view.setIncludeFontPadding(false);
         return view;
     }
@@ -571,16 +791,6 @@ final class ForecastDetailsPage {
                 return activity.getString(
                         R.string.forecast_identifiability_unknown);
         }
-    }
-
-    private static int factorColor(int kind) {
-        if (kind == ForecastSnapshot.Activity.KIND_RAPID) {
-            return Color.rgb(66, 187, 211);
-        }
-        if (kind == ForecastSnapshot.Activity.KIND_LONG) {
-            return Color.rgb(142, 122, 217);
-        }
-        return Color.rgb(216, 164, 66);
     }
 
     private String factorLabel(ForecastSnapshot.Activity factor) {
@@ -728,6 +938,17 @@ final class ForecastDetailsPage {
 
     void onConfigurationChanged() {
         if (closed || root == null) return;
+        int preservedScrollY = scroll == null ? 0 : scroll.getScrollY();
+        root.removeCallbacks(freshnessTick);
+        ViewCompat.setOnApplyWindowInsetsListener(root, null);
+        ViewParent oldParent = root.getParent();
+        if (oldParent instanceof ViewGroup) {
+            ((ViewGroup) oldParent).removeView(root);
+        }
+        inflatePage(false, preservedScrollY);
+        if (latestState != null) {
+            render(latestState);
+        }
         root.requestLayout();
         page.requestLayout();
         ViewCompat.requestApplyInsets(root);
@@ -740,13 +961,14 @@ final class ForecastDetailsPage {
     private void close(boolean popBack) {
         if (closed) return;
         closed = true;
+        if (root != null) root.removeCallbacks(freshnessTick);
         repository.removeListener(listener);
         if (popBack) MainActivity.poponback();
         ViewCompat.setOnApplyWindowInsetsListener(root, null);
         ViewParent parent = root.getParent();
         if (parent instanceof ViewGroup) ((ViewGroup) parent).removeView(root);
         activity.onForecastDetailsClosed(this);
-        activity.lightBars(false);
+        activity.themeLightBars();
     }
 
 }

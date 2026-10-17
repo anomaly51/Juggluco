@@ -16,6 +16,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.core.graphics.Insets;
+import androidx.core.content.ContextCompat;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
@@ -106,7 +107,7 @@ final class IntakeEventClusterSheet {
                 new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT), false);
         MainActivity.setonback(this::handleSystemBack);
         ViewCompat.requestApplyInsets(root);
-        activity.lightBars(false);
+        activity.themeLightBars();
         sheet.requestFocus();
     }
 
@@ -222,14 +223,16 @@ final class IntakeEventClusterSheet {
     }
 
     private int accentColor(IntakeEvent event, boolean meal) {
-        if (meal) return Color.rgb(242, 169, 59);
+        if (meal) {
+            return ContextCompat.getColor(activity, R.color.lifeprompt_event_meal);
+        }
         if (IntakeEventDetailsSheet.isRapidInsulin(event)) {
-            return Color.rgb(85, 200, 242);
+            return ContextCompat.getColor(activity, R.color.lifeprompt_event_rapid);
         }
         if (IntakeEventDetailsSheet.isLongInsulin(event)) {
-            return Color.rgb(182, 154, 245);
+            return ContextCompat.getColor(activity, R.color.lifeprompt_event_long);
         }
-        return Color.rgb(145, 165, 184);
+        return ContextCompat.getColor(activity, R.color.lifeprompt_event_other);
     }
 
     private String timeSummary(List<Entry> values) {
@@ -330,6 +333,6 @@ final class IntakeEventClusterSheet {
             }
         }
         activity.onIntakeEventClusterClosed(this);
-        activity.lightBars(false);
+        activity.themeLightBars();
     }
 }

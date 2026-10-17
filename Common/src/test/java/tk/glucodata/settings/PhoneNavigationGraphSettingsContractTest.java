@@ -30,9 +30,11 @@ public class PhoneNavigationGraphSettingsContractTest {
                 "Natives.setsystemui(isChecked)"
         };
         assertTrue(settings.contains("PHONE_GRAPH_DISPLAY_TOGGLE_COUNT=11"));
-        assertTrue(settings.contains("settings_graph_readings_section"));
-        assertTrue(settings.contains("settings_graph_records_section"));
-        assertTrue(settings.contains("settings_graph_presentation_section"));
+        assertTrue(settings.contains("settings_graph_data_disclosure"));
+        assertTrue(settings.contains("settings_ranges_disclosure_summary"));
+        assertTrue(settings.contains("settings_chart_disclosure_summary"));
+        assertTrue(settings.contains("settings_appearance_disclosure_summary"));
+        assertTrue(settings.contains("clinicalDisclosure(context"));
         for(String handler:handlers)
             assertTrue("Graph display lost handler " + handler,settings.contains(handler));
     }
@@ -42,6 +44,7 @@ public class PhoneNavigationGraphSettingsContractTest {
         String menu=source("src/mobile/res/layout/menus.xml");
         String[] removedIds={
                 "newamount",
+                "list","statistics",
                 "now","search","date","dayback","daylater","weekback","weeklater",
                 "scans","calibratedscans","stream","calibratedstream","history",
                 "calibratedhistory","amounts","meals","glucosefloat","darkmode","systemui"
@@ -59,11 +62,12 @@ public class PhoneNavigationGraphSettingsContractTest {
     }
 
     @Test
-    public void phoneMoreHidesLegacyDestinationsButKeepsTheirBindings() throws Exception {
+    public void phoneMoreKeepsOnlyTheRemainingLegacyBindingsHidden()
+            throws Exception {
         String menu=source("src/mobile/res/layout/menus.xml");
         String menuSource=source("src/mobile/java/tk/glucodata/Menus.java");
         String[] hiddenIds={
-                "list","statistics","lastscan","watch","talk","mirror","export","close"
+                "lastscan","watch","talk","mirror","export","close"
         };
         for(String id:hiddenIds) {
             int start=menu.indexOf("android:id=\"@+id/" + id + "\"");
@@ -74,10 +78,31 @@ public class PhoneNavigationGraphSettingsContractTest {
             assertTrue("Legacy binding disappeared: " + id,
                     menuSource.contains("findViewById(R.id." + id + ")"));
         }
+        assertFalse(menuSource.contains("findViewById(R.id.list)"));
+        assertFalse(menuSource.contains("findViewById(R.id.statistics)"));
+        assertFalse(menuSource.contains("Stats.mkstats"));
+        assertFalse(menuSource.contains("Natives.makepercentages"));
         assertTrue(menuSource.contains("BuildConfig.SiBionics==1"));
         assertTrue(menuSource.contains("PhotoScan.scan(act,REQUEST_BARCODE)"));
         assertTrue(menuSource.contains("aboutview.setVisibility(View.GONE)"));
         assertFalse(menuSource.contains("c.doabout(act)"));
+    }
+
+    @Test
+    public void moreAlwaysUsesAnEndSidePanelAndOpensAlertsDirectly()
+            throws Exception {
+        String menu=source("src/mobile/res/layout/menus.xml");
+        String menuSource=source("src/mobile/java/tk/glucodata/Menus.java");
+        assertTrue(menu.contains("@+id/alerts"));
+        assertTrue(menu.contains("android:layout_gravity=\"end\""));
+        assertTrue(menu.contains("android:layout_height=\"match_parent\""));
+        assertFalse(menu.contains("@+id/modern_menu_sheet_handle"));
+        assertTrue(menuSource.contains("Gravity.END"));
+        assertFalse(menuSource.contains("availableDp<600"));
+        assertFalse(menuSource.contains("bottomSheet"));
+        assertFalse(menuSource.contains("Gravity.BOTTOM"));
+        assertFalse(menuSource.contains("modern_menu_bottom_sheet"));
+        assertTrue(menuSource.contains("Settings.showGlucoseAlerts(act"));
     }
 
     @Test
@@ -86,10 +111,33 @@ public class PhoneNavigationGraphSettingsContractTest {
         String dashboardSource=source("src/main/java/tk/glucodata/DashboardChrome.java");
         assertFalse(dashboardLayout.contains("@+id/modern_dashboard_add\""));
         assertFalse(dashboardSource.contains("void addRecord()"));
-        assertTrue(dashboardSource.contains("R.id.modern_dashboard_overview"));
+        assertFalse(dashboardLayout.contains("@+id/modern_dashboard_overview"));
+        assertFalse(dashboardSource.contains("R.id.modern_dashboard_overview"));
+        assertTrue(dashboardSource.contains("DESTINATION_HOME"));
+        assertTrue(dashboardSource.contains("DESTINATION_MORE"));
         assertTrue(dashboardLayout.contains("@+id/modern_dashboard_add_intake"));
         assertTrue(dashboardSource.contains("activity.showIntakeComposer()"));
         assertTrue(dashboardSource.contains("R.id.modern_dashboard_menu"));
+        assertFalse(dashboardLayout.contains("@+id/modern_dashboard_records"));
+        assertFalse(dashboardLayout.contains("@+id/modern_dashboard_statistics"));
+        assertFalse(dashboardSource.contains("R.id.modern_dashboard_records"));
+        assertFalse(dashboardSource.contains("R.id.modern_dashboard_statistics"));
+        assertFalse(dashboardLayout.contains("@+id/modern_dashboard_sensor"));
+        assertFalse(dashboardLayout.contains("@+id/modern_dashboard_forecast"));
+        assertFalse(dashboardLayout.contains("modern_dashboard_target_band"));
+    }
+
+    @Test
+    public void forecastDetailsMovedFromHomeIntoGlucoseSettings()
+            throws Exception {
+        String settings=source("src/main/java/tk/glucodata/settings/Settings.java");
+        String mainActivity=source("src/main/java/tk/glucodata/MainActivity.java");
+        assertTrue(settings.contains("R.string.settings_forecast_title"));
+        assertTrue(settings.contains("phoneSettingsPageSection(context,R.string.settings_forecast_section)"));
+        assertTrue(settings.contains("phoneSettingsGroup(context,forecastAction)"));
+        assertTrue(settings.contains("context.showForecastDetails()"));
+        assertTrue(mainActivity.contains("public void showForecastDetails()"));
+        assertTrue(mainActivity.contains("PredictiveAlertNotifier.EXTRA_OPEN_FORECAST"));
     }
 
     private static String source(String relative) throws IOException {

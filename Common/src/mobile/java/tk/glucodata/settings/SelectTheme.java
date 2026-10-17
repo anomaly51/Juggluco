@@ -306,7 +306,7 @@ private static class ReselectSpinner extends Spinner {
 
         TextView themeName = new TextView(context);
         themeName.setTextSize(28);
-        themeName.setTypeface(Typeface.create("sans-serif",Typeface.BOLD));
+        themeName.setTypeface(Typeface.create("monospace",Typeface.BOLD));
         themeName.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
         themeName.setMinHeight(dp(context,64));
 

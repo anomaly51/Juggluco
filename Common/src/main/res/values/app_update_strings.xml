@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_update_title">App updates</string>
+    <string name="app_update_footer">Updates</string>
+    <string name="app_update_automatic_description">Updates download automatically when internet is available. Installation waits until you are on Home and no alert is active. Android may briefly restart the app or ask for confirmation.</string>
+    <string name="app_update_check">Check now</string>
+    <string name="app_update_allow">Allow updates</string>
+    <string name="app_update_pause">Pause automatic updates</string>
+    <string name="app_update_paused">Automatic downloads and installation are paused. You can still check for a new version.</string>
+    <string name="app_update_enable">Enable automatic updates</string>
+    <string name="app_update_checking">Checking for updates…</string>
+    <string name="app_update_downloading">Downloading update…</string>
+    <string name="app_update_ready">Update ready. Return to Home after the active alert or task is finished.</string>
+    <string name="app_update_permission">Allow this app to install updates in Android settings.</string>
+    <string name="app_update_confirm">Android needs confirmation. Tap to finish the update, or retry from More → Updates.</string>
+    <string name="app_update_installing">Installing update…</string>
+    <string name="app_update_current">No newer compatible release is available.</string>
+    <string name="app_update_retry">Update not completed. Your installed version is unchanged; we will retry later.</string>
+    <string name="app_update_test_signing">This build uses a shared test signing key. Updates require confirmation. Unattended installation is reserved for privately signed builds.</string>
+    <string name="app_update_reopen">Update installed. Open the app to check the sensor connection and alerts.</string>
+    <string name="app_update_version_accessibility">App version %1$s, build %2$d</string>
+</resources>
+

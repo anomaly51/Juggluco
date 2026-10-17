@@ -7,6 +7,7 @@ import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
 import android.Manifest;
+import android.animation.ValueAnimator;
 import android.app.DatePickerDialog;
 import android.app.TimePickerDialog;
 import android.content.ClipData;
@@ -24,9 +25,12 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.LayoutInflater;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
@@ -34,6 +38,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.view.animation.DecelerateInterpolator;
 import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -48,6 +53,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 import android.text.Editable;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.core.content.ContextCompat;
@@ -111,6 +117,7 @@ final class IntakeComposer {
         final String text;
         final int photoCount;
         final boolean persistent;
+        final boolean typing;
 
         ChatLine(boolean user, String text, int photoCount) {
             this(user, text, photoCount, true);
@@ -118,10 +125,16 @@ final class IntakeComposer {
 
         ChatLine(boolean user, String text, int photoCount,
                 boolean persistent) {
+            this(user, text, photoCount, persistent, false);
+        }
+
+        ChatLine(boolean user, String text, int photoCount,
+                boolean persistent, boolean typing) {
             this.user = user;
             this.text = IntakeEvent.clean(text);
             this.photoCount = photoCount;
             this.persistent = persistent;
+            this.typing = typing;
         }
     }
 
@@ -165,6 +178,8 @@ final class IntakeComposer {
     /** Fingerprint of the backend that owns the pending idempotency key. */
     private String retryBackendFingerprint = "";
     private String retryTurnText = "";
+    private String retryTurnDisplayText = "";
+    private String retryTurnStructuredIntent = "";
     private long retryTurnOccurredAtMs;
     private File retryTurnAudio;
     private final ArrayList<File> retryTurnPhotos = new ArrayList<>();
@@ -173,6 +188,8 @@ final class IntakeComposer {
     private int retryTurnControlKind = CONTROL_NONE;
     private File deferredIntakeAudio;
     private int renderedChatLineCount;
+    private int optimisticUserLineIndex = -1;
+    private int typingLineIndex = -1;
 
     // Insulin screen state.
     private EditText insulinDose;
@@ -214,6 +231,26 @@ final class IntakeComposer {
     private ImageView mealVoiceIcon;
     private ProgressBar mealVoiceProgress;
     private TextView intakeVoiceHint;
+    private View intakeEmptyState;
+    private TextView intakeEmptyTitle;
+    private TextView intakeEmptySubtitle;
+    private View quickScroll;
+    private View latestChatButton;
+    private boolean chatFollowsLatest = true;
+    private boolean trackingChatScroll;
+    private boolean chatHasRendered;
+    private long recordingStartedAt;
+    private final Runnable voiceElapsedTicker = new Runnable() {
+        @Override public void run() {
+            if (closed || !recording || intakeVoiceHint == null) return;
+            int seconds = (int) ((SystemClock.elapsedRealtime()
+                    - recordingStartedAt) / 1000L);
+            intakeVoiceHint.setText(activity.getString(
+                    R.string.intake_thumb_recording_elapsed,
+                    seconds / 60, seconds % 60));
+            main.postDelayed(this, 1000L);
+        }
+    };
     private TextView intakeInlineError;
     private int intakeInlineErrorMessage;
     private int intakeInlineErrorAction = INLINE_ERROR_NONE;
@@ -234,6 +271,41 @@ final class IntakeComposer {
     private boolean correctionMode;
     private String correctionSummary = "";
     private int pendingPhotoImports;
+
+    // Progressive compact entry dock inside the unified conversation.
+    private View quickEditor;
+    private View quickToggle;
+    private View quickBody;
+    private ImageView quickChevron;
+    private TextView quickTitle;
+    private TextView quickSubtitle;
+    private TextView quickContext;
+    private View quickInsulinPanel;
+    private View quickMealPanel;
+    private Button quickNovoRapid;
+    private Button quickTresiba;
+    private EditText quickDose;
+    private Button quickDoseMinus;
+    private Button quickDosePlus;
+    private Button quickInsulinSubmit;
+    private EditText quickMealName;
+    private EditText quickCarbs;
+    private Button quickMealSubmit;
+    private final ArrayList<View> quickTimeButtons = new ArrayList<>();
+    private boolean quickExpanded;
+    private boolean imeVisible;
+    private boolean quickMealMode;
+    private boolean quickRapid = true;
+    private long quickOccurredAtMs = System.currentTimeMillis();
+    /** 0/5/10/15 are rolling presets; -1 means an exact frozen timestamp. */
+    private int quickRelativeMinutes;
+    private String quickTargetEventId = "";
+    /**
+     * True while the durable pending turn came from a new quick-entry fact.
+     * A failed request retains its fields, while an acknowledged add clears
+     * the dock so the same medical fact cannot be submitted again by mistake.
+     */
+    private boolean quickAddPending;
 
     // Camera and voice state.
     private File pendingCameraFile;
@@ -258,8 +330,6 @@ final class IntakeComposer {
         repository.addConfigurationListener(backendConfigurationListener);
         previousSoftInputMode = activity.getWindow().getAttributes()
                 .softInputMode;
-        chatLines.add(new ChatLine(false,
-                activity.getString(R.string.meal_chat_intro), 0, false));
         restorePendingTurnState();
         cleanStaleMedia();
     }
@@ -271,7 +341,9 @@ final class IntakeComposer {
     void show() {
         activity.getWindow().setSoftInputMode(
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
-                        | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+                        // MainActivity is edge-to-edge and this surface applies
+                        // IME insets itself. Do not also resize the Window.
+                        | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
         showMeal();
         MainActivity.setonback(this::handleSystemBack);
     }
@@ -526,8 +598,9 @@ final class IntakeComposer {
         mode = Mode.MEAL;
         replaceRoot(R.layout.modern_meal_chat);
         root.findViewById(R.id.intake_back_button)
-                .setOnClickListener(view -> requestClose(true));
+                .setOnClickListener(view -> handleTopBack());
         mealScroll = root.findViewById(R.id.meal_chat_scroll);
+        bindChatScrolling();
         mealMessages = root.findViewById(R.id.meal_chat_messages);
         mealActionHistory = root.findViewById(
                 R.id.meal_chat_action_history);
@@ -566,13 +639,22 @@ final class IntakeComposer {
         proposalHint = root.findViewById(R.id.meal_chat_proposal_hint);
         mealConfirm = root.findViewById(R.id.meal_chat_confirm);
         intakeReconcile = root.findViewById(R.id.intake_chat_reconcile);
-        mealTime.setOnClickListener(view -> mealTimeAction());
+        bindGuidedStart();
+        bindQuickEditor();
+        if (recording) setVoiceCaptureInputMode(true);
+        mealTime.setOnClickListener(view -> {
+            initialVoiceAutoStartPending = false;
+            if (recording || recorder != null) stopRecording(false);
+            mealTimeAction();
+        });
         // The result-card timestamp describes the saved action. The time chip
         // above the conversation controls the next turn.
         proposalTime.setOnClickListener(null);
         ViewCompat.setAccessibilityHeading(proposalTitle, true);
         mealAttach.setOnClickListener(view -> choosePhotoAction());
         mealVoice.setOnClickListener(view -> voiceAction());
+        root.findViewById(R.id.meal_chat_voice_secondary)
+                .setOnClickListener(view -> voiceAction());
         mealSend.setOnClickListener(view -> sendMealMessage());
         mealConfirm.setOnClickListener(view -> confirmMeal());
         intakeReconcile.setOnClickListener(view -> reconcilePendingTurn());
@@ -583,11 +665,24 @@ final class IntakeComposer {
             }
             return false;
         });
+        mealInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence text,
+                    int start, int count, int after) {}
+
+            @Override public void onTextChanged(CharSequence text,
+                    int start, int before, int count) {}
+
+            @Override public void afterTextChanged(Editable text) {
+                updateComposerActionVisibility();
+            }
+        });
         bindBackendStatus();
+        restorePendingChatFeedback();
         renderChat();
         updateMealTime();
         updateAttachments();
         updateProposal();
+        updateQuickEditor();
         updateCorrectionUi();
         updateInlineError();
         applyDeferredTranscript();
@@ -597,12 +692,603 @@ final class IntakeComposer {
                     ? "" : retryTurnText);
             // Never submit a restored medical fact merely because a screen
             // reopened. Send performs an exact same-ID retry; Resolve lets the
-            // user deliberately discard it after checking the timeline.
+            // user deliberately discard it after checking the graph.
             setMealBusy(false);
         } else {
             ensureIntakeSession(null);
         }
         scheduleInitialVoiceRecording();
+    }
+
+    /**
+     * The transcript has no duplicated microphone or controls. The same
+     * thumb dock stays reachable before and after the first recorded entry.
+     */
+    private void bindGuidedStart() {
+        intakeEmptyState = root.findViewById(R.id.intake_empty_state);
+        intakeEmptyTitle = root.findViewById(R.id.intake_start_title);
+        intakeEmptySubtitle = root.findViewById(R.id.intake_start_subtitle);
+        root.findViewById(R.id.intake_start_insulin).setOnClickListener(
+                view -> openGuidedQuickEditor(false));
+        root.findViewById(R.id.intake_start_food).setOnClickListener(
+                view -> openGuidedQuickEditor(true));
+    }
+
+    private void openGuidedQuickEditor(boolean meal) {
+        if (busy || transcribing || !retryClientTurnId.isEmpty()) return;
+        initialVoiceAutoStartPending = false;
+        if (recording || recorder != null) stopRecording(false);
+        hideKeyboard();
+        selectQuickMode(meal);
+        setQuickEditorExpanded(true, true);
+        View firstInput = meal ? quickMealName : quickDose;
+        if (firstInput != null) firstInput.requestFocus();
+    }
+
+    private void bindQuickEditor() {
+        quickEditor = root.findViewById(R.id.intake_quick_editor);
+        quickScroll = root.findViewById(R.id.intake_editor_scroll);
+        quickToggle = root.findViewById(R.id.intake_quick_toggle);
+        quickBody = root.findViewById(R.id.intake_quick_body);
+        quickChevron = root.findViewById(R.id.intake_quick_chevron);
+        quickTitle = root.findViewById(R.id.intake_quick_title);
+        quickSubtitle = root.findViewById(R.id.intake_quick_subtitle);
+        quickContext = root.findViewById(R.id.intake_quick_context);
+        quickInsulinPanel = root.findViewById(
+                R.id.intake_quick_insulin_panel);
+        quickMealPanel = root.findViewById(R.id.intake_quick_meal_panel);
+        quickNovoRapid = root.findViewById(R.id.intake_quick_novorapid);
+        quickTresiba = root.findViewById(R.id.intake_quick_tresiba);
+        quickDose = root.findViewById(R.id.intake_quick_dose);
+        quickDoseMinus = root.findViewById(R.id.intake_quick_dose_minus);
+        quickDosePlus = root.findViewById(R.id.intake_quick_dose_plus);
+        quickInsulinSubmit = root.findViewById(
+                R.id.intake_quick_insulin_submit);
+        quickMealName = root.findViewById(R.id.intake_quick_meal_name);
+        quickCarbs = root.findViewById(R.id.intake_quick_carbs);
+        quickMealSubmit = root.findViewById(R.id.intake_quick_meal_submit);
+
+        quickTimeButtons.clear();
+        quickTimeButtons.add(root.findViewById(R.id.intake_quick_time_now));
+        quickTimeButtons.add(root.findViewById(R.id.intake_quick_time_5m));
+        quickTimeButtons.add(root.findViewById(R.id.intake_quick_time_10m));
+        quickTimeButtons.add(root.findViewById(R.id.intake_quick_time_15m));
+        quickTimeButtons.add(root.findViewById(R.id.intake_quick_time_exact));
+
+        quickToggle.setOnClickListener(view -> setQuickEditorExpanded(
+                !quickExpanded, true));
+        quickNovoRapid.setOnClickListener(view -> {
+            quickRapid = true;
+            clearQuickTargetIfProductChanged();
+            updateQuickEditor();
+        });
+        quickTresiba.setOnClickListener(view -> {
+            quickRapid = false;
+            clearQuickTargetIfProductChanged();
+            updateQuickEditor();
+        });
+        quickDoseMinus.setOnClickListener(view -> stepQuickDose(-1));
+        quickDosePlus.setOnClickListener(view -> stepQuickDose(1));
+        quickInsulinSubmit.setOnClickListener(view -> submitQuickInsulin());
+        quickMealSubmit.setOnClickListener(view -> submitQuickMeal());
+        quickDose.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                submitQuickInsulin();
+                return true;
+            }
+            return false;
+        });
+        quickCarbs.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                submitQuickMeal();
+                return true;
+            }
+            return false;
+        });
+        bindQuickEditorTime(quickTimeButtons.get(0), 0);
+        bindQuickEditorTime(quickTimeButtons.get(1), 5);
+        bindQuickEditorTime(quickTimeButtons.get(2), 10);
+        bindQuickEditorTime(quickTimeButtons.get(3), 15);
+        quickTimeButtons.get(4).setOnClickListener(
+                view -> pickQuickExactDateAndTime());
+        setQuickEditorExpanded(quickExpanded, false);
+    }
+
+    private void selectQuickMode(boolean meal) {
+        if (quickMealMode == meal) return;
+        quickMealMode = meal;
+        quickTargetEventId = "";
+        quickOccurredAtMs = System.currentTimeMillis();
+        quickRelativeMinutes = 0;
+        updateQuickEditor();
+    }
+
+    /** Product changes on an exact card become part of that same update. */
+    private void clearQuickTargetIfProductChanged() {
+        // Intentionally keep the exact target. Switching Tresiba/NovoRapid is
+        // a replacement of the tapped card, never an implicit extra dose.
+    }
+
+    private void bindQuickEditorTime(View button, int minutesAgo) {
+        button.setOnClickListener(view -> {
+            quickRelativeMinutes = minutesAgo;
+            quickOccurredAtMs = System.currentTimeMillis()
+                    - minutesAgo * 60_000L;
+            updateQuickTimeSelection();
+        });
+    }
+
+    private void setQuickEditorExpanded(boolean expanded, boolean animate) {
+        if (expanded && recording) stopRecording(false);
+        if (!expanded && quickExpanded) hideKeyboard();
+        quickExpanded = expanded;
+        if (quickBody == null || quickToggle == null) return;
+        quickScroll.setVisibility(expanded ? VISIBLE : GONE);
+        quickBody.animate().cancel();
+        quickChevron.animate().cancel();
+        boolean motion = animate && animationsEnabled();
+        if (expanded) {
+            quickBody.setVisibility(VISIBLE);
+            if (motion) {
+                quickBody.setAlpha(0.0f);
+                quickBody.setTranslationY(dp(12));
+                quickBody.animate().alpha(1.0f).translationY(0.0f)
+                        .setDuration(220L)
+                        .setInterpolator(new DecelerateInterpolator()).start();
+                quickChevron.animate().rotation(270.0f)
+                        .setDuration(160L).start();
+            } else {
+                quickBody.setAlpha(1.0f);
+                quickBody.setTranslationY(0.0f);
+                quickChevron.setRotation(270.0f);
+            }
+        } else {
+            quickBody.setVisibility(GONE);
+            quickBody.setAlpha(1.0f);
+            quickBody.setTranslationY(0.0f);
+            if (motion) {
+                quickChevron.animate().rotation(90.0f)
+                        .setDuration(140L).start();
+            } else {
+                quickChevron.setRotation(90.0f);
+            }
+        }
+        quickToggle.setSelected(expanded);
+        ViewCompat.setStateDescription(quickToggle, activity.getString(expanded
+                ? R.string.intake_quick_entry_collapse
+                : R.string.intake_quick_entry_expand));
+        quickToggle.setContentDescription(activity.getString(expanded
+                ? R.string.intake_quick_entry_collapse
+                : R.string.intake_quick_entry_expand));
+        updateQuickEditorChrome();
+        updateQuickEditor();
+        updateGuidedStart();
+        scrollChatToBottom();
+    }
+
+    private void updateQuickEditorChrome() {
+        if (mealTime != null) mealTime.setVisibility(
+                quickExpanded ? GONE : VISIBLE);
+        View composer = root == null ? null
+                : root.findViewById(R.id.intake_composer_surface);
+        if (composer != null) composer.setVisibility(
+                quickExpanded ? GONE : VISIBLE);
+        View context = root == null ? null
+                : root.findViewById(R.id.intake_thumb_context);
+        if (context != null) context.setVisibility(quickExpanded ? GONE : VISIBLE);
+        View quickSubmitBar = root == null ? null
+                : root.findViewById(R.id.intake_quick_submit_bar);
+        if (quickSubmitBar != null) quickSubmitBar.setVisibility(
+                quickExpanded ? VISIBLE : GONE);
+        View safety = root == null ? null
+                : root.findViewById(R.id.meal_chat_safety);
+        if (safety != null) safety.setVisibility(
+                quickExpanded || imeVisible ? GONE : VISIBLE);
+        updateComposerActionVisibility();
+        updateLatestChatButton();
+    }
+
+    private boolean animationsEnabled() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                || ValueAnimator.areAnimatorsEnabled();
+    }
+
+    private void updateQuickEditor() {
+        if (quickEditor == null) return;
+        reconcileQuickTarget();
+        IntakeEvent target = quickTargetEvent();
+        boolean update = target != null;
+        boolean unavailable = busy || !retryClientTurnId.isEmpty();
+
+        quickInsulinPanel.setVisibility(quickMealMode ? GONE : VISIBLE);
+        quickMealPanel.setVisibility(quickMealMode ? VISIBLE : GONE);
+        quickInsulinSubmit.setVisibility(quickMealMode ? GONE : VISIBLE);
+        quickMealSubmit.setVisibility(quickMealMode ? VISIBLE : GONE);
+        quickNovoRapid.setSelected(quickRapid);
+        quickTresiba.setSelected(!quickRapid);
+        CharSequence contextText;
+        if (target == null) {
+            contextText = activity.getString(quickMealMode
+                    ? R.string.intake_quick_new_meal
+                    : R.string.intake_quick_new_insulin);
+        } else if (target.hasMeal()) {
+            contextText = activity.getString(R.string.intake_quick_update_meal,
+                    target.mealText);
+        } else {
+            contextText = activity.getString(
+                    R.string.intake_quick_update_insulin,
+                    target.insulinDisplayName(),
+                    formatNumber(target.insulinUnits));
+        }
+        quickContext.setText(contextText);
+        quickTitle.setText(update ? R.string.intake_quick_update
+                : R.string.intake_quick_entry_title);
+        quickSubtitle.setText(update
+                ? eventSummary(target)
+                : activity.getString(R.string.intake_quick_entry_subtitle));
+        quickInsulinSubmit.setText(unavailable
+                ? R.string.intake_quick_sending
+                : update ? R.string.intake_quick_update
+                : R.string.intake_quick_add);
+        quickMealSubmit.setText(unavailable
+                ? R.string.intake_quick_sending
+                : update ? R.string.intake_quick_update
+                : R.string.intake_quick_add);
+        quickEditor.setEnabled(!unavailable);
+        View insulinShortcut = root.findViewById(R.id.intake_start_insulin);
+        View foodShortcut = root.findViewById(R.id.intake_start_food);
+        insulinShortcut.setSelected(quickExpanded && !quickMealMode);
+        foodShortcut.setSelected(quickExpanded && quickMealMode);
+        insulinShortcut.setEnabled(!unavailable);
+        foodShortcut.setEnabled(!unavailable);
+        insulinShortcut.setAlpha(unavailable ? 0.5f : 1.0f);
+        foodShortcut.setAlpha(unavailable ? 0.5f : 1.0f);
+        setQuickChildrenEnabled(!unavailable);
+        updateQuickTimeSelection();
+    }
+
+    private void setQuickChildrenEnabled(boolean enabled) {
+        if (quickToggle != null) quickToggle.setEnabled(true);
+        View[] controls = { quickNovoRapid,
+                quickTresiba, quickDose, quickDoseMinus, quickDosePlus,
+                quickInsulinSubmit, quickMealName, quickCarbs,
+                quickMealSubmit };
+        for (View control : controls) {
+            if (control != null) {
+                control.setEnabled(enabled);
+                control.setAlpha(enabled ? 1.0f : 0.52f);
+            }
+        }
+        for (View time : quickTimeButtons) {
+            time.setEnabled(enabled);
+            time.setAlpha(enabled ? 1.0f : 0.52f);
+        }
+    }
+
+    private void updateQuickTimeSelection() {
+        if (quickTimeButtons.size() != 5) return;
+        int selected = quickRelativeMinutes == 0 ? 0
+                : quickRelativeMinutes == 5 ? 1
+                : quickRelativeMinutes == 10 ? 2
+                : quickRelativeMinutes == 15 ? 3 : 4;
+        String formatted = formatProposalTime(resolveQuickOccurredAtMs());
+        View exact = quickTimeButtons.get(4);
+        if (exact instanceof TextView) {
+            // An exact time is a medical fact, not merely a selected styling
+            // state. Keep the chosen value visible before the user submits.
+            ((TextView) exact).setText(selected == 4
+                    ? formatted : activity.getString(
+                            R.string.intake_quick_time_exact));
+        }
+        for (int index = 0; index < quickTimeButtons.size(); index++) {
+            View time = quickTimeButtons.get(index);
+            time.setSelected(index == selected);
+            time.setContentDescription(index == selected
+                    ? activity.getString(
+                            R.string.intake_quick_time_description, formatted)
+                    : null);
+        }
+    }
+
+    private void stepQuickDose(int direction) {
+        float current = 0.0f;
+        try {
+            String raw = IntakeEvent.clean(quickDose.getText().toString());
+            if (!raw.isEmpty()) current = parseNumber(raw);
+        } catch (NumberFormatException ignored) {}
+        float next = Math.max(0.5f, Math.min(500.0f,
+                current + direction * 0.5f));
+        quickDose.setText(formatNumber(next));
+        quickDose.setSelection(quickDose.length());
+        quickDose.setError(null);
+    }
+
+    private void submitQuickInsulin() {
+        if (busy || !retryClientTurnId.isEmpty()) return;
+        // A manual fact and an audio turn must never race. This is mostly
+        // prevented by the expanded-dock state, but keep the submit boundary
+        // safe for accessibility/programmatic clicks as well.
+        if (recording || recorder != null) stopRecording(false);
+        float dose;
+        try {
+            dose = parseNumber(quickDose.getText().toString());
+        } catch (NumberFormatException error) {
+            dose = 0.0f;
+        }
+        if (!(dose > 0.0f) || dose > 500.0f) {
+            quickDose.setError(activity.getString(
+                    R.string.insulin_invalid_dose));
+            quickDose.requestFocus();
+            return;
+        }
+        IntakeEvent target = quickTargetEvent();
+        String action = target == null ? IntakeStructuredIntent.ACTION_ADD
+                : IntakeStructuredIntent.ACTION_UPDATE;
+        String product = quickRapid ? "NovoRapid" : "Tresiba";
+        long occurredAt = resolveQuickOccurredAtMs();
+        String structured = IntakeStructuredIntent.insulin(action,
+                target == null ? "" : target.id, occurredAt, product, dose);
+        String display = activity.getString(target == null
+                        ? R.string.intake_quick_add_insulin_message
+                        : R.string.intake_quick_update_insulin_message,
+                product, formatNumber(dose), formatProposalTime(occurredAt));
+        sendStructuredIntakeTurn(structured, occurredAt, display,
+                target == null);
+    }
+
+    private void submitQuickMeal() {
+        if (busy || !retryClientTurnId.isEmpty()) return;
+        if (recording || recorder != null) stopRecording(false);
+        String name = IntakeEvent.clean(quickMealName.getText().toString());
+        String rawCarbs = IntakeEvent.clean(
+                quickCarbs.getText().toString());
+        Float carbs = null;
+        boolean invalidCarbs = false;
+        if (!rawCarbs.isEmpty()) {
+            try {
+                carbs = parseNumber(rawCarbs);
+            } catch (NumberFormatException error) {
+                invalidCarbs = true;
+            }
+        }
+        if (carbs != null && (carbs < 0.0f || carbs > 1_000.0f)) {
+            invalidCarbs = true;
+        }
+        IntakeEvent target = quickTargetEvent();
+        boolean missingNewMeal = target == null && name.isEmpty()
+                && carbs == null;
+        if (invalidCarbs || missingNewMeal) {
+            EditText invalid = invalidCarbs ? quickCarbs : quickMealName;
+            invalid.setError(activity.getString(
+                    R.string.intake_quick_invalid_meal));
+            invalid.requestFocus();
+            return;
+        }
+        String action = target == null ? IntakeStructuredIntent.ACTION_ADD
+                : IntakeStructuredIntent.ACTION_UPDATE;
+        long occurredAt = resolveQuickOccurredAtMs();
+        String structured = IntakeStructuredIntent.meal(action,
+                target == null ? "" : target.id, occurredAt, name, carbs);
+        String display = quickMealIntentText(target != null, name, carbs,
+                occurredAt);
+        sendStructuredIntakeTurn(structured, occurredAt, display,
+                target == null);
+    }
+
+    private String quickMealIntentText(boolean update, String name,
+            Float carbs, long occurredAtMs) {
+        String time = formatProposalTime(occurredAtMs);
+        if (!name.isEmpty() && carbs != null) {
+            return activity.getString(update
+                            ? R.string.intake_quick_update_meal_message
+                            : R.string.intake_quick_add_meal_message,
+                    name, formatNumber(carbs), time);
+        }
+        if (!name.isEmpty()) {
+            return activity.getString(update
+                            ? R.string.intake_quick_update_meal_name_message
+                            : R.string.intake_quick_add_meal_name_message,
+                    name, time);
+        }
+        if (carbs != null) {
+            return activity.getString(update
+                            ? R.string.intake_quick_update_meal_carbs_message
+                            : R.string.intake_quick_add_meal_carbs_message,
+                    formatNumber(carbs), time);
+        }
+        // A target can legitimately have no carb field. If only its time was
+        // changed, describe that intent without inventing "0 g".
+        return activity.getString(
+                R.string.intake_quick_update_meal_time_message, time);
+    }
+
+    private void sendStructuredIntakeTurn(String structuredIntent,
+            long occurredAtMs, String displayText, boolean newQuickEntry) {
+        if (!IntakeStructuredIntent.isValidWirePayload(structuredIntent)) {
+            throw new IllegalArgumentException("Invalid structured intake");
+        }
+        quickAddPending = newQuickEntry;
+        hideKeyboard();
+        sendIntakeTurn(null, null, CONTROL_NONE, structuredIntent,
+                occurredAtMs, displayText);
+    }
+
+    /** Reset only after the backend has acknowledged a new quick-entry fact. */
+    private void finishSuccessfulQuickAdd() {
+        quickAddPending = false;
+        quickTargetEventId = "";
+        quickOccurredAtMs = System.currentTimeMillis();
+        quickRelativeMinutes = 0;
+        if (quickDose != null) {
+            quickDose.setText("");
+            quickDose.setError(null);
+        }
+        if (quickMealName != null) {
+            quickMealName.setText("");
+            quickMealName.setError(null);
+        }
+        if (quickCarbs != null) {
+            quickCarbs.setText("");
+            quickCarbs.setError(null);
+        }
+        setQuickEditorExpanded(false, true);
+    }
+
+    private void openQuickEditorForEvent(IntakeEvent event) {
+        if (!canQuickEditEvent(event) || busy
+                || !retryClientTurnId.isEmpty()) return;
+        quickTargetEventId = event.id;
+        quickOccurredAtMs = Math.min(event.occurredAtMs,
+                System.currentTimeMillis());
+        quickRelativeMinutes = -1;
+        if (event.hasInsulin()) {
+            quickMealMode = false;
+            quickRapid = !"Tresiba".equals(event.insulinDisplayName());
+            quickDose.setText(formatNumber(event.insulinUnits));
+            quickDose.setSelection(quickDose.length());
+        } else if (event.hasMeal()) {
+            quickMealMode = true;
+            quickMealName.setText(event.mealText);
+            quickMealName.setSelection(quickMealName.length());
+            quickCarbs.setText(event.hasCarbs()
+                    ? formatNumber(event.carbsGrams) : "");
+            quickCarbs.setSelection(quickCarbs.length());
+        } else {
+            return;
+        }
+        hideKeyboard();
+        setQuickEditorExpanded(true, true);
+        updateQuickEditor();
+    }
+
+    private IntakeEvent quickTargetEvent() {
+        if (quickTargetEventId.isEmpty()) return null;
+        for (IntakeChatCardHistory.Card card : actionCardHistory.cards()) {
+            if (card.isActive()
+                    && quickTargetEventId.equals(card.event().id)) {
+                return card.event();
+            }
+        }
+        return null;
+    }
+
+    /** True only when the compact schema can round-trip this exact record. */
+    private boolean canQuickEditEvent(IntakeEvent event) {
+        if (event == null) return false;
+        if (event.hasInsulin()) {
+            if (event.hasMeal()) return false;
+            String product = event.insulinDisplayName();
+            return "NovoRapid".equals(product) || "Tresiba".equals(product);
+        }
+        return event.hasMeal();
+    }
+
+    private void reconcileQuickTarget() {
+        if (quickTargetEventId.isEmpty()) return;
+        for (IntakeChatCardHistory.Card card : actionCardHistory.cards()) {
+            if (quickTargetEventId.equals(card.event().id)
+                    && card.isActive()) return;
+        }
+        // A text/voice/manual replacement retires one exact card and returns
+        // its successor. Keep the dock bound to that successor so all input
+        // methods continue editing the same logical record.
+        if (lastIntakeTurn != null
+                && lastIntakeTurn.deletedEventIds.size() == 1
+                && lastIntakeTurn.deletedEventIds.contains(
+                        quickTargetEventId)) {
+            IntakeEvent successor = null;
+            for (IntakeEvent replacement : lastIntakeTurn.events) {
+                if (replacement.hasMeal() == quickMealMode
+                        && canQuickEditEvent(replacement)) {
+                    if (successor != null) {
+                        successor = null;
+                        break;
+                    }
+                    successor = replacement;
+                }
+            }
+            if (successor != null) {
+                quickTargetEventId = successor.id;
+                quickOccurredAtMs = Math.min(successor.occurredAtMs,
+                        System.currentTimeMillis());
+                quickRelativeMinutes = -1;
+                if (successor.hasMeal()) {
+                    quickMealName.setText(successor.mealText);
+                    quickCarbs.setText(successor.hasCarbs()
+                            ? formatNumber(successor.carbsGrams) : "");
+                } else {
+                    quickRapid = !"Tresiba".equals(
+                            successor.insulinDisplayName());
+                    quickDose.setText(formatNumber(successor.insulinUnits));
+                }
+                return;
+            }
+        }
+        resetQuickTargetSafely();
+    }
+
+    private void resetQuickTargetSafely() {
+        quickTargetEventId = "";
+        quickOccurredAtMs = System.currentTimeMillis();
+        quickRelativeMinutes = 0;
+        if (quickMealMode) {
+            if (quickMealName != null) quickMealName.setText("");
+            if (quickCarbs != null) quickCarbs.setText("");
+        } else if (quickDose != null) {
+            quickDose.setText("");
+        }
+    }
+
+    private long resolveQuickOccurredAtMs() {
+        long now = System.currentTimeMillis();
+        if (quickRelativeMinutes >= 0) {
+            return now - quickRelativeMinutes * 60_000L;
+        }
+        return Math.min(quickOccurredAtMs, now);
+    }
+
+    private void pickQuickExactDateAndTime() {
+        if (busy) return;
+        hideKeyboard();
+        Calendar initial = Calendar.getInstance();
+        initial.setTimeInMillis(resolveQuickOccurredAtMs());
+        DatePickerDialog dateDialog = new DatePickerDialog(activity,
+                (picker, year, month, day) -> {
+                    Calendar selected = Calendar.getInstance();
+                    selected.setTimeInMillis(initial.getTimeInMillis());
+                    selected.set(Calendar.YEAR, year);
+                    selected.set(Calendar.MONTH, month);
+                    selected.set(Calendar.DAY_OF_MONTH, day);
+                    TimePickerDialog timeDialog = new TimePickerDialog(activity,
+                            (timePicker, hour, minute) -> {
+                                selected.set(Calendar.HOUR_OF_DAY, hour);
+                                selected.set(Calendar.MINUTE, minute);
+                                selected.set(Calendar.SECOND, 0);
+                                selected.set(Calendar.MILLISECOND, 0);
+                                quickOccurredAtMs = Math.min(
+                                        selected.getTimeInMillis(),
+                                        System.currentTimeMillis());
+                                quickRelativeMinutes = -1;
+                                updateQuickTimeSelection();
+                            }, selected.get(Calendar.HOUR_OF_DAY),
+                            selected.get(Calendar.MINUTE),
+                            android.text.format.DateFormat.is24HourFormat(
+                                    activity));
+                    try {
+                        timeDialog.show();
+                        placeDialogWithinReach(timeDialog.getWindow());
+                    } catch (RuntimeException error) {
+                        toast(R.string.intake_time_picker_error);
+                    }
+                }, initial.get(Calendar.YEAR), initial.get(Calendar.MONTH),
+                initial.get(Calendar.DAY_OF_MONTH));
+        dateDialog.getDatePicker().setMaxDate(System.currentTimeMillis());
+        try {
+            dateDialog.show();
+            placeDialogWithinReach(dateDialog.getWindow());
+        } catch (RuntimeException error) {
+            toast(R.string.intake_time_picker_error);
+        }
     }
 
     private void sendMealMessage() {
@@ -622,7 +1308,8 @@ final class IntakeComposer {
         String currentText = IntakeEvent.clean(
                 mealInput.getText().toString());
         if (!retryClientTurnId.isEmpty()
-                && (currentText.equals(retryTurnText)
+                && (!retryTurnStructuredIntent.isEmpty()
+                        || currentText.equals(retryTurnText)
                         || retryTurnControlKind != CONTROL_NONE
                         && currentText.isEmpty())
                 && pendingPhotos.equals(retryTurnPhotos)) {
@@ -682,7 +1369,12 @@ final class IntakeComposer {
             releaseIntakeTurnFile(intakeTurnAudio, false);
             transcribing = false;
             mealSending = false;
+            // The optimistic user row remains available for an exact retry,
+            // but a failed session start is no longer actively "typing".
+            removeTypingFeedback();
             setMealBusy(false);
+            renderChat();
+            scrollChatToBottom();
         }
         if (!sessionFailureShown) {
             sessionFailureShown = true;
@@ -697,7 +1389,15 @@ final class IntakeComposer {
 
     private void sendIntakeTurn(File audio, String controlText,
             int controlKind) {
+        sendIntakeTurn(audio, controlText, controlKind, "", 0L, "");
+    }
+
+    private void sendIntakeTurn(File audio, String controlText,
+            int controlKind, String structuredIntent,
+            long structuredOccurredAtMs, String structuredDisplayText) {
         boolean controlTurn = controlKind != CONTROL_NONE;
+        boolean structuredTurn = !structuredIntent.isEmpty();
+        if (!structuredTurn) quickAddPending = false;
         if (closed || mode != Mode.MEAL || busy) {
             deleteTemporary(audio);
             return;
@@ -712,31 +1412,42 @@ final class IntakeComposer {
             toast(R.string.meal_chat_media_processing);
             return;
         }
-        String text = controlTurn ? IntakeEvent.clean(controlText)
+        String text = structuredTurn ? ""
+                : controlTurn ? IntakeEvent.clean(controlText)
                 : IntakeEvent.clean(mealInput == null ? ""
-                        : mealInput.getText().toString());
-        ArrayList<File> photos = controlTurn
+                : mealInput.getText().toString());
+        String displayText = structuredTurn
+                ? IntakeEvent.clean(structuredDisplayText) : text;
+        ArrayList<File> photos = controlTurn || structuredTurn
                 ? new ArrayList<>() : new ArrayList<>(pendingPhotos);
-        if (text.isEmpty() && photos.isEmpty() && audio == null) {
+        if (text.isEmpty() && photos.isEmpty() && audio == null
+                && !structuredTurn) {
             toast(R.string.meal_chat_empty_message);
             return;
         }
         final String clientTurnId = UUID.randomUUID().toString();
         if (!retryClientTurnId.isEmpty()) clearPendingTurnRetry(true);
-        if (!controlTurn && !mealTimeExplicitForNextTurn) {
+        if (!controlTurn && !structuredTurn
+                && !mealTimeExplicitForNextTurn) {
             mealOccurredAtMs = System.currentTimeMillis();
             pendingMealOccurredAtMs = mealOccurredAtMs;
             updateMealTime();
         }
-        if (!controlTurn) mealTimeExplicitForNextTurn = false;
-        final long occurredAtMs = controlTurn
-                ? System.currentTimeMillis() : mealOccurredAtMs;
+        if (!controlTurn && !structuredTurn) {
+            mealTimeExplicitForNextTurn = false;
+        }
+        final long occurredAtMs = structuredTurn
+                ? Math.min(structuredOccurredAtMs, System.currentTimeMillis())
+                : controlTurn ? System.currentTimeMillis() : mealOccurredAtMs;
         if (!rememberPendingTurn(clientTurnId, occurredAtMs, text, audio,
-                photos, controlKind)) {
+                photos, controlKind, structuredIntent, displayText)) {
             clearPendingTurnRetry(false);
             deleteTemporary(audio);
             toast(R.string.intake_chat_pending_save_error);
             return;
+        }
+        if (!controlTurn) {
+            showPendingChatFeedback(displayText, photos.size(), audio != null);
         }
         intakeTurnAudio = audio;
         mealConfirming = controlKind == CONTROL_DELETE;
@@ -746,7 +1457,8 @@ final class IntakeComposer {
         setMealBusy(true);
         updateAttachments();
         ensureIntakeSession(() -> startIntakeTurnRequest(clientTurnId,
-                occurredAtMs, text, audio, photos, controlKind));
+                occurredAtMs, text, displayText, audio, photos, controlKind,
+                structuredIntent));
     }
 
     private void retryPendingIntakeTurn() {
@@ -765,19 +1477,26 @@ final class IntakeComposer {
         transcribing = retryTurnAudio != null;
         setMealBusy(true);
         updateAttachments();
+        if (retryTurnControlKind == CONTROL_NONE) {
+            showPendingChatFeedback(retryTurnDisplayText,
+                    retryTurnPhotos.size(), retryTurnAudio != null);
+        }
         ArrayList<File> photos = new ArrayList<>(retryTurnPhotos);
         ensureIntakeSession(() -> startIntakeTurnRequest(retryClientTurnId,
-                retryTurnOccurredAtMs, retryTurnText, retryTurnAudio,
-                photos, retryTurnControlKind));
+                retryTurnOccurredAtMs, retryTurnText,
+                retryTurnDisplayText, retryTurnAudio, photos,
+                retryTurnControlKind, retryTurnStructuredIntent));
     }
 
     private boolean rememberPendingTurn(String clientTurnId, long occurredAtMs,
             String text, File audio, List<File> photos,
-            int controlKind) {
+            int controlKind, String structuredIntent, String displayText) {
         retryClientTurnId = clientTurnId;
         retryBackendFingerprint = backendFingerprint();
         retryTurnOccurredAtMs = occurredAtMs;
         retryTurnText = text;
+        retryTurnDisplayText = displayText;
+        retryTurnStructuredIntent = structuredIntent;
         retryTurnAudio = audio;
         retryTurnPhotos.clear();
         retryTurnPhotos.addAll(photos);
@@ -790,10 +1509,19 @@ final class IntakeComposer {
 
     private void clearPendingTurnRetry(boolean deleteAudio) {
         File audio = retryTurnAudio;
+        String resolvedTurnId = retryClientTurnId;
+        String resolvedFingerprint = retryBackendFingerprint.isEmpty()
+                ? backendFingerprint() : retryBackendFingerprint;
+        if (!resolvedTurnId.isEmpty()) {
+            IntakeChatStateStore.clearPendingIfMatches(activity,
+                    resolvedFingerprint, resolvedTurnId);
+        }
         retryClientTurnId = "";
         retryBackendFingerprint = "";
         retryTurnOccurredAtMs = 0L;
         retryTurnText = "";
+        retryTurnDisplayText = "";
+        retryTurnStructuredIntent = "";
         retryTurnAudio = null;
         retryTurnPhotos.clear();
         retryTurnDefinitiveFailure = false;
@@ -805,9 +1533,11 @@ final class IntakeComposer {
     }
 
     private void startIntakeTurnRequest(String clientTurnId,
-            long occurredAtMs, String text, File audio,
-            ArrayList<File> photos, int controlKind) {
+            long occurredAtMs, String text, String displayText, File audio,
+            ArrayList<File> photos, int controlKind,
+            String structuredIntent) {
         boolean controlTurn = controlKind != CONTROL_NONE;
+        boolean structuredTurn = !structuredIntent.isEmpty();
         if (closed) {
             releaseIntakeTurnFile(audio, false);
             return;
@@ -816,8 +1546,14 @@ final class IntakeComposer {
         activeIntakePhotos.addAll(photos);
         intakeTurnCall = repository.sendIntakeChat(intakeSessionId,
                 clientTurnId, occurredAtMs, text, audio, photos,
+                structuredIntent,
                 new IntakeRepository.Callback<IntakeChatTurn>() {
             @Override public void onSuccess(IntakeChatTurn turn) {
+                boolean completedQuickAdd = structuredTurn && quickAddPending
+                        && turn != null
+                        && IntakeChatTurn.OUTCOME_APPLIED.equalsIgnoreCase(
+                                turn.outcome);
+                quickAddPending = false;
                 releaseIntakeTurnFile(audio, true);
                 clearPendingTurnRetry(false);
                 invalidateStaleControlTarget(turn, controlKind);
@@ -832,20 +1568,23 @@ final class IntakeComposer {
                 mealSending = false;
                 clearInlineError();
                 String userText = IntakeEvent.clean(turn.transcript);
-                if (userText.isEmpty()) userText = text;
+                if (structuredTurn) userText = displayText;
+                else if (userText.isEmpty()) userText = text;
                 if (userText.isEmpty() && audio != null) {
                     userText = activity.getString(R.string.meal_chat_user_voice);
                 }
                 if (!controlTurn) {
-                    chatLines.add(new ChatLine(true, userText, photos.size()));
+                    finishPendingChatFeedback(userText, photos.size());
                 }
-                if (!turn.assistantMessage.isEmpty()) {
+                if (!structuredTurn && !turn.assistantMessage.isEmpty()) {
                     chatLines.add(new ChatLine(false,
                             turn.assistantMessage, 0));
                 }
                 if (!controlTurn) {
                     clearSentMedia(photos);
-                    if (mealInput != null) mealInput.setText("");
+                    if (!structuredTurn && mealInput != null) {
+                        mealInput.setText("");
+                    }
                 }
                 if (controlKind == CONTROL_DELETE) mealConfirming = false;
                 acceptIntakeTurn(turn);
@@ -857,6 +1596,8 @@ final class IntakeComposer {
                 renderChat();
                 updateAttachments();
                 updateProposal();
+                if (completedQuickAdd) finishSuccessfulQuickAdd();
+                else updateQuickEditor();
                 scrollChatToBottom();
                 if (controlKind == CONTROL_REVISION
                         && IntakeChatTurn.OUTCOME_CLARIFICATION.equalsIgnoreCase(
@@ -883,7 +1624,10 @@ final class IntakeComposer {
         if (definitive) {
             retryTurnDefinitiveFailure = true;
             retryTurnCommitMayHaveOccurred = commitMayHaveOccurred;
-            persistChatState();
+            if (!closed || IntakeChatStateStore.pendingMatches(activity,
+                    retryBackendFingerprint, retryClientTurnId)) {
+                persistChatState();
+            }
         }
         if (closed) {
             // Keep the durable payload for exact same-ID reconciliation when
@@ -895,6 +1639,7 @@ final class IntakeComposer {
         transcribing = false;
         mealSending = false;
         mealConfirming = false;
+        removeTypingFeedback();
         setMealBusy(false);
         if (definitive) {
             showInlineError(R.string.intake_chat_rejected_inline_error,
@@ -1061,6 +1806,8 @@ final class IntakeComposer {
         actionCardHistory.clear();
         correctionMode = false;
         correctionSummary = "";
+        removeTypingFeedback();
+        optimisticUserLineIndex = -1;
         if (mealInput != null) mealInput.setText("");
         clearInlineError();
         chatLines.add(new ChatLine(false, activity.getString(
@@ -1076,24 +1823,151 @@ final class IntakeComposer {
 
     private void renderChat() {
         if (mealMessages == null) return;
-        if (renderedChatLineCount > chatLines.size()
-                || mealMessages.getChildCount() != renderedChatLineCount) {
+        boolean rebuilding = renderedChatLineCount > chatLines.size()
+                || mealMessages.getChildCount() != renderedChatLineCount;
+        if (rebuilding) {
             mealMessages.removeAllViews();
             renderedChatLineCount = 0;
         }
         while (renderedChatLineCount < chatLines.size()) {
-            addChatBubble(chatLines.get(renderedChatLineCount));
+            addChatBubble(chatLines.get(renderedChatLineCount),
+                    chatHasRendered && !rebuilding && chatFollowsLatest);
             renderedChatLineCount++;
         }
+        chatHasRendered = true;
+        updateGuidedStart();
     }
 
-    private void addChatBubble(ChatLine line) {
+    private void updateGuidedStart() {
+        if (intakeEmptyState == null) return;
+        boolean hasDraft = mealInput != null && !IntakeEvent.clean(
+                mealInput.getText().toString()).isEmpty();
+        boolean noConversation = chatLines.isEmpty()
+                && actionCardHistory.cards().isEmpty()
+                && retryClientTurnId.isEmpty()
+                && pendingPhotos.isEmpty() && !hasDraft;
+        boolean show = noConversation && !quickExpanded;
+        intakeEmptyState.setVisibility(show ? VISIBLE : GONE);
+        if (!show) return;
+        intakeEmptyTitle.setText(recording
+                ? R.string.intake_start_listening_title
+                : recordPermissionRequestInFlight
+                ? R.string.intake_start_permission_title
+                : transcribing
+                ? R.string.intake_start_processing_title
+                : R.string.intake_thumb_empty_title);
+        intakeEmptySubtitle.setText(recording
+                ? R.string.intake_start_listening_subtitle
+                : recordPermissionRequestInFlight
+                ? R.string.intake_start_permission_subtitle
+                : transcribing
+                ? R.string.intake_start_processing_subtitle
+                : R.string.intake_thumb_empty_subtitle);
+    }
+
+    private void restorePendingChatFeedback() {
+        if (retryClientTurnId.isEmpty()
+                || retryTurnControlKind != CONTROL_NONE
+                || optimisticUserLineIndex >= 0) return;
+        String display = retryTurnDisplayText;
+        if (display.isEmpty() && retryTurnAudio != null) {
+            display = activity.getString(R.string.meal_chat_user_voice);
+        }
+        optimisticUserLineIndex = chatLines.size();
+        chatLines.add(new ChatLine(true, display,
+                retryTurnPhotos.size(), false));
+    }
+
+    private void showPendingChatFeedback(String displayText, int photoCount,
+            boolean voice) {
+        // A deliberate submission returns to its result; background replies
+        // after the user scrolls up must not pull them out of the history.
+        chatFollowsLatest = true;
+        trackingChatScroll = false;
+        String visibleText = IntakeEvent.clean(displayText);
+        if (visibleText.isEmpty() && voice) {
+            visibleText = activity.getString(R.string.meal_chat_user_voice);
+        }
+        if (optimisticUserLineIndex < 0
+                || optimisticUserLineIndex >= chatLines.size()) {
+            optimisticUserLineIndex = chatLines.size();
+            chatLines.add(new ChatLine(true, visibleText, photoCount, false));
+        }
+        if (typingLineIndex < 0 || typingLineIndex >= chatLines.size()) {
+            typingLineIndex = chatLines.size();
+            chatLines.add(new ChatLine(false,
+                    activity.getString(R.string.intake_chat_typing),
+                    0, false, true));
+        }
+        renderChat();
+        scrollChatToBottom();
+    }
+
+    private void finishPendingChatFeedback(String finalText, int photoCount) {
+        removeTypingFeedback();
+        ChatLine result = new ChatLine(true, finalText, photoCount);
+        if (optimisticUserLineIndex >= 0
+                && optimisticUserLineIndex < chatLines.size()) {
+            chatLines.set(optimisticUserLineIndex, result);
+        } else {
+            chatLines.add(result);
+        }
+        optimisticUserLineIndex = -1;
+        forceRerenderChat();
+    }
+
+    private void removeTypingFeedback() {
+        if (typingLineIndex >= 0 && typingLineIndex < chatLines.size()) {
+            chatLines.remove(typingLineIndex);
+        }
+        typingLineIndex = -1;
+        forceRerenderChat();
+    }
+
+    private void forceRerenderChat() {
+        renderedChatLineCount = 0;
+        chatHasRendered = false;
+        if (mealMessages != null) mealMessages.removeAllViews();
+    }
+
+    private void addChatBubble(ChatLine line, boolean animateArrival) {
         LinearLayout row = new LinearLayout(activity);
         row.setGravity(line.user ? Gravity.END : Gravity.START);
         LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
                 MATCH_PARENT, WRAP_CONTENT);
-        rowParams.bottomMargin = dp(9);
+        rowParams.bottomMargin = dp(16);
         row.setLayoutParams(rowParams);
+
+        if (line.typing) {
+            LinearLayout bubble = new LinearLayout(activity);
+            bubble.setOrientation(LinearLayout.HORIZONTAL);
+            bubble.setGravity(Gravity.CENTER_VERTICAL);
+            bubble.setPadding(dp(12), dp(8), dp(14), dp(8));
+            bubble.setBackgroundResource(R.drawable.intake_chat_assistant);
+            ProgressBar progress = new ProgressBar(activity);
+            progress.setIndeterminate(true);
+            progress.setImportantForAccessibility(
+                    View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            bubble.addView(progress, new LinearLayout.LayoutParams(
+                    dp(20), dp(20)));
+            TextView label = new TextView(activity);
+            label.setText(line.text);
+            label.setTextColor(ContextCompat.getColor(activity,
+                    R.color.modern_secondary_text_secondary));
+            label.setTextSize(14.0f);
+            LinearLayout.LayoutParams labelParams =
+                    new LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT);
+            labelParams.leftMargin = dp(8);
+            bubble.addView(label, labelParams);
+            bubble.setContentDescription(line.text);
+            bubble.setAccessibilityLiveRegion(
+                    View.ACCESSIBILITY_LIVE_REGION_POLITE);
+            row.addView(bubble, new LinearLayout.LayoutParams(
+                    WRAP_CONTENT, WRAP_CONTENT));
+            mealMessages.addView(row);
+            if (animateArrival) animateChatArrival(row);
+            return;
+        }
 
         TextView bubble = new TextView(activity);
         StringBuilder text = new StringBuilder(line.text);
@@ -1107,19 +1981,33 @@ final class IntakeComposer {
         bubble.setText(text.toString());
         bubble.setTextColor(ContextCompat.getColor(activity,
                 R.color.modern_secondary_text_primary));
-        bubble.setTextSize(14.0f);
-        bubble.setLineSpacing(0.0f, 1.08f);
-        bubble.setPadding(dp(14), dp(11), dp(14), dp(11));
-        int windowWidth = root != null && root.getWidth() > 0
-                ? root.getWidth() : activity.getResources()
+        bubble.setTextSize(16.0f);
+        bubble.setLineSpacing(0.0f, 1.25f);
+        bubble.setTextIsSelectable(true);
+        bubble.setPadding(dp(16), dp(12), dp(16), dp(12));
+        int windowWidth = mealScroll != null && mealScroll.getWidth() > 0
+                ? mealScroll.getWidth() - mealScroll.getPaddingLeft()
+                        - mealScroll.getPaddingRight() : activity.getResources()
                 .getDisplayMetrics().widthPixels;
-        bubble.setMaxWidth(Math.min((int) (windowWidth * 0.84f), dp(704)));
+        bubble.setMaxWidth(Math.min((int) (windowWidth
+                * (line.user ? 0.88f : 1.0f)), dp(600)));
         bubble.setBackgroundResource(line.user
                 ? R.drawable.intake_chat_user
                 : R.drawable.intake_chat_assistant);
         row.addView(bubble, new LinearLayout.LayoutParams(
                 WRAP_CONTENT, WRAP_CONTENT));
         mealMessages.addView(row);
+        if (animateArrival) animateChatArrival(row);
+    }
+
+    private void animateChatArrival(View row) {
+        if (!animationsEnabled()) return;
+        row.animate().cancel();
+        row.setAlpha(0.0f);
+        row.setTranslationY(dp(10));
+        row.animate().alpha(1.0f).translationY(0.0f)
+                .setDuration(200L)
+                .setInterpolator(new DecelerateInterpolator()).start();
     }
 
     private void updateProposal() {
@@ -1130,6 +2018,7 @@ final class IntakeComposer {
         renderActionCardHistory(current);
         if (turn == null || current == null) {
             proposalCard.setVisibility(GONE);
+            updateGuidedStart();
             return;
         }
 
@@ -1137,8 +2026,6 @@ final class IntakeComposer {
         boolean inactive = !current.isActive();
         proposalCard.setVisibility(VISIBLE);
         proposalCard.setEnabled(!inactive);
-        proposalCard.setClickable(false);
-        proposalCard.setFocusable(false);
         proposalCard.setBackgroundResource(inactive
                 ? R.drawable.intake_chat_proposal_inactive
                 : R.drawable.intake_chat_proposal);
@@ -1203,6 +2090,17 @@ final class IntakeComposer {
         boolean compoundAction = turn != null && turn.events.size() > 1;
         boolean controlsEnabled = cardDeleteAvailable && !busy
                 && retryClientTurnId.isEmpty();
+        boolean quickEditAvailable = current.isActive()
+                && canQuickEditEvent(event) && !busy
+                && retryClientTurnId.isEmpty();
+        proposalCard.setClickable(quickEditAvailable);
+        proposalCard.setFocusable(quickEditAvailable);
+        proposalCard.setOnClickListener(quickEditAvailable
+                ? view -> openQuickEditorForEvent(event) : null);
+        proposalCard.setContentDescription(quickEditAvailable
+                ? activity.getString(R.string.intake_quick_card_action,
+                        eventSummary(event))
+                : eventSummary(event));
         proposalHint.setText(current.status()
                 == IntakeChatCardHistory.Status.DELETED
                 ? R.string.intake_chat_deleted_hint
@@ -1229,6 +2127,7 @@ final class IntakeComposer {
         mealConfirm.setContentDescription(activity.getString(
                 R.string.intake_chat_action_delete_description,
                 primaryActionSummary(turn)));
+        updateGuidedStart();
     }
 
     private void renderActionCardHistory(
@@ -1296,7 +2195,17 @@ final class IntakeComposer {
         hintParams.topMargin = dp(6);
         container.addView(hint, hintParams);
 
-        container.setContentDescription(activity.getString(
+        boolean quickEditAvailable = card.isActive()
+                && canQuickEditEvent(card.event()) && !busy
+                && retryClientTurnId.isEmpty();
+        container.setClickable(quickEditAvailable);
+        container.setFocusable(quickEditAvailable);
+        container.setOnClickListener(quickEditAvailable
+                ? view -> openQuickEditorForEvent(card.event()) : null);
+        container.setContentDescription(quickEditAvailable
+                ? activity.getString(R.string.intake_quick_card_action,
+                        eventSummary(card.event()))
+                : activity.getString(
                 R.string.intake_chat_card_description,
                 status.getText(), summary.getText(), time.getText(),
                 hint.getText()));
@@ -1407,12 +2316,15 @@ final class IntakeComposer {
             proposalTime.setEnabled(!value);
             proposalTime.setAlpha(value ? 0.68f : 1.0f);
         }
-        root.findViewById(R.id.intake_back_button).setEnabled(!value);
+        // Back remains reachable while saving. Toolbar and system Back both
+        // show the same wait feedback and never detach an in-flight write.
+        root.findViewById(R.id.intake_back_button).setEnabled(true);
         updateBackendSettingsAvailability();
         updateMealTime();
         updateSendButton();
         updateVoiceButton();
         if (mealConfirm != null) updateProposal();
+        updateQuickEditor();
         updateReconcileAction();
         updateInlineError();
     }
@@ -1454,7 +2366,8 @@ final class IntakeComposer {
                 sessionFailureShown = false;
                 clearInlineError();
                 checkBackend();
-                ensureIntakeSession(null);
+                ensureIntakeSession(retryClientTurnId.isEmpty() ? null
+                        : this::retryPendingIntakeTurn);
                 break;
             case INLINE_ERROR_RETRY_TURN:
                 clearInlineError();
@@ -1484,7 +2397,10 @@ final class IntakeComposer {
     }
 
     private void choosePhotoAction() {
-        if (busy || recording || mode != Mode.MEAL) return;
+        if (busy || transcribing || mode != Mode.MEAL) return;
+        initialVoiceAutoStartPending = false;
+        if (recording || recorder != null) stopRecording(false);
+        hideKeyboard();
         if (pendingPhotos.size() + pendingPhotoImports
                 >= MAX_PHOTOS_PER_MESSAGE) {
             toast(activity.getString(R.string.meal_chat_photo_limit,
@@ -1495,12 +2411,13 @@ final class IntakeComposer {
                 activity.getString(R.string.intake_photo_take),
                 activity.getString(R.string.intake_photo_choose)
         };
-        new AlertDialog.Builder(activity)
+        AlertDialog photoDialog = new AlertDialog.Builder(activity)
                 .setTitle(R.string.meal_chat_attach)
                 .setItems(choices, (dialog, which) -> {
                     if (which == 0) launchCamera();
                     else launchGallery();
                 }).show();
+        placeDialogWithinReach(photoDialog.getWindow());
     }
 
     private void launchCamera() {
@@ -1811,7 +2728,8 @@ final class IntakeComposer {
     }
 
     private boolean canStartVoiceRecording() {
-        return !closed && mode == Mode.MEAL && !busy && !recording
+        return !closed && mode == Mode.MEAL && !busy && !quickExpanded
+                && !recording
                 && recorder == null && !transcribing
                 && pendingPhotoImports == 0 && retryClientTurnId.isEmpty()
                 && !recordPermissionRequestInFlight;
@@ -1856,6 +2774,7 @@ final class IntakeComposer {
     private void startRecording() {
         if (!canStartVoiceRecording()) return;
         voiceStatusMessage = 0;
+        setVoiceCaptureInputMode(true);
         try {
             recordingFile = File.createTempFile("meal-voice-", ".m4a",
                     mediaDirectory());
@@ -1882,6 +2801,7 @@ final class IntakeComposer {
             recorder.start();
             recorderReachedLimit = false;
             recording = true;
+            recordingStartedAt = SystemClock.elapsedRealtime();
             updateVoiceButton();
         } catch (Exception error) {
             stopRecording(false);
@@ -1900,6 +2820,7 @@ final class IntakeComposer {
         recorder = null;
         boolean wasRecording = recording;
         recording = false;
+        main.removeCallbacks(voiceElapsedTicker);
         if (active != null) {
             try {
                 if (wasRecording) active.stop();
@@ -1915,6 +2836,7 @@ final class IntakeComposer {
             try { active.reset(); } catch (RuntimeException ignored) {}
             active.release();
         }
+        setVoiceCaptureInputMode(false);
         File completed = recordingFile;
         recordingFile = null;
         recorderReachedLimit = false;
@@ -1924,6 +2846,29 @@ final class IntakeComposer {
             deleteTemporary(completed);
         }
         if (mode == Mode.MEAL) updateAttachments();
+    }
+
+    /**
+     * Recording and typing are mutually exclusive interaction modes. Keeping
+     * an EditText connected to the IME while the microphone is active lets the
+     * keyboard consume the first system Back press before our recording state
+     * machine sees it. Move focus to the visible stop action for capture, then
+     * restore text entry without reopening the keyboard when capture ends.
+     */
+    private void setVoiceCaptureInputMode(boolean capturing) {
+        if (mealInput == null) return;
+        if (capturing) {
+            hideKeyboard();
+            mealInput.clearFocus();
+            mealInput.setCursorVisible(false);
+            mealInput.setFocusableInTouchMode(false);
+            mealInput.setFocusable(false);
+            if (mealVoice != null) mealVoice.requestFocus();
+        } else {
+            mealInput.setFocusableInTouchMode(true);
+            mealInput.setFocusable(true);
+            mealInput.setCursorVisible(true);
+        }
     }
 
     private void transcribeRecording(File audio) {
@@ -2020,6 +2965,39 @@ final class IntakeComposer {
         });
     }
 
+    /** Keeps voice and send in one compact trailing action slot. */
+    private void updateComposerActionVisibility() {
+        if (mealVoice == null || mealSend == null) return;
+        boolean hasText = mealInput != null
+                && !IntakeEvent.clean(mealInput.getText().toString()).isEmpty();
+        boolean hasSendableTurn = hasText || !pendingPhotos.isEmpty()
+                || pendingPhotoImports > 0 || mealSending
+                || !retryClientTurnId.isEmpty();
+        boolean voiceOwnsSlot = recording || transcribing
+                || recordPermissionRequestInFlight;
+        boolean showSend = !voiceOwnsSlot && hasSendableTurn;
+        mealSend.setVisibility(showSend ? VISIBLE : GONE);
+        mealVoice.setVisibility(!quickExpanded && !showSend ? VISIBLE : GONE);
+        View secondaryVoice = root.findViewById(R.id.meal_chat_voice_secondary);
+        secondaryVoice.setVisibility(!quickExpanded && showSend ? VISIBLE : GONE);
+        boolean voiceAvailable = !busy && !transcribing
+                && !recordPermissionRequestInFlight && pendingPhotoImports == 0
+                && retryClientTurnId.isEmpty();
+        secondaryVoice.setEnabled(voiceAvailable);
+        secondaryVoice.setAlpha(voiceAvailable ? 1.0f : 0.5f);
+        if (intakeVoiceHint != null) {
+            // Do not announce a recording timer on every second in TalkBack.
+            intakeVoiceHint.setAccessibilityLiveRegion(recording
+                    ? View.ACCESSIBILITY_LIVE_REGION_NONE
+                    : View.ACCESSIBILITY_LIVE_REGION_POLITE);
+            boolean showVoiceState = !quickExpanded && (recording
+                    || transcribing || recordPermissionRequestInFlight
+                    || voiceStatusMessage != 0);
+            intakeVoiceHint.setVisibility(showVoiceState ? VISIBLE : GONE);
+        }
+        updateGuidedStart();
+    }
+
     private void updateVoiceButton() {
         if (mealVoice == null || mealVoiceIcon == null
                 || mealVoiceProgress == null) return;
@@ -2073,8 +3051,12 @@ final class IntakeComposer {
                             ? R.color.modern_secondary_warning
                             : voiceStatusMessage != 0
                             ? R.color.modern_secondary_danger
-                            : R.color.modern_secondary_text_secondary));
+                             : R.color.modern_secondary_text_secondary));
         }
+        main.removeCallbacks(voiceElapsedTicker);
+        if (recording) voiceElapsedTicker.run();
+        updateComposerActionVisibility();
+        updateGuidedStart();
     }
 
     private void updateSendButton() {
@@ -2085,6 +3067,7 @@ final class IntakeComposer {
         mealSendProgress.setVisibility(sending ? VISIBLE : GONE);
         mealSend.setContentDescription(activity.getString(sending
                 ? R.string.meal_chat_sending : R.string.meal_chat_send));
+        updateComposerActionVisibility();
     }
 
     private void pickTime(boolean meal) {
@@ -2131,13 +3114,23 @@ final class IntakeComposer {
             if (window != null) {
                 window.setBackgroundDrawable(new ColorDrawable(
                         Color.TRANSPARENT));
-                window.setLayout(MATCH_PARENT, WRAP_CONTENT);
+                placeDialogWithinReach(window);
                 window.setSoftInputMode(
                         WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
             }
         } catch (RuntimeException error) {
             toast(R.string.intake_time_picker_error);
         }
+    }
+
+    private void placeDialogWithinReach(Window window) {
+        if (window == null) return;
+        window.setGravity(Gravity.BOTTOM);
+        // Native pickers keep their platform controls; only their position
+        // changes. Wide Fold screens should not stretch the form edge to edge.
+        int width = activity.getResources().getDisplayMetrics().widthPixels;
+        window.setLayout(Math.max(1, Math.min(width - dp(24), dp(520))),
+                WRAP_CONTENT);
     }
 
     private void bindQuickTime(View button, AlertDialog dialog, boolean meal,
@@ -2166,6 +3159,7 @@ final class IntakeComposer {
         dateDialog.getDatePicker().setMaxDate(System.currentTimeMillis());
         try {
             dateDialog.show();
+            placeDialogWithinReach(dateDialog.getWindow());
         } catch (RuntimeException error) {
             toast(R.string.intake_time_picker_error);
         }
@@ -2184,6 +3178,7 @@ final class IntakeComposer {
                 android.text.format.DateFormat.is24HourFormat(activity));
         try {
             timeDialog.show();
+            placeDialogWithinReach(timeDialog.getWindow());
         } catch (RuntimeException error) {
             toast(R.string.intake_time_picker_error);
         }
@@ -2411,8 +3406,8 @@ final class IntakeComposer {
         deferredIntakeAudio = null;
         clearInlineError();
         chatLines.clear();
-        chatLines.add(new ChatLine(false,
-                activity.getString(R.string.meal_chat_intro), 0, false));
+        optimisticUserLineIndex = -1;
+        typingLineIndex = -1;
         IntakeChatStateStore.clear(activity);
         renderedChatLineCount = 0;
         renderChat();
@@ -2464,6 +3459,7 @@ final class IntakeComposer {
         }
         root = LayoutInflater.from(activity).inflate(layoutId, null, false);
         renderedChatLineCount = 0;
+        chatHasRendered = false;
         View page = root.findViewById(R.id.intake_page);
         ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
             Insets bars = insets.getInsets(
@@ -2472,6 +3468,7 @@ final class IntakeComposer {
             Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
             boolean keyboardVisible = insets.isVisible(
                     WindowInsetsCompat.Type.ime());
+            imeVisible = keyboardVisible;
             int readableGutter = ClinicalUi.readableHorizontalGutter(activity,
                     Math.max(0, view.getWidth() - bars.left - bars.right), 0);
             page.setPadding(bars.left + readableGutter, bars.top,
@@ -2479,7 +3476,8 @@ final class IntakeComposer {
                     Math.max(bars.bottom, ime.bottom));
             View safety = view.findViewById(R.id.meal_chat_safety);
             if (safety != null) {
-                safety.setVisibility(keyboardVisible ? GONE : VISIBLE);
+                safety.setVisibility(keyboardVisible || quickExpanded
+                        ? GONE : VISIBLE);
             }
             return insets;
         });
@@ -2487,23 +3485,52 @@ final class IntakeComposer {
         activity.addMyContentView(root,
                 new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT), false);
         ViewCompat.requestApplyInsets(root);
-        activity.lightBars(false);
+        activity.themeLightBars();
+    }
+
+    private void handleTopBack() {
+        handleBackInteraction(true, false);
     }
 
     private void handleSystemBack() {
+        // MainActivity removes a system-Back callback before invoking it. If
+        // this press only dismisses a transient layer, restore the callback.
+        handleBackInteraction(false, true);
+    }
+
+    private void handleBackInteraction(boolean popBackOnClose,
+            boolean restoreConsumedSystemCallback) {
         if (closed) return;
         if (busy) {
-            if (mode == Mode.MEAL) {
-                requestClose(false);
-                return;
+            if (restoreConsumedSystemCallback) {
+                MainActivity.setonback(this::handleSystemBack);
             }
-            MainActivity.setonback(this::handleSystemBack);
             toast(R.string.intake_wait_for_save);
             return;
         }
-        if (recording) stopRecording(false);
-        hideKeyboard();
-        requestClose(false);
+        if (imeVisible) {
+            hideKeyboard();
+            if (restoreConsumedSystemCallback) {
+                MainActivity.setonback(this::handleSystemBack);
+            }
+            return;
+        }
+        if (recording || recorder != null) {
+            stopRecording(false);
+            if (restoreConsumedSystemCallback) {
+                MainActivity.setonback(this::handleSystemBack);
+            }
+            return;
+        }
+        if (quickExpanded) {
+            setQuickEditorExpanded(false, true);
+            hideKeyboard();
+            if (restoreConsumedSystemCallback) {
+                MainActivity.setonback(this::handleSystemBack);
+            }
+            return;
+        }
+        requestClose(popBackOnClose);
     }
 
     private void childBack() {
@@ -2527,12 +3554,37 @@ final class IntakeComposer {
     void onConfigurationChanged() {
         if (closed || root == null) return;
         if (mode == Mode.MEAL && !busy) {
+            final int historyScrollY = mealScroll == null ? 0 : mealScroll.getScrollY();
+            final boolean wasFollowingLatest = chatFollowsLatest;
             String draft = mealInput == null ? ""
                     : mealInput.getText().toString();
+            String quickDoseDraft = quickDose == null ? ""
+                    : quickDose.getText().toString();
+            String quickMealDraft = quickMealName == null ? ""
+                    : quickMealName.getText().toString();
+            String quickCarbsDraft = quickCarbs == null ? ""
+                    : quickCarbs.getText().toString();
             showMeal();
+            chatFollowsLatest = wasFollowingLatest;
+            trackingChatScroll = false;
             if (mealInput != null) {
                 mealInput.setText(draft);
                 mealInput.setSelection(mealInput.length());
+            }
+            if (quickDose != null) quickDose.setText(quickDoseDraft);
+            if (quickMealName != null) quickMealName.setText(quickMealDraft);
+            if (quickCarbs != null) quickCarbs.setText(quickCarbsDraft);
+            setQuickEditorExpanded(quickExpanded, false);
+            updateQuickEditor();
+            if (!wasFollowingLatest) {
+                chatFollowsLatest = false;
+                final ScrollView restored = mealScroll;
+                restored.post(() -> {
+                    if (!closed && mealScroll == restored) {
+                        restored.scrollTo(0, historyScrollY);
+                        updateLatestChatButton();
+                    }
+                });
             }
         } else {
             ViewCompat.requestApplyInsets(root);
@@ -2581,6 +3633,7 @@ final class IntakeComposer {
         }
         persistChatState();
         closed = true;
+        main.removeCallbacks(voiceElapsedTicker);
         repository.removeConfigurationListener(backendConfigurationListener);
         transcriptionGeneration++;
         transcribing = false;
@@ -2638,13 +3691,80 @@ final class IntakeComposer {
         deferredTranscript = "";
         activity.getWindow().setSoftInputMode(previousSoftInputMode);
         activity.onIntakeComposerClosed(this);
-        activity.lightBars(false);
+        activity.themeLightBars();
+    }
+
+    private void bindChatScrolling() {
+        final ScrollView scroll = mealScroll;
+        trackingChatScroll = false;
+        latestChatButton = root.findViewById(R.id.intake_chat_latest);
+        latestChatButton.setOnClickListener(view -> {
+            chatFollowsLatest = true;
+            trackingChatScroll = false;
+            scrollChatToBottom();
+        });
+        scroll.setOnTouchListener((view, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
+                trackingChatScroll = true;
+                chatFollowsLatest = isNearChatBottom(scroll);
+            }
+            return false; // ScrollView retains all native touch/fling gestures.
+        });
+        scroll.setOnKeyListener((view, key, event) -> {
+            if (event.getAction() == KeyEvent.ACTION_DOWN
+                    && (key == KeyEvent.KEYCODE_DPAD_UP
+                    || key == KeyEvent.KEYCODE_DPAD_DOWN
+                    || key == KeyEvent.KEYCODE_PAGE_UP
+                    || key == KeyEvent.KEYCODE_PAGE_DOWN
+                    || key == KeyEvent.KEYCODE_MOVE_HOME
+                    || key == KeyEvent.KEYCODE_MOVE_END)) {
+                trackingChatScroll = true;
+            }
+            return false;
+        });
+        scroll.getViewTreeObserver().addOnScrollChangedListener(() -> {
+            if (closed || mealScroll != scroll) return;
+            if (trackingChatScroll) chatFollowsLatest = isNearChatBottom(scroll);
+            updateLatestChatButton();
+        });
+        scroll.addOnLayoutChangeListener((view, left, top, right, bottom,
+                oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (bottom - top != oldBottom - oldTop) {
+                // Keyboard/insets and sheet height changes keep the latest
+                // reply in view only while the user is following the tail.
+                scrollChatToBottom();
+            }
+        });
+    }
+
+    private boolean isNearChatBottom(ScrollView scroll) {
+        if (scroll.getChildCount() == 0) return true;
+        int remaining = scroll.getChildAt(0).getBottom()
+                + scroll.getPaddingBottom() - scroll.getHeight()
+                - scroll.getScrollY();
+        return remaining <= dp(48);
+    }
+
+    private void updateLatestChatButton() {
+        if (latestChatButton == null || mealScroll == null) return;
+        latestChatButton.setVisibility(!chatFollowsLatest
+                && !isNearChatBottom(mealScroll) ? VISIBLE : GONE);
     }
 
     private void scrollChatToBottom() {
-        if (mealScroll != null) {
-            mealScroll.post(() -> mealScroll.fullScroll(View.FOCUS_DOWN));
-        }
+        final ScrollView scroll = mealScroll;
+        if (scroll == null) return;
+        scroll.post(() -> {
+            if (closed || scroll != mealScroll) return;
+            if (chatFollowsLatest && scroll.getChildCount() > 0) {
+                trackingChatScroll = false;
+                // Unlike fullScroll(), scrollTo() never steals input focus.
+                int bottom = scroll.getChildAt(0).getBottom()
+                        + scroll.getPaddingBottom() - scroll.getHeight();
+                scroll.scrollTo(0, Math.max(0, bottom));
+            }
+            updateLatestChatButton();
+        });
     }
 
     private void hideKeyboard() {
@@ -2685,6 +3805,8 @@ final class IntakeComposer {
         retryBackendFingerprint = backendFingerprint();
         retryTurnOccurredAtMs = pending.occurredAtMs;
         retryTurnText = pending.text;
+        retryTurnDisplayText = pending.displayText;
+        retryTurnStructuredIntent = pending.structuredIntent;
         retryTurnAudio = pending.audio;
         retryTurnPhotos.addAll(pending.photos);
         retryTurnDefinitiveFailure = pending.definitiveFailure;
@@ -2707,13 +3829,14 @@ final class IntakeComposer {
         if (retryClientTurnId.isEmpty()) {
             // Completed conversations are intentionally ephemeral. Saved
             // events live in the repository and are not touched here.
-            IntakeChatStateStore.clear(activity);
-            return true;
+            return IntakeChatStateStore.clearIfOwned(activity,
+                    backendFingerprint(), intakeClientSessionId);
         }
         IntakeChatStateStore.Pending pending = new IntakeChatStateStore.Pending(
                 retryClientTurnId, retryTurnOccurredAtMs, retryTurnText,
                 retryTurnAudio, retryTurnPhotos, retryTurnDefinitiveFailure,
-                retryTurnCommitMayHaveOccurred, retryTurnControlKind);
+                retryTurnCommitMayHaveOccurred, retryTurnControlKind,
+                retryTurnStructuredIntent, retryTurnDisplayText);
         String fingerprint = retryBackendFingerprint.isEmpty()
                 ? backendFingerprint() : retryBackendFingerprint;
         return IntakeChatStateStore.save(activity, fingerprint,

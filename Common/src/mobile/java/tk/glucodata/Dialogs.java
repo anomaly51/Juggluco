@@ -204,7 +204,7 @@ private void showPhoneExport(MainActivity activity,View parent) {
 
         exportlabel=ClinicalUi.body(activity,"");
         exportlabel.setTextColor(ClinicalUi.danger(activity));
-        exportlabel.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        exportlabel.setTypeface(Typeface.create("monospace",Typeface.NORMAL));
         exportlabel.setPadding(ClinicalUi.dp(activity,16),ClinicalUi.dp(activity,12),
                 ClinicalUi.dp(activity,16),ClinicalUi.dp(activity,12));
         exportlabel.setBackground(ClinicalUi.surface(activity,false,false));
@@ -282,7 +282,7 @@ private void addPhoneExportCard(
     label.setText(title);
     label.setTextColor(ClinicalUi.primaryText(activity));
     label.setTextSize(TypedValue.COMPLEX_UNIT_SP,17);
-    label.setTypeface(Typeface.create("sans-serif-medium",Typeface.BOLD));
+    label.setTypeface(Typeface.create("monospace",Typeface.BOLD));
     copy.addView(label);
     TextView helper=ClinicalUi.body(activity,activity.getString(helperRes));
     helper.setTextSize(TypedValue.COMPLEX_UNIT_SP,13);
@@ -293,7 +293,7 @@ private void addPhoneExportCard(
     format.setText(extensionForExportType(type).substring(1).toUpperCase(Locale.US));
     format.setTextColor(ClinicalUi.accent(activity));
     format.setTextSize(TypedValue.COMPLEX_UNIT_SP,13);
-    format.setTypeface(Typeface.create("sans-serif-medium",Typeface.BOLD));
+    format.setTypeface(Typeface.create("monospace",Typeface.BOLD));
     format.setGravity(Gravity.CENTER);
     format.setPadding(ClinicalUi.dp(activity,10),ClinicalUi.dp(activity,7),
             ClinicalUi.dp(activity,10),ClinicalUi.dp(activity,7));

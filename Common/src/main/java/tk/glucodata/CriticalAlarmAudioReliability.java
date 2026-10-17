@@ -12,20 +12,22 @@ import android.os.SystemClock;
  *
  * <p>The ringer switch does not mute {@link AudioManager#STREAM_ALARM}, but
  * the alarm stream itself can still be set to zero. A critical episode raises
- * only that stream to a bounded audible floor and restores the previous value
- * when the episode ends. No ringer mode or Do Not Disturb filter is changed.
- * Android and the user's notification-policy grant remain the final authority
- * over audio delivery.</p>
+ * only that stream to a bounded audible floor, explicitly unmutes it when
+ * necessary, and restores the owned volume/mute state when the episode ends.
+ * No ringer mode or Do Not Disturb filter is changed. Android and the user's
+ * notification-policy grant remain the final authority over audio delivery.</p>
  */
 final class CriticalAlarmAudioReliability {
     static final String PREFS_NAME = "critical_alarm_audio_reliability_v1";
 
     private static final String KEY_ORIGINAL_VOLUME = "original_alarm_volume";
+    private static final String KEY_ORIGINAL_MUTED = "original_alarm_muted";
     private static final String KEY_FORCED_VOLUME = "forced_alarm_volume";
     private static final String KEY_RESTORE_PENDING = "restore_pending";
     private static final String KEY_RESTORE_TOKEN = "restore_token";
     private static final int NO_SAVED_VOLUME = -1;
     private static final long DELIVERY_WAKE_LOCK_MS = 15_000L;
+    private static final long AUDIO_WATCHDOG_WAKE_LOCK_MS = 30_000L;
     private static final long OEM_ROUNDED_STEP_WINDOW_MS = 1_200L;
 
     private CriticalAlarmAudioReliability() {}
@@ -58,7 +60,9 @@ final class CriticalAlarmAudioReliability {
         }
         SharedPreferences preferences = preferences(app);
         int target = minimumAudibleIndex(maximum, minimumPercent);
-        if (target <= 0 || current >= target) {
+        if (target <= 0) return false;
+        boolean currentlyMuted = alarmStreamMuted(audio);
+        if (current >= target && !currentlyMuted) {
             // A newer critical episode that is already audible must not inherit
             // an old post-ACK restore. The user may also have raised the stream
             // manually after that ACK, so leave the current value untouched.
@@ -71,32 +75,83 @@ final class CriticalAlarmAudioReliability {
         int savedOriginal = preferences.getInt(KEY_ORIGINAL_VOLUME,
                 NO_SAVED_VOLUME);
         boolean firstAdjustment = savedOriginal == NO_SAVED_VOLUME;
+        // A muted stream can already be above the configured floor. Never
+        // lower that user-selected index merely to unmute it for the episode.
+        int forced = Math.max(current, target);
         SharedPreferences.Editor editor = preferences.edit()
-                .putInt(KEY_FORCED_VOLUME, target)
+                .putInt(KEY_FORCED_VOLUME, forced)
                 .remove(KEY_RESTORE_PENDING)
                 .remove(KEY_RESTORE_TOKEN);
-        if (firstAdjustment) editor.putInt(KEY_ORIGINAL_VOLUME, current);
+        if (firstAdjustment) {
+            // Persist the mute bit before ADJUST_UNMUTE for the same reason as
+            // the volume: process death must not strand a previously muted
+            // alarm stream in an audible state.
+            editor.putInt(KEY_ORIGINAL_VOLUME, current)
+                    .putBoolean(KEY_ORIGINAL_MUTED, currentlyMuted);
+        }
         // Persist first: a crash after setStreamVolume must not strand the
         // user's alarm volume at our temporary level forever.
         if (!editor.commit()) return false;
 
         try {
-            audio.setStreamVolume(AudioManager.STREAM_ALARM, target, 0);
+            audio.setStreamVolume(AudioManager.STREAM_ALARM, forced, 0);
+            if (currentlyMuted && Build.VERSION.SDK_INT
+                    >= Build.VERSION_CODES.M) {
+                audio.adjustStreamVolume(AudioManager.STREAM_ALARM,
+                        AudioManager.ADJUST_UNMUTE, 0);
+            }
             int appliedVolume = audio.getStreamVolume(
                     AudioManager.STREAM_ALARM);
-            boolean applied = appliedVolume >= target;
-            if (applied && appliedVolume != target) {
+            boolean applied = appliedVolume >= forced
+                    && !alarmStreamMuted(audio);
+            if (applied && appliedVolume != forced) {
                 preferences.edit().putInt(KEY_FORCED_VOLUME,
                         appliedVolume).commit();
             }
-            if (!applied && firstAdjustment) clearSavedVolume(preferences);
+            if (!applied && firstAdjustment) {
+                rollbackFirstAdjustment(audio, preferences, current,
+                        currentlyMuted);
+            }
             return applied;
         } catch (SecurityException | IllegalArgumentException denied) {
-            if (firstAdjustment) clearSavedVolume(preferences);
+            if (firstAdjustment) rollbackFirstAdjustment(audio, preferences,
+                    current, currentlyMuted);
             return false;
         } catch (RuntimeException unavailable) {
-            if (firstAdjustment) clearSavedVolume(preferences);
+            if (firstAdjustment) rollbackFirstAdjustment(audio, preferences,
+                    current, currentlyMuted);
             return false;
+        }
+    }
+
+    /** Never discard restore ownership after a partial global audio change. */
+    private static void rollbackFirstAdjustment(AudioManager audio,
+            SharedPreferences preferences, int originalVolume,
+            boolean originalMuted) {
+        try {
+            audio.setStreamVolume(AudioManager.STREAM_ALARM,
+                    originalVolume, 0);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                audio.adjustStreamVolume(AudioManager.STREAM_ALARM,
+                        originalMuted ? AudioManager.ADJUST_MUTE
+                                : AudioManager.ADJUST_UNMUTE, 0);
+            }
+            if (audio.getStreamVolume(AudioManager.STREAM_ALARM)
+                    == originalVolume
+                    && alarmStreamMuted(audio) == originalMuted) {
+                clearSavedVolume(preferences);
+            }
+        } catch (RuntimeException ignored) {
+            // Keep the persisted restore plan for the next controller start.
+        }
+    }
+
+    private static boolean alarmStreamMuted(AudioManager audio) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false;
+        try {
+            return audio.isStreamMute(AudioManager.STREAM_ALARM);
+        } catch (RuntimeException unavailable) {
+            return true;
         }
     }
 
@@ -153,7 +208,16 @@ final class CriticalAlarmAudioReliability {
             String token = pending && pendingToken != null
                     && !pendingToken.isEmpty() ? pendingToken
                     : ownerToken == null ? "" : ownerToken;
-            return new RestorePlan(safeOriginal, forced, token,
+            boolean originalMuted = preferences.getBoolean(
+                    KEY_ORIGINAL_MUTED, false);
+            if (!originalMuted && alarmStreamMuted(audio)) {
+                // The controller did not own the original mute state. A mute
+                // applied during the episode is therefore a manual/system
+                // change, just like an unrecognized volume index: preserve it.
+                clearSavedVolume(preferences);
+                return null;
+            }
+            return new RestorePlan(safeOriginal, forced, originalMuted, token,
                     SystemClock.elapsedRealtime()
                             + OEM_ROUNDED_STEP_WINDOW_MS);
         } catch (SecurityException | IllegalArgumentException denied) {
@@ -179,8 +243,9 @@ final class CriticalAlarmAudioReliability {
         try {
             audio.setStreamVolume(AudioManager.STREAM_ALARM,
                     plan.originalVolume, 0);
-            return audio.getStreamVolume(AudioManager.STREAM_ALARM)
-                    == plan.originalVolume;
+            if (audio.getStreamVolume(AudioManager.STREAM_ALARM)
+                    != plan.originalVolume) return false;
+            return restoreOriginalMute(audio, plan.originalMuted);
         } catch (SecurityException | IllegalArgumentException denied) {
             return false;
         } catch (RuntimeException unavailable) {
@@ -212,12 +277,19 @@ final class CriticalAlarmAudioReliability {
                 clearSavedVolume(preferences);
                 return false;
             }
-            if (current != plan.originalVolume) {
+            boolean oemReasserted = current != plan.originalVolume;
+            if (oemReasserted) {
                 audio.setStreamVolume(AudioManager.STREAM_ALARM,
                         plan.originalVolume, 0);
             }
             boolean restored = audio.getStreamVolume(AudioManager.STREAM_ALARM)
                     == plan.originalVolume;
+            if (restored && oemReasserted) {
+                // Reapply the saved mute only after a recognizable OEM volume
+                // reassertion. If the volume is already restored, an unmute
+                // after ACK may be a fresh manual choice and must win.
+                restored = restoreOriginalMute(audio, plan.originalMuted);
+            }
             if (restored && finalAttempt) clearSavedVolume(preferences);
             return restored;
         } catch (SecurityException | IllegalArgumentException denied) {
@@ -232,7 +304,25 @@ final class CriticalAlarmAudioReliability {
         return preferences.getInt(KEY_ORIGINAL_VOLUME, NO_SAVED_VOLUME)
                 == plan.originalVolume
                 && preferences.getInt(KEY_FORCED_VOLUME, NO_SAVED_VOLUME)
-                == plan.forcedVolume;
+                == plan.forcedVolume
+                && preferences.getBoolean(KEY_ORIGINAL_MUTED, false)
+                == plan.originalMuted;
+    }
+
+    private static boolean restoreOriginalMute(AudioManager audio,
+            boolean originalMuted) {
+        if (!originalMuted || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return true;
+        }
+        try {
+            audio.adjustStreamVolume(AudioManager.STREAM_ALARM,
+                    AudioManager.ADJUST_MUTE, 0);
+            return alarmStreamMuted(audio);
+        } catch (SecurityException | IllegalArgumentException denied) {
+            return false;
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
     }
 
     private static boolean looksLikeOemReassertion(int current,
@@ -267,19 +357,45 @@ final class CriticalAlarmAudioReliability {
     static final class RestorePlan {
         final int originalVolume;
         final int forcedVolume;
+        final boolean originalMuted;
         final String ownerToken;
         final long roundedStepDeadlineElapsedMs;
 
-        RestorePlan(int originalVolume, int forcedVolume, String ownerToken,
+        RestorePlan(int originalVolume, int forcedVolume,
+                boolean originalMuted, String ownerToken,
                 long roundedStepDeadlineElapsedMs) {
             this.originalVolume = originalVolume;
             this.forcedVolume = forcedVolume;
+            this.originalMuted = originalMuted;
             this.ownerToken = ownerToken == null ? "" : ownerToken;
             this.roundedStepDeadlineElapsedMs = roundedStepDeadlineElapsedMs;
         }
     }
 
     static PowerManager.WakeLock acquireDeliveryWakeLock(Context context) {
+        return acquireWakeLock(context, "Juggluco::CriticalAlarmDelivery",
+                DELIVERY_WAKE_LOCK_MS);
+    }
+
+    static PowerManager.WakeLock acquireAudioWatchdogWakeLock(Context context) {
+        return acquireWakeLock(context, "Juggluco::CriticalAlarmAudioWatchdog",
+                AUDIO_WATCHDOG_WAKE_LOCK_MS);
+    }
+
+    static void renewAudioWatchdogWakeLock(PowerManager.WakeLock wakeLock) {
+        if (wakeLock == null) return;
+        try {
+            // A timed lease keeps the check alive with the screen off. Explicit
+            // stop releases it immediately; the timeout is a backup (its
+            // dispatch can itself be delayed by a blocked application looper).
+            wakeLock.acquire(AUDIO_WATCHDOG_WAKE_LOCK_MS);
+        } catch (RuntimeException denied) {
+            // Notification audio itself is owned by Android, not this lock.
+        }
+    }
+
+    private static PowerManager.WakeLock acquireWakeLock(Context context,
+            String tag, long timeoutMs) {
         if (context == null) return null;
         try {
             PowerManager power = (PowerManager) context.getApplicationContext()
@@ -287,9 +403,9 @@ final class CriticalAlarmAudioReliability {
             if (power == null) return null;
             PowerManager.WakeLock wakeLock = power.newWakeLock(
                     PowerManager.PARTIAL_WAKE_LOCK,
-                    "Juggluco::CriticalAlarmDelivery");
+                    tag);
             wakeLock.setReferenceCounted(false);
-            wakeLock.acquire(DELIVERY_WAKE_LOCK_MS);
+            wakeLock.acquire(timeoutMs);
             return wakeLock;
         } catch (RuntimeException denied) {
             return null;
@@ -326,6 +442,7 @@ final class CriticalAlarmAudioReliability {
     private static void clearSavedVolume(SharedPreferences preferences) {
         preferences.edit()
                 .remove(KEY_ORIGINAL_VOLUME)
+                .remove(KEY_ORIGINAL_MUTED)
                 .remove(KEY_FORCED_VOLUME)
                 .remove(KEY_RESTORE_PENDING)
                 .remove(KEY_RESTORE_TOKEN)

@@ -20,6 +20,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
+import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Looper;
 import android.service.notification.StatusBarNotification;
@@ -62,6 +63,7 @@ public class CriticalGlucoseAlarmTest {
     @Before
     public void setUp() {
         application = RuntimeEnvironment.getApplication();
+        CriticalAlarmTestMedia.resetAndRegister(application);
         shadowOf(application).grantPermissions(
                 Manifest.permission.POST_NOTIFICATIONS);
         notifications = (NotificationManager) application.getSystemService(
@@ -84,6 +86,7 @@ public class CriticalGlucoseAlarmTest {
     @After
     public void tearDown() {
         clearRuntimeSession();
+        CriticalAlarmTestMedia.reset();
         notifications.cancelAll();
         application.getSharedPreferences(
                 PredictiveAlertPreferences.PREFS_NAME, Context.MODE_PRIVATE)
@@ -114,9 +117,7 @@ public class CriticalGlucoseAlarmTest {
                     channel.getImportance());
             assertEquals(Notification.VISIBILITY_PRIVATE,
                     channel.getLockscreenVisibility());
-            assertNotNull(channel.getSound());
-            assertEquals(AudioAttributes.USAGE_ALARM,
-                    channel.getAudioAttributes().getUsage());
+            assertNull(channel.getSound());
             assertTrue("DND bypass missing for " + id, channel.canBypassDnd());
         }
     }
@@ -135,13 +136,14 @@ public class CriticalGlucoseAlarmTest {
         assertEquals("siren", session.soundToneId);
         String channelId = selectedChannel(
                 CriticalAlarmSoundCatalog.AlertType.ACTUAL_LOW);
-        assertTrue(channelId.endsWith("_v4_bypass_siren"));
+        assertTrue(channelId.endsWith("_v5_app_audio_bypass_siren"));
         NotificationChannel channel =
                 notifications.getNotificationChannel(channelId);
         assertNotNull(channel);
-        assertTrue(channel.getSound().toString().endsWith("/raw/siren"));
-        assertEquals(AudioAttributes.USAGE_ALARM,
-                channel.getAudioAttributes().getUsage());
+        assertNull(channel.getSound());
+        assertEquals(R.raw.siren,
+                CriticalAlarmAudioPlayer.ownerSoundResForTests());
+        assertTrue(CriticalAlarmAudioPlayer.isPlaying(session.token));
         assertNotNull(activeNotification(channelId));
     }
 
@@ -278,9 +280,8 @@ public class CriticalGlucoseAlarmTest {
             assertFalse(standard.canBypassDnd());
             assertNotNull(bypassIds[index], bypass);
             assertTrue(bypass.canBypassDnd());
-            assertEquals(standard.getSound(), bypass.getSound());
-            assertEquals(AudioAttributes.USAGE_ALARM,
-                    bypass.getAudioAttributes().getUsage());
+            assertNull(standard.getSound());
+            assertNull(bypass.getSound());
         }
     }
 
@@ -663,8 +664,8 @@ public class CriticalGlucoseAlarmTest {
         assertNull(activeNotification(8_405));
         assertEquals(0, notifications.getActiveNotifications().length);
         assertTrue(token().isEmpty());
-        assertNull(getStaticField("ringtone"));
-        assertNull(getStaticField("delayedLoop"));
+        assertNull(CriticalAlarmAudioPlayer.ownerTokenForTests());
+        assertNull(CriticalAlarmAudioPlayer.playerForTests());
     }
 
     @Test
@@ -739,9 +740,9 @@ public class CriticalGlucoseAlarmTest {
         assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility);
         assertEquals(Notification.CATEGORY_ALARM, notification.category);
         assertTrue((notification.flags & Notification.FLAG_NO_CLEAR) != 0);
-        assertTrue((notification.flags & Notification.FLAG_INSISTENT) != 0);
-        assertEquals(0, notification.flags
-                & Notification.FLAG_ONLY_ALERT_ONCE);
+        assertEquals(0, notification.flags & Notification.FLAG_INSISTENT);
+        assertTrue((notification.flags
+                & Notification.FLAG_ONLY_ALERT_ONCE) != 0);
         assertNotNull(notification.actions);
         assertEquals(1, notification.actions.length);
         Intent stopIntent = shadowOf(notification.actions[0].actionIntent)
@@ -750,8 +751,7 @@ public class CriticalGlucoseAlarmTest {
                 stopIntent.getAction());
         assertEquals(token(), stopIntent.getStringExtra(
                 CriticalGlucoseAlarmReceiver.EXTRA_TOKEN));
-        assertNull(getStaticField("delayedLoop"));
-        assertNull(getStaticField("ringtone"));
+        assertTrue(CriticalAlarmAudioPlayer.isPlaying(token()));
     }
 
     @Test
@@ -876,19 +876,19 @@ public class CriticalGlucoseAlarmTest {
     }
 
     @Test
-    public void repeatedEqualUpdateKeepsTokenAndNoParallelAppLoop()
+    public void repeatedEqualUpdateKeepsTokenAndSinglePlayer()
             throws Exception {
         long now = System.currentTimeMillis();
         assertTrue(showPrediction(true, "Likely low", "First body", now));
         String firstToken = token();
-        assertNull(getStaticField("delayedLoop"));
-        assertNull(getStaticField("ringtone"));
+        MediaPlayer firstPlayer = CriticalAlarmAudioPlayer.playerForTests();
+        assertNotNull(firstPlayer);
 
         assertTrue(showPrediction(true, "Likely low updated",
                 "Updated body", now + 2_000L));
         assertEquals(firstToken, token());
-        assertNull(getStaticField("delayedLoop"));
-        assertNull(getStaticField("ringtone"));
+        assertSame(firstPlayer, CriticalAlarmAudioPlayer.playerForTests());
+        assertTrue(CriticalAlarmAudioPlayer.isPlaying(firstToken));
         CriticalGlucoseAlarm.Session updated =
                 CriticalGlucoseAlarm.session(application, firstToken);
         assertNotNull(updated);
@@ -1009,7 +1009,7 @@ public class CriticalGlucoseAlarmTest {
     }
 
     @Test
-    public void blockedDeliveryReturnsLegacyControlAndNeverStartsAppLoop()
+    public void blockedDeliveryReturnsLegacyControlAndStopsAppPlayer()
             throws Exception {
         long now = System.currentTimeMillis();
         assertTrue(showPrediction(true, "Likely low", "Prediction", now));
@@ -1018,14 +1018,14 @@ public class CriticalGlucoseAlarmTest {
             assertFalse(CriticalGlucoseAlarm.showActual(application, 0,
                     61f, "Measured low", false));
             assertTrue(token().isEmpty());
-            assertNull(getStaticField("delayedLoop"));
-            assertNull(getStaticField("ringtone"));
+            assertNull(CriticalAlarmAudioPlayer.ownerTokenForTests());
+            assertNull(CriticalAlarmAudioPlayer.playerForTests());
 
             assertFalse(CriticalGlucoseAlarm.showActual(application, 1,
                     220f, "Fresh blocked actual", true));
             assertTrue(token().isEmpty());
-            assertNull(getStaticField("delayedLoop"));
-            assertNull(getStaticField("ringtone"));
+            assertNull(CriticalAlarmAudioPlayer.ownerTokenForTests());
+            assertNull(CriticalAlarmAudioPlayer.playerForTests());
         } finally {
             shadowOf(notifications).setNotificationsEnabled(true);
         }
@@ -1131,13 +1131,12 @@ public class CriticalGlucoseAlarmTest {
     // is its oldest supported runtime. The source assertions below pin the
     // same guarded branch all the way down to the application's API 21 min.
     @Config(sdk = 23, application = Application.class)
-    public void preOreoRuntimePostsInsistentAlarmAndUsesLegacyWindowFlags()
+    public void preOreoRuntimeUsesAppAlarmPlayerAndLegacyWindowFlags()
             throws Exception {
         long now = System.currentTimeMillis();
         assertTrue(showPrediction(true, "Likely low", "API 21", now));
         assertFalse(token().isEmpty());
-        assertNull(getStaticField("delayedLoop"));
-        assertNull(getStaticField("ringtone"));
+        assertTrue(CriticalAlarmAudioPlayer.isPlaying(token()));
 
         Intent intent = new Intent(application,
                 CriticalGlucoseAlarmActivity.class)
@@ -1254,7 +1253,7 @@ public class CriticalGlucoseAlarmTest {
     }
 
     @Test
-    public void manifestAndSourceKeepCriticalSurfacesPrivateAndNeverMutateDndOrVolume()
+    public void manifestAndSourceKeepCriticalSurfacesPrivateAndBoundedAudio()
             throws Exception {
         String manifest = source(Paths.get("src", "mobile",
                 "AndroidManifest.xml"));
@@ -1276,6 +1275,10 @@ public class CriticalGlucoseAlarmTest {
 
         String controller = source(Paths.get("src", "main", "java", "tk",
                 "glucodata", "CriticalGlucoseAlarm.java"));
+        String audioPlayer = source(Paths.get("src", "main", "java", "tk",
+                "glucodata", "CriticalAlarmAudioPlayer.java"));
+        String audioReliability = source(Paths.get("src", "main", "java", "tk",
+                "glucodata", "CriticalAlarmAudioReliability.java"));
         String activity = source(Paths.get("src", "main", "java", "tk",
                 "glucodata", "CriticalGlucoseAlarmActivity.java"));
         String receiver = source(Paths.get("src", "main", "java", "tk",
@@ -1289,20 +1292,16 @@ public class CriticalGlucoseAlarmTest {
         assertTrue(controller.contains("NotificationCompat.VISIBILITY_PRIVATE"));
         assertTrue(controller.contains("setBypassDnd(bypassDnd)"));
         assertTrue(controller.contains("isNotificationPolicyAccessGranted"));
-        assertTrue(controller.contains("USAGE_ALARM"));
-        assertTrue(controller.contains(
-                "Build.VERSION.SDK_INT >= Build.VERSION_CODES.P"));
-        assertTrue(controller.contains(
-                "Build.VERSION.SDK_INT < Build.VERSION_CODES.P"));
-        assertTrue(controller.contains(
-                "MAIN.postDelayed(delayedLoop"));
+        assertTrue(audioPlayer.contains("AudioAttributes.USAGE_ALARM"));
+        assertTrue(audioPlayer.contains("setLooping(true)"));
+        assertTrue(audioPlayer.contains("setWakeMode"));
+        assertTrue(audioReliability.contains("AudioManager.ADJUST_UNMUTE"));
         assertTrue(controller.contains(
                 "Build.VERSION.SDK_INT < Build.VERSION_CODES.O"));
-        assertTrue(controller.contains("AudioManager.STREAM_ALARM"));
+        assertTrue(audioReliability.contains("AudioManager.STREAM_ALARM"));
         assertTrue(controller.contains("Notification.FLAG_INSISTENT"));
         assertTrue(controller.contains(
-                "notification.flags &= ~Notification.FLAG_ONLY_ALERT_ONCE"));
-        assertFalse(controller.contains(".setOnlyAlertOnce("));
+                "notification.flags |= Notification.FLAG_ONLY_ALERT_ONCE"));
         assertFalse(controller.contains(
                 "getSystemService(NotificationManager.class)"));
         assertFalse(controller.contains(
@@ -1324,8 +1323,6 @@ public class CriticalGlucoseAlarmTest {
         String safetySurface = controller + activity + receiver + notify
                 + overlay;
         assertFalse(safetySurface.contains("setInterruptionFilter"));
-        String audioReliability = source(Paths.get("src", "main", "java", "tk",
-                "glucodata", "CriticalAlarmAudioReliability.java"));
         assertTrue(audioReliability.contains("setStreamVolume"));
         assertTrue(audioReliability.contains("STREAM_ALARM"));
         assertTrue(audioReliability.contains("restoreAlarmVolume"));

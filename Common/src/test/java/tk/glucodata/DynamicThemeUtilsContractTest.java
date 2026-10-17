@@ -7,6 +7,7 @@ import static org.junit.Assert.assertTrue;
 import android.app.Application;
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.graphics.drawable.InsetDrawable;
 import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -76,6 +77,30 @@ public class DynamicThemeUtilsContractTest {
     }
 
     @Test
+    public void defaultOverlayTypographyAndShapeIgnoreLegacyOvalPreference() {
+        LinearLayout root = new LinearLayout(context);
+        Button button = new Button(context);
+        TextView label = new TextView(context);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        root.addView(button);
+        root.addView(label);
+
+        DynamicThemeUtils.applyTheme(root);
+
+        assertEquals(2, DynamicThemeUtils.RETRO_CORNER_RADIUS_DP);
+        assertTrue(!DynamicThemeUtils.RETRO_OVAL_BUTTONS);
+        assertEquals(R.style.AppTheme_ClinicalDark,
+                DynamicThemeUtils.runtimeThemeStyle());
+        assertEquals(R.style.ShapeOverride_Rectangle,
+                DynamicThemeUtils.retroShapeOverrideStyle());
+        assertEquals(Typeface.create("monospace", Typeface.NORMAL),
+                button.getTypeface());
+        assertEquals(Typeface.create("monospace", Typeface.NORMAL),
+                label.getTypeface());
+        assertTrue(button.getMinimumHeight() >= dp(48));
+    }
+
+    @Test
     public void lightThemeUsesReadableLightSystemBars() {
         Context lightContext = new ContextThemeWrapper(
                 RuntimeEnvironment.getApplication(),
@@ -113,7 +138,7 @@ public class DynamicThemeUtilsContractTest {
 
         int touchTarget = dp(48);
         assertNotNull(modal.getBackground());
-        assertTrue(modal.getElevation() > 0f);
+        assertEquals(0f, modal.getElevation(), 0f);
         assertTrue(modal.getClipToOutline());
         assertNotNull(action.getBackground());
         assertEquals(touchTarget, action.getMinimumHeight());

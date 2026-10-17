@@ -24,7 +24,6 @@ package tk.glucodata;
 
 import android.app.Activity;
 import android.content.res.ColorStateList;
-import android.graphics.Color;
 import android.graphics.Typeface;
 import android.opengl.GLSurfaceView;
 import android.text.InputType;
@@ -36,12 +35,14 @@ import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.Menu;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.SurfaceHolder;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.widget.AdapterView;
 import android.widget.Button;
 
@@ -50,6 +51,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
@@ -60,7 +62,10 @@ import java.util.Calendar;
 
 import androidx.annotation.Keep;
 import androidx.annotation.UiThread;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
 import tk.glucodata.nums.numio;
@@ -88,30 +93,6 @@ import static tk.glucodata.settings.Settings.removeContentView;
 import static tk.glucodata.util.getlabel;
 
 public class GlucoseCurve extends GLSurfaceView {
-Button summarybutton=null;
-boolean statspresent=false;
-@Keep
-void summaryready() {
-    statspresent=true;
-    if(doLog) {Log.i(LOG_ID,"summaryready");};;
-    Applic.RunOnUiThread(()-> {
-       if(doLog) {
-           Log.i(LOG_ID,"UIThread summaryready");
-           }
-        Button tmp= summarybutton;
-        summarybutton=null;
-        if(tmp!=null) {
-            {if(doLog) {Log.i(LOG_ID,"set Visible");};};
-            tmp.setVisibility(VISIBLE);
-            tmp.bringToFront();
-            }
-        });
-   if(doLog) {
-           Log.i(LOG_ID,"end summaryready");
-           }
-    
-    }
-
 @Keep
 void showsensorinfo(String text,long sensorptr) {
     Applic.RunOnUiThread(()-> {
@@ -139,324 +120,6 @@ static   public float smallfontsize;
 
 
 NumberView  numberview= new NumberView();
-
-ViewGroup numcontrol=null;
-void startsearch() {
-if(!isWearable) {
-    MainActivity activity = (MainActivity) getContext();
-    if(searchcontrol!=null) {
-        Natives.stopsearch();
-        searchcontrol.setVisibility(View.GONE);
-    }
-    if (search == null) {
-        search = getsearchlayout(activity);
-    } else {
-        var labels=Natives.getLabels();
-        if(!searchspinadap.getarray().equals(labels))  {
-            searchspinadap.setarray(labels);
-            searchspinner.setAdapter(searchspinadap);
-        }
-        search.setVisibility(View.VISIBLE);
-        search.bringToFront();
-        if(labelsel==Natives.getmealvar())
-            mkmealsearch(activity);
-    }
-    search.setFocusableInTouchMode(true);
-    search.requestFocus();
-
-    activity.setonback(()-> {
-        activity.showui=false;
-          activity.hideSystemUI();
-        tk.glucodata.help.hidekeyboard(activity);
-        search.setVisibility(View.GONE);
-        hidemealsearch();
-        hidekeyboard();
-        reopener();
-        if(Menus.on)
-            Menus.show(activity);
-    } );
-    }
-    }
-
-
-
-private final static void hidesave(View v) {
-    if(v.getVisibility()==VISIBLE) {
-        reopen[reopennr++]=v;
-        v.setVisibility(INVISIBLE);
-        }
-    }
-
-void setminheight(View[] views,int minheight) {
-    for(View v:views)
-        v.setMinimumHeight(minheight);
-    }
-
-private static Button recordsPagerButton(MainActivity activity,int text,
-        int description) {
-    Button button=new Button(activity);
-    button.setText(text);
-    button.setContentDescription(activity.getString(description));
-    button.setAllCaps(false);
-    button.setTextColor(Color.rgb(148,163,184));
-    button.setTextSize(TypedValue.COMPLEX_UNIT_SP,12.0f);
-    button.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
-    button.setMinWidth(0);
-    button.setMinimumWidth(0);
-    button.setPaddingRelative((int)(metrics.density*6.0f),0,
-            (int)(metrics.density*6.0f),0);
-    if(android.os.Build.VERSION.SDK_INT>=21)
-        button.setBackgroundTintList(null);
-    button.setBackgroundResource(R.drawable.records_toolbar_pager);
-    return button;
-    }
-//void getnumcontrol(MainActivity activity,int width,int height) {
-void getnumcontrol(MainActivity activity) {
-   {if(doLog) {Log.i(LOG_ID,"getnumcontrol start");};};
-
-   final int height=getHeight();
-    if(numcontrol==null||(isWearable&&numcontrol.getHeight()!=(height-systembarTop))) {
-           ImageButton first=new ImageButton(activity);
-           first.setImageResource( R.drawable.baseline_first_page_24);
-           first.setOnClickListener(v-> {
-        Natives.firstpage();
-                  requestRender();
-           });
-        first.setContentDescription(activity.getString(
-                R.string.records_first_description));
-
-           ImageButton back=new ImageButton(activity);
-           back.setImageResource( R.drawable.baseline_arrow_back_24);
-           back.setOnClickListener(v-> {
-        Natives.backwardnumlist();
-                  requestRender();
-
-           });
-        back.setContentDescription(activity.getString(
-                R.string.records_previous_description));
-            
-
-
-     ImageButton search=new ImageButton(activity);
-     search.setImageResource( android.R.drawable.ic_menu_search);
-        search.setContentDescription(activity.getString(
-                R.string.records_search_description));
-//     search.setImageResource( android.R.attr.actionModeWebSearchDrawable);
-
-       search.setOnClickListener(v-> {
-           hidesave(numcontrol);
-        startsearch();
-        selectnumbers();
-        hidesave(scansearch);
-        hidesave(streamsearch);
-        hidesave(streamcalibratedsearch);
-        hidesave(historycalibratedsearch);
-        hidesave(historysearch);
-           });
-//    s/\(first[^6]*.6\)/(int)(\1)/g
-    search.setPadding((int)(first.getPaddingLeft()*.69),(int)(first.getPaddingTop()*.69),(int)(first.getPaddingRight()*.69),(int)(first.getPaddingBottom()*.69));
-     ImageButton closecontrol=new ImageButton(activity);
-
-     closecontrol.setImageResource(isWearable?
-             android.R.drawable.ic_menu_close_clear_cancel:
-             R.drawable.baseline_arrow_back_24);
-           closecontrol.setOnClickListener(v-> {
-           activity.doonback();
-//           activity.poponback();
-           });
-
-    closecontrol.setContentDescription(activity.getString(R.string.closename));
-    closecontrol.setPadding((int)(first.getPaddingLeft()*.69),(int)(first.getPaddingTop()*.69),(int)(first.getPaddingRight()*.69),(int)(first.getPaddingBottom()*.69));
-
-           ImageButton next=new ImageButton(activity);
-
-           next.setImageResource( R.drawable.baseline_arrow_forward_24);
-        next.setContentDescription(activity.getString(
-                R.string.records_next_description));
-           next.setOnClickListener(v-> {
-            Natives.forwardnumlist();
-                 requestRender();
-
-       });
-           ImageButton last=new ImageButton(activity);
-       last.setContentDescription(activity.getString(
-               R.string.records_latest_description));
-           last.setImageResource( R.drawable.baseline_last_page_24);
-
-           last.setOnClickListener(v-> {
-
-        Natives.lastpage();
-                  requestRender();
-           });
-
-
-         final View[] controls={first,
-                 back,
-                 search,
-                 closecontrol,
-                 next,
-                 last};
-         final    int minheight=(int)(metrics.density*48.0f);
-         setminheight(controls,minheight);
-        if(!isWearable) {
-            final int iconPadding=(int)(metrics.density*14.0f);
-            final int iconTint=Color.rgb(148,163,184);
-            search.setBackgroundResource(R.drawable.records_toolbar_icon);
-            search.setImageTintList(ColorStateList.valueOf(iconTint));
-            search.setPadding(iconPadding,iconPadding,iconPadding,iconPadding);
-            closecontrol.setBackgroundResource(R.drawable.records_toolbar_icon);
-            closecontrol.setImageTintList(ColorStateList.valueOf(iconTint));
-            closecontrol.setPadding(iconPadding,iconPadding,iconPadding,iconPadding);
-
-            LinearLayout heading=new LinearLayout(activity);
-            heading.setOrientation(LinearLayout.VERTICAL);
-            heading.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            TextView title=new TextView(activity);
-            title.setText(R.string.dashboard_records);
-            title.setTextColor(Color.rgb(241,245,249));
-            title.setTextSize(TypedValue.COMPLEX_UNIT_SP,19.0f);
-            title.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
-            title.setSingleLine(true);
-            title.setEllipsize(TextUtils.TruncateAt.END);
-            TextView subtitle=new TextView(activity);
-            subtitle.setText(R.string.records_subtitle);
-            subtitle.setTextColor(Color.rgb(100,116,139));
-            subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP,11.0f);
-            subtitle.setSingleLine(true);
-            subtitle.setEllipsize(TextUtils.TruncateAt.END);
-            heading.addView(title,new LinearLayout.LayoutParams(
-                    MATCH_PARENT,WRAP_CONTENT));
-            heading.addView(subtitle,new LinearLayout.LayoutParams(
-                    MATCH_PARENT,WRAP_CONTENT));
-
-            LinearLayout topRow=new LinearLayout(activity);
-            topRow.setOrientation(LinearLayout.HORIZONTAL);
-            topRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            topRow.setBaselineAligned(false);
-            topRow.addView(closecontrol,new LinearLayout.LayoutParams(
-                    minheight,minheight));
-            LinearLayout.LayoutParams headingParams=new LinearLayout.LayoutParams(
-                    0,minheight,1.0f);
-            headingParams.setMarginStart((int)(metrics.density*10.0f));
-            headingParams.setMarginEnd((int)(metrics.density*10.0f));
-            topRow.addView(heading,headingParams);
-            topRow.addView(search,new LinearLayout.LayoutParams(
-                    minheight,minheight));
-            Button firstPage=recordsPagerButton(activity,R.string.records_first,
-                    R.string.records_first_description);
-            firstPage.setOnClickListener(v -> {
-                Natives.firstpage();
-                requestRender();
-                });
-            Button previousPage=recordsPagerButton(activity,R.string.records_previous,
-                    R.string.records_previous_description);
-            previousPage.setOnClickListener(v -> {
-                Natives.backwardnumlist();
-                requestRender();
-                });
-            Button nextPage=recordsPagerButton(activity,R.string.records_next,
-                    R.string.records_next_description);
-            nextPage.setOnClickListener(v -> {
-                Natives.forwardnumlist();
-                requestRender();
-                });
-            Button latestPage=recordsPagerButton(activity,R.string.records_latest,
-                    R.string.records_latest_description);
-            latestPage.setOnClickListener(v -> {
-                Natives.lastpage();
-                requestRender();
-                });
-            LinearLayout pagerRow=new LinearLayout(activity);
-            pagerRow.setOrientation(LinearLayout.HORIZONTAL);
-            pagerRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            final int pagerGap=(int)(metrics.density*8.0f);
-            for(Button pager:new Button[]{firstPage,previousPage,nextPage,latestPage}) {
-                LinearLayout.LayoutParams pagerParams=new LinearLayout.LayoutParams(
-                        0,minheight,1.0f);
-                if(pagerRow.getChildCount()>0)
-                    pagerParams.setMarginStart(pagerGap);
-                pagerRow.addView(pager,pagerParams);
-                }
-
-            LinearLayout toolbarRoot=new LinearLayout(activity);
-            toolbarRoot.setOrientation(LinearLayout.VERTICAL);
-            toolbarRoot.setClickable(true);
-            toolbarRoot.addView(topRow,new LinearLayout.LayoutParams(
-                    MATCH_PARENT,minheight));
-            LinearLayout.LayoutParams pagerRowParams=new LinearLayout.LayoutParams(
-                    MATCH_PARENT,minheight);
-            pagerRowParams.topMargin=(int)(metrics.density*8.0f);
-            toolbarRoot.addView(pagerRow,pagerRowParams);
-            toolbarRoot.addOnLayoutChangeListener((v,left,top,right,bottom,
-                    oldLeft,oldTop,oldRight,oldBottom) -> {
-                if ((right-left)!=(oldRight-oldLeft)
-                        || (bottom-top)!=(oldBottom-oldTop)) {
-                    Natives.numcontrol(0,bottom-top);
-                    v.setX(0.0f);
-                    v.setY(systembarTop);
-                    requestRender();
-                    }
-                });
-            numcontrol=toolbarRoot;
-            numcontrol.setBackgroundResource(R.drawable.records_toolbar_surface);
-            numcontrol.setElevation(metrics.density*3.0f);
-            activity.addMyContentView(numcontrol,
-                    new ViewGroup.LayoutParams(MATCH_PARENT,WRAP_CONTENT));
-            }
-        else {
-            numcontrol= new Layout(activity,(v,w,h) -> {
-                final int width=getWidth();
-                int columns=Natives.numcontrol(w,h);
-                int bar=systembarTop;
-                int over;
-                if(bar>0) {
-                    v.setY(bar);
-                    over=height-bar;
-                    if(over>h)
-                       over=h;
-                    }
-                else  {
-                    if(height>h)
-                       v.setY((height-h)/2.0f);
-                    over=h;
-                    }
-                if(width>w) {
-                    if(columns==1)  {
-                        v.setX(width-w-systembarRight);
-                        }
-                    else {
-                        v.setX(((width-w-systembarRight+systembarLeft)/2.0f));
-                        }
-                    }
-                requestRender();
-                over-=systembarBottom;
-                return new int[] {w,over};
-                },new View[]{first}, new View[]{back}, new View[]{search},
-                    new View[]{closecontrol}, new View[]{next}, new View[]{last});
-            activity.addMyContentView(numcontrol,
-                    new ViewGroup.LayoutParams(WRAP_CONTENT,MATCH_PARENT));
-            }
-        numcontrol.post(numcontrol::requestLayout);
-       }
-      else
-         numcontrol.setVisibility(VISIBLE);
-    if(!isWearable) {
-        final int horizontalPadding=(int)(metrics.density*14.0f);
-        final int verticalPadding=(int)(metrics.density*8.0f);
-        numcontrol.setPadding(horizontalPadding+systembarLeft,verticalPadding,
-                horizontalPadding+systembarRight,verticalPadding);
-        }
-    activity.setonback(()-> {
-        numcontrol.setVisibility(GONE);
-        Natives.endnumlist();
-         if(Menus.on) {
-             Menus.show(activity);
-             }
-        else
-             requestRender();
-         });
-   {if(doLog) {Log.i(LOG_ID,"getnumcontrol end");};};
-    }
 
     void showkeyboard(MainActivity context) {
        numberview.showkeyboard(context);
@@ -818,8 +481,6 @@ void startlibrelink(String lang) {
                             showkeyboard(activity);
                         }
                     }; break;
-                case 3: getnumcontrol((MainActivity) getContext());return true;
-                case 4: Stats.mkstats((MainActivity) getContext());break;
                 case 5: tk.glucodata.Talker.config((MainActivity) getContext());break;
                 case 6:  Floating.setfloatglucose((MainActivity) getContext(),!Natives.getfloatglucose()) ;break;
                 };
@@ -831,8 +492,6 @@ void startlibrelink(String lang) {
                 };break;
             case 3:
                 switch (item) {
-                    case 1: startsearch();
-                                    break;
                     case 2:
                                 startdatepick(Natives.getstarttime());
                                     break;
@@ -844,7 +503,6 @@ void startlibrelink(String lang) {
                                int pos=(int)(choice>>16);
                             int base =(int)((choice>>8)&0xF);
                             {if(doLog) {Log.i(LOG_ID,"tap pos="+pos+" base="+base);};};
-                if(numcontrol!=null) hidesave(numcontrol);
                 numberview.addnumberview(act, base, pos) ;
                 if(!Natives.staticnum()) {
                     if(!smallScreen)
@@ -877,8 +535,10 @@ void startlibrelink(String lang) {
                         requestRender();
                    }
                 else if(isWearable||e1.isFromSource(InputDevice.SOURCE_MOUSE)) {
-                    if(Natives.translate(distanceX,distanceY,e1.getRawY(),e2.getRawY())!=0)
+                    if(Natives.translate(distanceX,distanceY,e1.getRawY(),e2.getRawY())!=0) {
+                        ((MainActivity)getContext()).onDashboardGraphViewportMoved();
                         requestRender();
+                        }
                     }
                 else {
                     final GraphGestureState.Axis axis=
@@ -899,8 +559,10 @@ void startlibrelink(String lang) {
                     else {
                         translated=0;
                         }
-                    if(translated!=0)
+                    if(translated!=0) {
+                        ((MainActivity)getContext()).onDashboardGraphViewportMoved();
                         requestRender();
+                        }
                         }
                     }
             return true;
@@ -980,7 +642,7 @@ void startlibrelink(String lang) {
                 MainActivity activity=(MainActivity)getContext();
                 if(activity.acceptsDashboardGraphGestures()) {
                     try {
-                        int[] eventKeys=Natives.timelineEventsAt(
+                        int[] eventKeys=Natives.graphEventsAt(
                                 e.getX(),e.getY());
                         if(eventKeys!=null&&eventKeys.length>1) {
                             activity.showIntakeEventCluster(eventKeys);
@@ -995,7 +657,7 @@ void startlibrelink(String lang) {
                         // An incremental Java install can briefly run with an
                         // older native library. Keep the established single
                         // marker path available for that safe transition.
-                        int eventKey=Natives.timelineEventAt(e.getX(),e.getY());
+                        int eventKey=Natives.graphEventAt(e.getX(),e.getY());
                         if(eventKey!=0) {
                             activity.showIntakeEvent(eventKey);
                             return true;
@@ -1071,7 +733,7 @@ private void mktimedialog( Button but,final int num ,View parent) {
                         text.setText(mktime( hour, min));
 //            v.setBackgroundColor(Color.RED);
             text.setTextColor(ClinicalUi.accent(getContext()));
-            text.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+            text.setTypeface(Typeface.create("monospace",Typeface.NORMAL));
             text.setTextSize(COMPLEX_UNIT_PX,oldsize);
                           minutes[num] = hour * 60 + min;
            },()-> {
@@ -1249,8 +911,8 @@ if(!isWearable) {
     totime.setTextColor(oldColors);
     totime.setTextSize(COMPLEX_UNIT_PX,oldsize);
     fromtime.setTextSize(COMPLEX_UNIT_PX,oldsize);
-        fromtime.setTypeface(null,Typeface.NORMAL);
-        totime.setTypeface(null,Typeface.NORMAL);
+        fromtime.setTypeface(Typeface.create("monospace",Typeface.NORMAL));
+        totime.setTypeface(Typeface.create("monospace",Typeface.NORMAL));
         minutes[0]=-1;
         minutes[1]=-1;
         if(searchEarlier!=null)
@@ -1352,7 +1014,7 @@ void search(boolean forward) {
         TextView resultTitle=ClinicalUi.body(activity,
                 activity.getString(R.string.clinical_search_result));
         resultTitle.setTextColor(ClinicalUi.primaryText(activity));
-        resultTitle.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        resultTitle.setTypeface(Typeface.create("monospace",Typeface.NORMAL));
         resultTitle.setGravity(Gravity.CENTER);
         bar.addView(resultTitle,new LinearLayout.LayoutParams(
                 0,resultTarget,1.0f));
@@ -1670,7 +1332,7 @@ private ViewGroup getsearchlayout(MainActivity context) {
 
     searchValidation=ClinicalUi.body(context,"");
     searchValidation.setTextColor(ClinicalUi.danger(context));
-    searchValidation.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+    searchValidation.setTypeface(Typeface.create("monospace",Typeface.NORMAL));
     searchValidation.setPadding(ClinicalUi.dp(context,14),
             ClinicalUi.dp(context,11),ClinicalUi.dp(context,14),
             ClinicalUi.dp(context,11));

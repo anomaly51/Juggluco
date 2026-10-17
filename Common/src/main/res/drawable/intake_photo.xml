@@ -2,16 +2,16 @@
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_selected="true">
         <shape android:shape="rectangle">
-            <solid android:color="#1B2A21" />
-            <stroke android:width="1dp" android:color="@color/modern_secondary_accent_border" />
-            <corners android:radius="18dp" />
+            <solid android:color="@color/lifeprompt_primary_container" />
+            <stroke android:width="@dimen/lifeprompt_outline_width" android:color="@color/modern_secondary_accent_border" />
+            <corners android:radius="@dimen/lifeprompt_radius_md" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@color/modern_secondary_surface_low" />
-            <stroke android:width="1dp" android:color="@color/modern_secondary_border" android:dashWidth="5dp" android:dashGap="4dp" />
-            <corners android:radius="18dp" />
+            <stroke android:width="@dimen/lifeprompt_outline_width" android:color="@color/modern_secondary_border" android:dashWidth="5dp" android:dashGap="4dp" />
+            <corners android:radius="@dimen/lifeprompt_radius_md" />
         </shape>
     </item>
 </selector>

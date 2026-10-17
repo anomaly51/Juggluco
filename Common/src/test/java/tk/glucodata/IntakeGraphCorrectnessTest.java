@@ -111,8 +111,8 @@ public class IntakeGraphCorrectnessTest {
 
         assertTrue(dashboard.contains(
                 "event.hasCarbs()?INTAKE_FLAG_CARBS_PRESENT:0"));
-        assertTrue(nativeHeader.contains("IntakeTimelineCarbsPresent"));
-        assertTrue(renderer.contains("event.flags&IntakeTimelineCarbsPresent"));
+        assertTrue(nativeHeader.contains("IntakeGraphCarbsPresent"));
+        assertTrue(renderer.contains("event.flags&IntakeGraphCarbsPresent"));
     }
 
     @Test
@@ -174,8 +174,8 @@ public class IntakeGraphCorrectnessTest {
         String bridge=source(Paths.get("src","main","cpp","curve",
                 "javacurve.cpp"));
         assertTrue(dashboard.contains("|insulinGraphFlag(event)"));
-        assertTrue(nativeHeader.contains("IntakeTimelineRapidInsulin = 1U << 2U"));
-        assertTrue(nativeHeader.contains("IntakeTimelineLongInsulin = 1U << 3U"));
+        assertTrue(nativeHeader.contains("IntakeGraphRapidInsulin = 1U << 2U"));
+        assertTrue(nativeHeader.contains("IntakeGraphLongInsulin = 1U << 3U"));
         assertTrue(bridge.contains("static_cast<uint32_t>(flagValues[index])"));
     }
 
@@ -197,11 +197,11 @@ public class IntakeGraphCorrectnessTest {
             throws Exception {
         String renderer=source(Paths.get("src","main","cpp","curve","curve.cpp"));
 
-        assertTrue(renderer.contains("rapidBorder=hexcolor(0x55C8F2)"));
-        assertTrue(renderer.contains("longBorder=hexcolor(0xB69AF5)"));
+        assertTrue(renderer.contains("rapidBorder=modernGraphRapid"));
+        assertTrue(renderer.contains("longBorder=modernGraphLong"));
         assertTrue(renderer.contains("drawCircleSymbol(insulinX"));
         assertTrue(renderer.contains("drawDiamondSymbol(insulinX"));
-        assertTrue(renderer.contains("drawCircleSymbol(marker.anchorX-symbolOffset"));
+        assertTrue(renderer.contains("drawSquareSymbol(marker.anchorX-symbolOffset"));
         assertTrue("Meal symbols must remain rendered",
                 renderer.contains("mealBorder,marker.glucoseAnchored"));
     }

@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Amber terminal palette. Both day and night resources intentionally use
+         the same dark CRT canvas so every screen keeps one coherent identity. -->
+    <color name="lifeprompt_primary">#FFFFA21A</color>
+    <color name="lifeprompt_on_primary">#FF170800</color>
+    <color name="lifeprompt_primary_container">#FF321402</color>
+    <color name="lifeprompt_on_primary_container">#FFFFC76A</color>
+    <color name="lifeprompt_inverse_primary">#FF8A4308</color>
+
+    <color name="lifeprompt_secondary">#FFD98525</color>
+    <color name="lifeprompt_on_secondary">#FF160700</color>
+    <color name="lifeprompt_secondary_container">#FF281105</color>
+    <color name="lifeprompt_on_secondary_container">#FFF6BD66</color>
+
+    <color name="lifeprompt_tertiary">#FFFFD166</color>
+    <color name="lifeprompt_on_tertiary">#FF1C0E00</color>
+    <color name="lifeprompt_tertiary_container">#FF392000</color>
+    <color name="lifeprompt_on_tertiary_container">#FFFFDB8A</color>
+
+    <color name="lifeprompt_background">#FF060301</color>
+    <color name="lifeprompt_on_background">#FFFFD99A</color>
+    <color name="lifeprompt_surface">#FF0D0602</color>
+    <color name="lifeprompt_on_surface">#FFFFDDA5</color>
+    <color name="lifeprompt_surface_variant">#FF2A1406</color>
+    <color name="lifeprompt_on_surface_variant">#FFE2A65A</color>
+    <color name="lifeprompt_surface_tint">#FFFFA21A</color>
+    <color name="lifeprompt_inverse_surface">#FFFFD99A</color>
+    <color name="lifeprompt_inverse_on_surface">#FF251003</color>
+
+    <color name="lifeprompt_error">#FFFF675C</color>
+    <color name="lifeprompt_on_error">#FF260000</color>
+    <color name="lifeprompt_error_container">#FF3C0B07</color>
+    <color name="lifeprompt_on_error_container">#FFFFC5BF</color>
+    <color name="lifeprompt_outline">#FFC66B17</color>
+    <color name="lifeprompt_outline_variant">#FF66320B</color>
+    <color name="lifeprompt_scrim">#FF000000</color>
+
+    <color name="lifeprompt_surface_dim">#FF040200</color>
+    <color name="lifeprompt_surface_bright">#FF351A08</color>
+    <color name="lifeprompt_surface_container_lowest">#FF050200</color>
+    <color name="lifeprompt_surface_container_low">#FF100702</color>
+    <color name="lifeprompt_surface_container">#FF180B03</color>
+    <color name="lifeprompt_surface_container_high">#FF241105</color>
+    <color name="lifeprompt_surface_container_highest">#FF351A08</color>
+
+    <!-- Medical states stay semantic and are also named in the UI; the amber
+         chrome never replaces low / target / high meaning with colour alone. -->
+    <color name="lifeprompt_glucose_neutral">#FFFFD99A</color>
+    <color name="lifeprompt_glucose_in_target">#FF55E39A</color>
+    <color name="lifeprompt_glucose_high">#FFFFA63A</color>
+    <color name="lifeprompt_glucose_low">#FFFF675C</color>
+    <color name="lifeprompt_target_band_fill">#2855E39A</color>
+    <color name="lifeprompt_target_band_stroke">#9955E39A</color>
+
+    <!-- Treatment events stay distinguishable by label and marker shape while
+         remaining inside the warm terminal spectrum. -->
+    <color name="lifeprompt_event_meal">#FFFFA63A</color>
+    <color name="lifeprompt_event_rapid">#FFFFD166</color>
+    <color name="lifeprompt_event_long">#FFD98525</color>
+    <color name="lifeprompt_event_other">#FFE2A65A</color>
+
+    <!-- 4/8dp rhythm copied from the LifePrompt Compose theme. -->
+    <dimen name="lifeprompt_space_xxs">4dp</dimen>
+    <dimen name="lifeprompt_space_xs">8dp</dimen>
+    <dimen name="lifeprompt_space_sm">12dp</dimen>
+    <dimen name="lifeprompt_space_md">16dp</dimen>
+    <dimen name="lifeprompt_space_lg">20dp</dimen>
+    <dimen name="lifeprompt_space_xl">24dp</dimen>
+    <dimen name="lifeprompt_space_xxl">32dp</dimen>
+    <dimen name="lifeprompt_space_huge">48dp</dimen>
+
+    <dimen name="lifeprompt_radius_xs">1dp</dimen>
+    <dimen name="lifeprompt_radius_sm">2dp</dimen>
+    <dimen name="lifeprompt_radius_md">3dp</dimen>
+    <dimen name="lifeprompt_radius_card">4dp</dimen>
+    <dimen name="lifeprompt_radius_lg">5dp</dimen>
+    <dimen name="lifeprompt_radius_xl">6dp</dimen>
+    <dimen name="lifeprompt_phone_gutter">12dp</dimen>
+    <dimen name="lifeprompt_touch_target">48dp</dimen>
+    <dimen name="lifeprompt_outline_width">1dp</dimen>
+</resources>

@@ -340,9 +340,9 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
             WRAP_CONTENT,controlHeight));
     phoneEditorTitle=new TextView(context);
     phoneEditorTitle.setText(R.string.record_editor_new_title);
-    phoneEditorTitle.setTextColor(Color.rgb(242,244,243));
+    phoneEditorTitle.setTextColor(ClinicalUi.primaryText(context));
     phoneEditorTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP,20.0f);
-    phoneEditorTitle.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    phoneEditorTitle.setTypeface(ClinicalUi.retroTypeface(Typeface.BOLD));
     phoneEditorTitle.setGravity(Gravity.CENTER);
     phoneEditorTitle.setSingleLine(true);
     LinearLayout.LayoutParams titleParams=new LinearLayout.LayoutParams(
@@ -358,7 +358,7 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
 
     phoneEditorSubtitle=new TextView(context);
     phoneEditorSubtitle.setText(R.string.record_editor_new_subtitle);
-    phoneEditorSubtitle.setTextColor(Color.rgb(155,161,159));
+    phoneEditorSubtitle.setTextColor(ClinicalUi.secondaryText(context));
     phoneEditorSubtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP,15.0f);
     phoneEditorSubtitle.setLineSpacing(0,1.08f);
     formColumn.addView(phoneEditorSubtitle,new LinearLayout.LayoutParams(
@@ -423,7 +423,8 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
     detailRow.setOrientation(VERTICAL);
     detailRow.setGravity(Gravity.CENTER_VERTICAL);
     mealbutton.setAllCaps(false);
-    mealbutton.setTextColor(Color.rgb(226,229,227));
+    mealbutton.setTextColor(ClinicalUi.primaryText(context));
+    mealbutton.setTypeface(ClinicalUi.retroTypeface(Typeface.NORMAL));
     mealbutton.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
     mealbutton.setBackgroundResource(R.drawable.add_record_field);
     mealbutton.setPaddingRelative((int)(density*14.0f),0,
@@ -432,7 +433,8 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
             MATCH_PARENT,controlHeight));
     detailRow.addView(mealbutton,new LinearLayout.LayoutParams(
             MATCH_PARENT,controlHeight));
-    source.setTextColor(Color.rgb(155,161,159));
+    source.setTextColor(ClinicalUi.secondaryText(context));
+    source.setTypeface(ClinicalUi.retroTypeface(Typeface.NORMAL));
     source.setTextSize(TypedValue.COMPLEX_UNIT_SP,14.0f);
     source.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
     source.setBackgroundResource(R.drawable.add_record_field);
@@ -455,7 +457,8 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
 
     styleDangerButton(deletebutton,density);
     stylePrimaryButton(savebutton,density);
-    messagetext.setTextColor(Color.rgb(155,161,159));
+    messagetext.setTextColor(ClinicalUi.secondaryText(context));
+    messagetext.setTypeface(ClinicalUi.retroTypeface(Typeface.NORMAL));
     messagetext.setTextSize(TypedValue.COMPLEX_UNIT_SP,14.0f);
     messagetext.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
     messagetext.setBackgroundResource(R.drawable.add_record_notice);
@@ -479,13 +482,15 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
     phoneDeleteConfirm.setVisibility(GONE);
     TextView deleteTitle=new TextView(context);
     deleteTitle.setText(R.string.record_editor_delete_title);
-    deleteTitle.setTextColor(Color.rgb(241,181,177));
+    deleteTitle.setTextColor(ClinicalUi.danger(context));
     deleteTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP,16.0f);
-    deleteTitle.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    deleteTitle.setTypeface(ClinicalUi.retroTypeface(Typeface.BOLD));
     phoneDeleteConfirm.addView(deleteTitle,new LinearLayout.LayoutParams(
             MATCH_PARENT,WRAP_CONTENT));
     phoneDeleteSummary=new TextView(context);
-    phoneDeleteSummary.setTextColor(Color.rgb(185,137,134));
+    phoneDeleteSummary.setTextColor(ClinicalUi.blend(ClinicalUi.danger(context),
+            ClinicalUi.window(context),0.78f));
+    phoneDeleteSummary.setTypeface(ClinicalUi.retroTypeface(Typeface.NORMAL));
     phoneDeleteSummary.setTextSize(TypedValue.COMPLEX_UNIT_SP,13.0f);
     LinearLayout.LayoutParams summaryParams=new LinearLayout.LayoutParams(
             MATCH_PARENT,WRAP_CONTENT);
@@ -559,7 +564,7 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
 
     LinearLayout screen=new LinearLayout(context);
     screen.setOrientation(VERTICAL);
-    screen.setBackgroundColor(Color.rgb(11,13,14));
+    screen.setBackgroundColor(ClinicalUi.window(context));
     screen.setPadding(systembarLeft+pagePadding,
             MainActivity.systembarTop+(int)(density*6.0f),
             systembarRight+pagePadding,
@@ -626,7 +631,8 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
     else  {
         newnumview=layout;
         } 
-    newnumview.setBackgroundColor(isWearable?Applic.backgroundcolor:Color.rgb(11,13,14));
+    newnumview.setBackgroundColor(isWearable?Applic.backgroundcolor:
+            ClinicalUi.window(context));
   savebutton.setOnClickListener(v -> {
         MainActivity act=(MainActivity)v.getContext();
         GlucoseCurve.reopener();
@@ -792,7 +798,7 @@ public   View addnumberview(MainActivity context,final int bron,final long time,
         }
     else {
         final int fieldTextColor=isWearable?savebutton.getCurrentTextColor()
-                :Color.rgb(226,229,227);
+                :ClinicalUi.primaryText(context);
         timebutton.setTextColor(fieldTextColor);
         datebutton.setTextColor(fieldTextColor);
     }
@@ -899,9 +905,9 @@ static void setMarginEnd(ViewGroup.MarginLayoutParams params,int end) {
 private static TextView fieldLabel(Context context,int textResource,View control) {
     TextView label=new TextView(context);
     label.setText(textResource);
-    label.setTextColor(Color.rgb(132,139,136));
+    label.setTextColor(ClinicalUi.secondaryText(context));
     label.setTextSize(TypedValue.COMPLEX_UNIT_SP,11.0f);
-    label.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    label.setTypeface(ClinicalUi.retroTypeface(Typeface.BOLD));
     label.setLetterSpacing(.045f);
     if(control.getId()==View.NO_ID)
         control.setId(View.generateViewId());
@@ -925,9 +931,11 @@ private static LinearLayout labelledField(Context context,int textResource,
 private static TextView sectionTitle(Context context,int textResource) {
     TextView title=new TextView(context);
     title.setText(textResource);
-    title.setTextColor(Color.rgb(196,202,199));
+    title.setTextColor(ClinicalUi.accent(context));
     title.setTextSize(TypedValue.COMPLEX_UNIT_SP,14.0f);
-    title.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    title.setTypeface(ClinicalUi.retroTypeface(Typeface.BOLD));
+    title.setAllCaps(true);
+    title.setLetterSpacing(.04f);
     return title;
     }
 
@@ -942,7 +950,8 @@ private static LinearLayout sectionCard(Context context,float density) {
 
 private static void styleTopActionButton(Button button,float density) {
     button.setAllCaps(false);
-    button.setTextColor(Color.rgb(155,161,159));
+    button.setTextColor(ClinicalUi.secondaryText(button.getContext()));
+    button.setTypeface(ClinicalUi.retroTypeface(Typeface.NORMAL));
     button.setTextSize(TypedValue.COMPLEX_UNIT_SP,13.0f);
     button.setMinWidth(0);
     button.setMinimumWidth((int)(density*64.0f));
@@ -961,10 +970,10 @@ private static void styleField(View view,float density) {
 
 private static void styleAmountField(EditText edit,float density) {
     styleField(edit,density);
-    edit.setTextColor(Color.rgb(242,244,243));
-    edit.setHintTextColor(Color.rgb(113,121,117));
+    edit.setTextColor(ClinicalUi.primaryText(edit.getContext()));
+    edit.setHintTextColor(ClinicalUi.secondaryText(edit.getContext()));
     edit.setTextSize(TypedValue.COMPLEX_UNIT_SP,26.0f);
-    edit.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    edit.setTypeface(ClinicalUi.retroTypeface(Typeface.BOLD));
     edit.setGravity(Gravity.CENTER_VERTICAL);
     edit.setSingleLine(true);
     edit.setBackgroundResource(R.drawable.add_record_field);
@@ -973,14 +982,16 @@ private static void styleAmountField(EditText edit,float density) {
 private static void styleFieldButton(Button button,float density) {
     styleField(button,density);
     button.setAllCaps(false);
-    button.setTextColor(Color.rgb(226,229,227));
+    button.setTextColor(ClinicalUi.primaryText(button.getContext()));
+    button.setTypeface(ClinicalUi.retroTypeface(Typeface.NORMAL));
     button.setTextSize(TypedValue.COMPLEX_UNIT_SP,15.0f);
     button.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
     }
 
 private static void styleSecondaryButton(Button button,float density) {
     button.setAllCaps(false);
-    button.setTextColor(Color.rgb(196,202,199));
+    button.setTextColor(ClinicalUi.accent(button.getContext()));
+    button.setTypeface(ClinicalUi.retroTypeface(Typeface.NORMAL));
     button.setTextSize(TypedValue.COMPLEX_UNIT_SP,13.0f);
     if(Build.VERSION.SDK_INT>=21)
         button.setBackgroundTintList(null);
@@ -990,9 +1001,10 @@ private static void styleSecondaryButton(Button button,float density) {
 
 private static void stylePrimaryButton(Button button,float density) {
     button.setAllCaps(false);
-    button.setTextColor(Color.rgb(10,34,20));
+    button.setTextColor(androidx.core.content.ContextCompat.getColor(
+            button.getContext(),R.color.lifeprompt_on_primary));
     button.setTextSize(TypedValue.COMPLEX_UNIT_SP,14.0f);
-    button.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    button.setTypeface(ClinicalUi.retroTypeface(Typeface.BOLD));
     if(Build.VERSION.SDK_INT>=21)
         button.setBackgroundTintList(null);
     button.setBackgroundResource(R.drawable.add_record_primary);
@@ -1000,7 +1012,8 @@ private static void stylePrimaryButton(Button button,float density) {
 
 private static void styleDangerButton(Button button,float density) {
     button.setAllCaps(false);
-    button.setTextColor(Color.rgb(235,142,137));
+    button.setTextColor(ClinicalUi.danger(button.getContext()));
+    button.setTypeface(ClinicalUi.retroTypeface(Typeface.NORMAL));
     button.setTextSize(TypedValue.COMPLEX_UNIT_SP,13.0f);
     if(Build.VERSION.SDK_INT>=21)
         button.setBackgroundTintList(null);
@@ -1740,9 +1753,9 @@ private static Button makeKey(Context context,String text) {
     Button button=new Button(context);
     button.setText(text);
     button.setAllCaps(false);
-    button.setTextColor(Color.rgb(226,229,227));
+    button.setTextColor(ClinicalUi.primaryText(button.getContext()));
     button.setTextSize(TypedValue.COMPLEX_UNIT_SP,18.0f);
-    button.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+    button.setTypeface(ClinicalUi.retroTypeface(Typeface.BOLD));
     button.setGravity(Gravity.CENTER);
     button.setMinWidth(0);
     button.setMinimumWidth(0);

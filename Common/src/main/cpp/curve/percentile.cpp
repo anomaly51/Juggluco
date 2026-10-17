@@ -729,7 +729,6 @@ void graphpercentiles(NVGcontext* vg) {
             showstats(vg,appcurve,st,usedtext);
         }
     }
-extern void visiblebutton();
 #include <atomic>
 template <typename GlucoseIterator>
 void makesummarygraph(uint32_t start,uint32_t endt, std::vector<GlucoseDataType<GlucoseIterator>> *polldata, std::atomic_flag *readyptr) {
@@ -754,7 +753,6 @@ void makesummarygraph(uint32_t start,uint32_t endt, std::vector<GlucoseDataType<
     globalpercptr->endday=startday+seconds_in_day;
     appcurve.setend=0;
 
-    visiblebutton() ;
     return;
     }
 #endif

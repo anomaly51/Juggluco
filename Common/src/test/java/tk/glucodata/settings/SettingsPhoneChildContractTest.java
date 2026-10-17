@@ -24,6 +24,7 @@ public class SettingsPhoneChildContractTest {
     public void allClinicalControlsMeetAndroidTouchTargetMinimum() {
         assertTrue(Settings.PHONE_SETTINGS_MIN_TOUCH_DP >= 48);
         assertEquals(11,Settings.PHONE_GRAPH_DISPLAY_TOGGLE_COUNT);
+        assertEquals(6,Settings.PHONE_SETTINGS_CATEGORY_COUNT);
     }
 
     @Test

@@ -247,7 +247,8 @@ private static void setlanguage() {
 
 @Override
 public void onConfigurationChanged(@NonNull Configuration newConfig) {
-   super.onConfigurationChanged(newConfig);
+   super.onConfigurationChanged(AppLanguage.configuration(newConfig));
+   AppLanguage.install(this);
    if(Nativesloaded)  {
         needsnatives();
 
@@ -666,10 +667,12 @@ public static    int stopprogram=0;
     @Override
     public void onCreate() {
         super.onCreate();
+        AppLanguage.install(this);
 
     supportsRtl = (getContext().getApplicationInfo().flags & ApplicationInfo.FLAG_SUPPORTS_RTL) != 0;
     if(DiskSpace.check(this)) {
         initproc();
+        if (!isWearable) AppUpdates.initialize(this);
         }
     else {    
         android.util.Log.e(LOG_ID,"Stop program");
@@ -837,12 +840,10 @@ static boolean updateDevices() { //Rename to reset
     return false;
      }
          */
-     /*
     @Override
     protected void attachBaseContext(Context base) {
-        super.attachBaseContext(base);
-        MultiDex.install(this);
-    } */
+        super.attachBaseContext(AppLanguage.wrap(base));
+    }
 
 public static void wakemirrors() {
     {if(doLog) {Log.i(LOG_ID,"wakemirrors");};};

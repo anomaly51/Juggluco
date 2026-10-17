@@ -19,6 +19,7 @@
 /*      Fri Jan 27 15:22:27 CET 2023                                                 */
 
 
+#include <algorithm>
 #include <vector>
 #include <stdio.h>
 #include <jni.h>
@@ -101,6 +102,50 @@ extern "C" JNIEXPORT jlong  JNICALL   fromjava(lastglucosetime)(JNIEnv *env, jcl
         
     return 0LL;
        }
+
+extern "C" JNIEXPORT jlongArray JNICALL
+fromjava(recentCurrentSensorReadingTimes)(JNIEnv *env,jclass cl,
+                                          jint requestedLimit) {
+    constexpr int maximumLimit=256;
+    const int limit=std::clamp<int>(requestedLimit,0,maximumLimit);
+    if(limit==0||!sensors)
+        return env->NewLongArray(0);
+
+    // Keep this selection identical to lastglucose(): during a handover only
+    // the polls belonging to the sensor with the newest valid stream value
+    // contribute to the cadence shown for that current reading.
+    const auto [hist,index]=getlaststream(maxwatchage);
+    if(!hist)
+        return env->NewLongArray(0);
+
+    const auto polls=hist->getPolldata();
+    if(polls.empty())
+        return env->NewLongArray(0);
+
+    const auto now=time(nullptr);
+    const uint32_t latestActual=now>0&&
+            static_cast<uint64_t>(now)<static_cast<uint64_t>(UINT32_MAX)-60ULL
+            ?static_cast<uint32_t>(now)+60U:UINT32_MAX;
+    std::vector<jlong> timestamps;
+    timestamps.reserve(std::min(polls.size(),static_cast<size_t>(limit)));
+    for(const ScanData &poll:polls) {
+        if(!poll.t||poll.t>latestActual||!poll.valid(0))
+            continue;
+        timestamps.push_back(static_cast<jlong>(poll.t)*1000LL);
+        }
+    std::sort(timestamps.begin(),timestamps.end());
+    timestamps.erase(std::unique(timestamps.begin(),timestamps.end()),
+                     timestamps.end());
+    if(timestamps.size()>static_cast<size_t>(limit))
+        timestamps.erase(timestamps.begin(),
+                         timestamps.begin()+timestamps.size()-limit);
+
+    jlongArray result=env->NewLongArray(static_cast<jsize>(timestamps.size()));
+    if(result&&!timestamps.empty())
+        env->SetLongArrayRegion(result,0,
+                static_cast<jsize>(timestamps.size()),timestamps.data());
+    return result;
+    }
 
 
 

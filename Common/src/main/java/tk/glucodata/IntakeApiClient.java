@@ -157,9 +157,21 @@ final class IntakeApiClient {
             String clientTurnId, long occurredAtMs, String text,
             File audio, List<File> photos, RequestCancellation cancellation)
             throws IOException, JSONException {
+        return sendIntakeChatTurn(sessionId, clientTurnId, occurredAtMs,
+                text, audio, photos, "", cancellation);
+    }
+
+    IntakeChatTurn sendIntakeChatTurn(String sessionId,
+            String clientTurnId, long occurredAtMs, String text,
+            File audio, List<File> photos, String structuredIntent,
+            RequestCancellation cancellation)
+            throws IOException, JSONException {
         String cleanSessionId = IntakeEvent.clean(sessionId);
         String cleanTurnId = IntakeEvent.clean(clientTurnId);
         String cleanText = IntakeEvent.clean(text);
+        // Preserve generated JSON byte-for-byte across the automatic retry.
+        String wireStructuredIntent = structuredIntent == null
+                ? "" : structuredIntent;
         if (cleanSessionId.isEmpty() || cleanTurnId.isEmpty()) {
             throw new IOException("Intake-chat turn identity is missing");
         }
@@ -178,7 +190,18 @@ final class IntakeApiClient {
         if (audio != null && (!audio.isFile() || audio.length() <= 0L)) {
             throw new IOException("Intake-chat voice recording is empty");
         }
-        if (cleanText.isEmpty() && audio == null && validPhotos.isEmpty()) {
+        boolean structured = !wireStructuredIntent.isEmpty();
+        if (structured && (!cleanText.isEmpty() || audio != null
+                || !validPhotos.isEmpty())) {
+            throw new IOException(
+                    "Structured intake cannot include text, audio or photos");
+        }
+        if (structured && !IntakeStructuredIntent.isValidWirePayload(
+                wireStructuredIntent)) {
+            throw new IOException("Structured intake intent is invalid");
+        }
+        if (cleanText.isEmpty() && audio == null && validPhotos.isEmpty()
+                && !structured) {
             throw new IOException("Intake-chat turn is empty");
         }
 
@@ -207,6 +230,10 @@ final class IntakeApiClient {
                         Long.toString(occurredAtMs));
                 if (!cleanText.isEmpty()) {
                     writeField(output, boundary, "text", cleanText);
+                }
+                if (structured) {
+                    writeField(output, boundary, "structured_intent",
+                            wireStructuredIntent);
                 }
                 for (File photo : validPhotos) {
                     writeFile(output, boundary, "photos", photo,

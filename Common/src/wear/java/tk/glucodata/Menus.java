@@ -27,6 +27,14 @@ package tk.glucodata;
 
 public class Menus {
 static public  boolean on=false;
+static public void cancelReturnToMenu() {
+    on=false;
+    }
+static public boolean isShowing() {
+    return false;
+    }
+static public void onConfigurationChanged() {
+    }
 static public final void show(Object act) {
     }
 

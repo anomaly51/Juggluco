@@ -33,10 +33,21 @@ import androidx.core.content.ContextCompat;
 import tk.glucodata.settings.AppTheme;
 
 public class DynamicThemeUtils {
-private static final String LOG_ID="DynamicThemeUtils";
+    private static final String LOG_ID="DynamicThemeUtils";
     private static final int MIN_TOUCH_TARGET_DP = 48;
-    private static final int DEFAULT_CORNER_RADIUS_DP = 14;
-    private static final int MODAL_CORNER_RADIUS_DP = 24;
+    static final int RETRO_CORNER_RADIUS_DP = 2;
+    static final boolean RETRO_OVAL_BUTTONS = false;
+    private static final int DEFAULT_CORNER_RADIUS_DP = RETRO_CORNER_RADIUS_DP;
+    private static final int MODAL_CORNER_RADIUS_DP = RETRO_CORNER_RADIUS_DP;
+    private static final String RETRO_FONT_FAMILY = "monospace";
+
+    static int retroShapeOverrideStyle() {
+        return R.style.ShapeOverride_Rectangle;
+    }
+
+    static int runtimeThemeStyle() {
+        return R.style.AppTheme_ClinicalDark;
+    }
 
     public static int resolveAttributeColor(Context ctx, int attrId, int defaultColor) {
         if (attrId == 0) return defaultColor;
@@ -83,6 +94,14 @@ private static final String LOG_ID="DynamicThemeUtils";
         return Math.round(value * context.getResources().getDisplayMetrics().density);
     }
 
+    private static int resourceColor(Context context, int colorResource, int fallback) {
+        try {
+            return ContextCompat.getColor(context, colorResource);
+        } catch (RuntimeException ignored) {
+            return fallback;
+        }
+    }
+
     /** Blends towards the background while keeping an opaque, readable state color. */
     private static int blend(int foreground, int background, float foregroundAmount) {
         float backgroundAmount = 1.0f - foregroundAmount;
@@ -115,34 +134,33 @@ private static final String LOG_ID="DynamicThemeUtils";
         return drawable;
     }
 
-    private static boolean isDark(int color) {
-        double red = Color.red(color) / 255.0;
-        double green = Color.green(color) / 255.0;
-        double blue = Color.blue(color) / 255.0;
-        return (0.2126 * red + 0.7152 * green + 0.0722 * blue) < 0.5;
-    }
-
     private static int windowColor(Context context) {
-        return resolveAttributeColor(context, android.R.attr.windowBackground, Color.BLACK);
+        return resourceColor(context, R.color.lifeprompt_background,
+                resolveAttributeColor(context, android.R.attr.windowBackground, Color.BLACK));
     }
 
     private static int primaryTextColor(Context context) {
-        return resolveAttributeColor(context, android.R.attr.textColorPrimary, Color.WHITE);
+        return resourceColor(context, R.color.lifeprompt_on_background,
+                resolveAttributeColor(context, android.R.attr.textColorPrimary, Color.WHITE));
     }
 
     private static int secondaryTextColor(Context context) {
-        return resolveAttributeColor(context, android.R.attr.textColorSecondary,
-                blend(primaryTextColor(context), windowColor(context), 0.68f));
+        return resourceColor(context, R.color.lifeprompt_on_surface_variant,
+                resolveAttributeColor(context, android.R.attr.textColorSecondary,
+                        blend(primaryTextColor(context), windowColor(context), 0.68f)));
     }
 
     private static int accentColor(Context context) {
-        return resolveAttributeColor(context, R.attr.colorControlActivated,
-                resolveAttributeColor(context, android.R.attr.colorAccent, 0xFF5ACB85));
+        return resourceColor(context, R.color.lifeprompt_primary,
+                resolveAttributeColor(context, R.attr.colorControlActivated,
+                        resolveAttributeColor(context, android.R.attr.colorAccent,
+                                0xFF1D4D3B)));
     }
 
     private static int neutralControlColor(Context context) {
-        return resolveAttributeColor(context, R.attr.colorControlNormal,
-                blend(primaryTextColor(context), windowColor(context), 0.58f));
+        return resourceColor(context, R.color.lifeprompt_secondary,
+                resolveAttributeColor(context, R.attr.colorControlNormal,
+                        blend(primaryTextColor(context), windowColor(context), 0.58f)));
     }
 
     private static int surfaceColor(Context context, float textAmount) {
@@ -151,10 +169,12 @@ private static final String LOG_ID="DynamicThemeUtils";
 
     private static Drawable createSurface(Context context, boolean modal, boolean interactive) {
         int window = windowColor(context);
-        boolean dark = isDark(window);
-        int fill = surfaceColor(context, modal ? (dark ? 0.075f : 0.045f)
-                : (dark ? 0.055f : 0.03f));
-        int border = surfaceColor(context, dark ? 0.14f : 0.10f);
+        int fill = resourceColor(context, modal
+                        ? R.color.lifeprompt_surface
+                        : R.color.lifeprompt_surface_container_low,
+                surfaceColor(context, modal ? 0.05f : 0.03f));
+        int border = resourceColor(context, R.color.lifeprompt_outline_variant,
+                surfaceColor(context, 0.14f));
         int radius = dp(context, modal ? MODAL_CORNER_RADIUS_DP : DEFAULT_CORNER_RADIUS_DP);
 
         GradientDrawable content = createButtonShape(
@@ -177,9 +197,8 @@ private static final String LOG_ID="DynamicThemeUtils";
      * individual controls are themed. Purpose-built XML backgrounds are kept.
      */
     public static void applyOverlayTheme(View root, ViewGroup.LayoutParams params) {
-        int radius = Natives.getradius();
-        boolean isOval = Natives.getisOval();
-        applyOverlayTheme(root, params, radius, isOval);
+        applyOverlayTheme(root, params, RETRO_CORNER_RADIUS_DP,
+                RETRO_OVAL_BUTTONS);
     }
 
     static void applyOverlayTheme(
@@ -199,7 +218,7 @@ private static final String LOG_ID="DynamicThemeUtils";
                 root.setClipToOutline(false);
             } else {
                 root.setBackground(createSurface(root.getContext(), true, false));
-                root.setElevation(dp(root.getContext(), 12));
+                root.setElevation(0f);
                 root.setClipToOutline(true);
             }
         }
@@ -214,13 +233,14 @@ private static final String LOG_ID="DynamicThemeUtils";
         int activeId = R.attr.colorControlActivated;
         int highId = R.attr.colorControlHighlight;
 
-        int nativeBtnColor = resolveAttributeColor(ctx, android.R.attr.colorButtonNormal, Color.LTGRAY);
+        int nativeBtnColor = resolveAttributeColor(ctx, android.R.attr.colorButtonNormal,
+                resourceColor(ctx, R.color.lifeprompt_surface_container_low, Color.LTGRAY));
         int cBg = resolveAttributeColor(ctx, bgId, nativeBtnColor);
         int cNorm = resolveAttributeColor(ctx, normId, Color.GRAY);
         int cActive = resolveAttributeColor(ctx, activeId, cNorm);
         int cStroke = resolveAttributeColor(ctx, strokeId, cActive);
         int cHigh = resolveAttributeColor(ctx, highId, 0x33FFFFFF);
-        int cWindow = resolveAttributeColor(ctx, android.R.attr.windowBackground, Color.BLACK);
+        int cWindow = windowColor(ctx);
 
         float density = ctx.getResources().getDisplayMetrics().density;
         int radiusPx = (int) (radiusDp * density);
@@ -270,9 +290,7 @@ private static final String LOG_ID="DynamicThemeUtils";
     }
 
     public static void applyTheme(View root) {
-        int radius = Natives.getradius();
-        boolean isOval = Natives.getisOval();
-        applyTheme(root,radius,isOval);
+        applyTheme(root, RETRO_CORNER_RADIUS_DP, RETRO_OVAL_BUTTONS);
        }
     public static void applyTheme(View root,int radius,boolean isOval) {
         traverseAndStyle(root, radius, isOval);
@@ -328,13 +346,13 @@ private static final String LOG_ID="DynamicThemeUtils";
         float sizeSp = scaledDensity == 0f ? 16f : text.getTextSize() / scaledDensity;
 
         if (sizeSp >= 22f) {
-            text.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-            text.setLetterSpacing(-0.01f);
+            text.setTypeface(Typeface.create(RETRO_FONT_FAMILY, Typeface.BOLD));
+            text.setLetterSpacing(0f);
         } else if (sizeSp >= 17f || text.isClickable()) {
-            text.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            text.setTypeface(Typeface.create(RETRO_FONT_FAMILY, Typeface.NORMAL));
             text.setLetterSpacing(0f);
         } else {
-            text.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+            text.setTypeface(Typeface.create(RETRO_FONT_FAMILY, Typeface.NORMAL));
         }
         text.setLineSpacing(0f, 1.08f);
 
@@ -379,7 +397,7 @@ private static final String LOG_ID="DynamicThemeUtils";
             Button button = (Button) view;
             button.setAllCaps(false);
             button.setGravity(Gravity.CENTER);
-            button.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            button.setTypeface(Typeface.create(RETRO_FONT_FAMILY, Typeface.NORMAL));
             button.setLetterSpacing(0.01f);
 
             int textId = R.attr.colorButtonText;
@@ -477,16 +495,18 @@ private static final String LOG_ID="DynamicThemeUtils";
         }
     }
 static void setTheme(Activity act) {
-       int theme=Natives.getTheme();
-       Log.i(LOG_ID,"getTheme()="+theme);
+       int storedTheme=Natives.getTheme();
+       Log.i(LOG_ID,"getTheme()="+storedTheme);
        AppTheme[] themes = AppTheme.values();
-       if (theme < 0 || theme >= themes.length) {
-            Log.w(LOG_ID, "Invalid stored theme index " + theme + "; using the default theme");
-            theme = 0;
-           }
-       act.setTheme(themes[theme].getStyleResId());
-       if(Natives.getisOval()) {
-            act.getTheme().applyStyle(R.style.ShapeOverride_Oval, true);
-           }
+       if (storedTheme < 0 || storedTheme >= themes.length) {
+            Log.w(LOG_ID, "Invalid stored theme index " + storedTheme
+                    + "; using the retro default theme");
+       }
+       // A previously persisted palette must not let legacy blue, pastel or
+       // high-radius attributes leak back into the application. Keep the
+       // stored ordinal intact for settings compatibility, but make the active
+       // product one coherent amber terminal on every launch.
+       act.setTheme(runtimeThemeStyle());
+       act.getTheme().applyStyle(retroShapeOverrideStyle(), true);
        }
 }

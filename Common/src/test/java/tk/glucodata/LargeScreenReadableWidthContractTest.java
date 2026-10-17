@@ -37,11 +37,14 @@ public class LargeScreenReadableWidthContractTest {
     }
 
     @Test
-    public void intakeBubblesAreCappedWithoutChangingPhoneRatio()
+    public void intakeBubblesRespectContentWidthAndReadableCap()
             throws Exception {
         String source = source("IntakeComposer.java");
-        assertTrue(source.contains("windowWidth * 0.84f"));
-        assertTrue(source.contains("Math.min((int) (windowWidth * 0.84f), dp(704))"));
+        assertTrue(source.contains("mealScroll.getWidth() - mealScroll.getPaddingLeft()"));
+        assertTrue(source.contains("- mealScroll.getPaddingRight()"));
+        // Assistant messages fill the readable column; user bubbles are inset.
+        assertTrue(source.replaceAll("\\s+", " ").contains(
+                "Math.min((int) (windowWidth * (line.user ? 0.88f : 1.0f)), dp(600))"));
     }
 
     @Test

@@ -111,6 +111,27 @@ public class IntakeChatCardHistoryTest {
     }
 
     @Test
+    public void compoundCreateAndDeleteIsNotPresentedAsReplacement()
+            throws Exception {
+        IntakeChatTurn original = turn(101, 102, 103,
+                insulinEvent(104, 105, 5.0, 1_000L));
+        IntakeChatTurn ambiguous = turnWithDeleted(111, 112, 113,
+                new JSONArray()
+                        .put(mealEvent(114, 115, "Soup", 20.0, 2_000L))
+                        .put(insulinEvent(116, 117, 8.0, 2_000L)),
+                new JSONArray().put(uuid(104)));
+        IntakeChatCardHistory history = new IntakeChatCardHistory();
+
+        history.accept(original);
+        history.accept(ambiguous);
+
+        assertEquals(IntakeChatCardHistory.Status.DELETED,
+                history.cards().get(0).status());
+        assertTrue(history.cards().get(1).isActive());
+        assertTrue(history.cards().get(2).isActive());
+    }
+
+    @Test
     public void restoringEarlierEventReactivatesExistingCardWithoutDuplicate()
             throws Exception {
         IntakeChatTurn original = turn(51, 52, 53,

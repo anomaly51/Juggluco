@@ -265,18 +265,23 @@ void showinfo(final SuperGattCallback gatt,MainActivity act) {
             long dataptr=gatt.dataptr;
             if(Natives.siNewSI(dataptr)) {
                  switch(Natives.getSiSubtype(dataptr)) {
-                    case 0:address.setTextColor(RED);break;
-                    case 1: address.setTextColor(CYAN);break;
-                    case 2: address.setTextColor(MAGENTA);break;
+                    case 0: address.setTextColor(androidx.core.content.ContextCompat.getColor(
+                            act, R.color.lifeprompt_error)); break;
+                    case 1: address.setTextColor(androidx.core.content.ContextCompat.getColor(
+                            act, R.color.lifeprompt_primary)); break;
+                    case 2: address.setTextColor(androidx.core.content.ContextCompat.getColor(
+                            act, R.color.lifeprompt_tertiary)); break;
                     };
                   }
              else {
-                   address.setTextColor(YELLOW);;
+                   address.setTextColor(androidx.core.content.ContextCompat.getColor(
+                           act, R.color.lifeprompt_secondary));
                 }
              
             }
         else
-            address.setTextColor(YELLOW);
+            address.setTextColor(androidx.core.content.ContextCompat.getColor(
+                    act, R.color.lifeprompt_secondary));
            //address.setTextColor(GREEN);
            //address.setTextColor(CYAN);
            // address.setTextColor(YELLOW);
@@ -734,8 +739,12 @@ else {
         public  void onItemSelected (AdapterView<?> parent, View view, int position, long id) {
             {if(doLog) {Log.i(LOG_ID,"onItemSelected");};};
             try {
-                if(!isWearable && view instanceof TextView)
-                    ((TextView)view).setTextColor(0xFFDCEAEC);
+                if(!isWearable && view instanceof TextView) {
+                    TextView label=(TextView)view;
+                    label.setTextColor(ClinicalUi.primaryText(act));
+                    label.setTypeface(ClinicalUi.retroTypeface(
+                            android.graphics.Typeface.NORMAL));
+                    }
                 if (first[0]) {
                     first[0] = false;
                     spin.setSelection(gattselected);
@@ -905,8 +914,17 @@ private void showall() {
     bluestate.setText(mBluetoothAdapter==null?activity.getString(R.string.nobluetooth):(bluetoothEnabled?activity.getString(R.string.bluetoothenabled): activity.getString(R.string.bluetoothdisabled)));
     if(!isWearable) {
         if(bluestate.getBackground()!=null)
-            bluestate.getBackground().mutate().setTint(bluetoothEnabled?0xFF12312F:0xFF342816);
-        bluestate.setTextColor(bluetoothEnabled?0xFFB9FFF4:0xFFFFE6A7);
+            bluestate.getBackground().mutate().setTint(
+                    androidx.core.content.ContextCompat.getColor(activity,
+                            bluetoothEnabled
+                                    ? R.color.lifeprompt_surface_container_high
+                                    : R.color.lifeprompt_tertiary_container));
+        bluestate.setTextColor(androidx.core.content.ContextCompat.getColor(activity,
+                bluetoothEnabled
+                        ? R.color.lifeprompt_glucose_in_target
+                        : R.color.lifeprompt_tertiary));
+        bluestate.setTypeface(ClinicalUi.retroTypeface(
+                android.graphics.Typeface.BOLD));
         }
         usebluetooth.setChecked(wasuse = Natives.getusebluetooth());
         priority.setChecked(Natives.getpriority());

@@ -4,9 +4,9 @@
     <size
         android:width="18dp"
         android:height="10dp" />
-    <corners android:radius="3dp" />
-    <solid android:color="#204ECB83" />
+    <corners android:radius="@dimen/lifeprompt_radius_card" />
+    <solid android:color="@color/lifeprompt_target_band_fill" />
     <stroke
-        android:width="1dp"
-        android:color="#804ECB83" />
+        android:width="@dimen/lifeprompt_outline_width"
+        android:color="@color/lifeprompt_target_band_stroke" />
 </shape>

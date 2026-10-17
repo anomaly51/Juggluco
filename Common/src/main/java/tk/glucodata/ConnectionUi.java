@@ -107,7 +107,7 @@ public final class ConnectionUi {
     public static TextView status(MainActivity context,CharSequence text,boolean error) {
         TextView status=ClinicalUi.body(context,text);
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP,14);
-        status.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        status.setTypeface(Typeface.create("monospace",Typeface.NORMAL));
         status.setTextColor(error?ClinicalUi.danger(context):ClinicalUi.secondaryText(context));
         status.setPadding(ClinicalUi.dp(context,16),ClinicalUi.dp(context,12),
                 ClinicalUi.dp(context,16),ClinicalUi.dp(context,12));

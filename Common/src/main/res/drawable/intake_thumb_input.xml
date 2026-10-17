@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle"><solid android:color="@color/lifeprompt_background" /><stroke android:width="@dimen/lifeprompt_outline_width" android:color="@color/lifeprompt_primary" /><corners android:radius="@dimen/lifeprompt_radius_sm" /><padding android:left="12dp" android:top="8dp" android:right="12dp" android:bottom="8dp" /></shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle"><solid android:color="@color/lifeprompt_background" /><stroke android:width="@dimen/lifeprompt_outline_width" android:color="@color/lifeprompt_outline" /><corners android:radius="@dimen/lifeprompt_radius_sm" /><padding android:left="12dp" android:top="8dp" android:right="12dp" android:bottom="8dp" /></shape>
+    </item>
+</selector>

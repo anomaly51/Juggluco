@@ -10,6 +10,8 @@ import android.graphics.Shader;
 import android.util.AttributeSet;
 import android.view.View;
 
+import androidx.core.content.ContextCompat;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -199,14 +201,14 @@ final class ForecastActivityMiniChart extends View {
         return result;
     }
 
-    private static int factorColor(int kind) {
+    private int factorColor(int kind) {
         if (kind == ForecastSnapshot.Activity.KIND_RAPID) {
-            return Color.rgb(66, 187, 211);
+            return ContextCompat.getColor(getContext(), R.color.lifeprompt_event_rapid);
         }
         if (kind == ForecastSnapshot.Activity.KIND_LONG) {
-            return Color.rgb(142, 122, 217);
+            return ContextCompat.getColor(getContext(), R.color.lifeprompt_event_long);
         }
-        return Color.rgb(216, 164, 66);
+        return ContextCompat.getColor(getContext(), R.color.lifeprompt_event_meal);
     }
 
     private static final class PlotPoint {

@@ -8,14 +8,17 @@ import android.app.Application;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Context;
+import android.content.Intent;
 import android.media.AudioAttributes;
 import android.net.Uri;
+import android.provider.Settings;
 
 import org.junit.After;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
+import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 
 @RunWith(RobolectricTestRunner.class)
@@ -66,7 +69,7 @@ public class CriticalAlarmDiagnosticsTest {
     }
 
     @Test
-    public void channelReadinessRequiresHighImportanceAndAlarmAudioUsage() {
+    public void channelReadinessRequiresHighImportanceSilentPresentation() {
         Context context = RuntimeEnvironment.getApplication();
         NotificationManager manager = context.getSystemService(
                 NotificationManager.class);
@@ -77,9 +80,7 @@ public class CriticalAlarmDiagnosticsTest {
 
         NotificationChannel alarm = new NotificationChannel(highAlarm,
                 highAlarm, NotificationManager.IMPORTANCE_HIGH);
-        alarm.setSound(Uri.parse("content://tk.glucodata/test-alarm-high"),
-                new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ALARM).build());
+        alarm.setSound(null, null);
         manager.createNotificationChannel(alarm);
         CriticalAlarmDiagnostics.ChannelReadiness ready =
                 CriticalAlarmDiagnostics.channelReadiness(manager,
@@ -111,7 +112,8 @@ public class CriticalAlarmDiagnosticsTest {
                         true, true, true, 2);
         CriticalAlarmDiagnostics.Snapshot ready =
                 new CriticalAlarmDiagnostics.Snapshot(true, true,
-                        5, 10, true, true, true, true,
+                        5, 10, true, NotificationManager.INTERRUPTION_FILTER_ALL,
+                        true, true, true,
                         channels, channels, true);
         assertEquals(50, ready.alarmVolumePercent());
         assertTrue(ready.actualConfigured());
@@ -121,7 +123,8 @@ public class CriticalAlarmDiagnosticsTest {
 
         CriticalAlarmDiagnostics.Snapshot silent =
                 new CriticalAlarmDiagnostics.Snapshot(true, true,
-                        0, 10, true, true, true, true,
+                        0, 10, true, NotificationManager.INTERRUPTION_FILTER_ALL,
+                        true, true, true,
                         channels, channels, true);
         assertFalse(silent.alarmVolumeAudible());
         assertFalse(silent.maximallyConfigured());
@@ -131,17 +134,134 @@ public class CriticalAlarmDiagnosticsTest {
                         true, true, false, 2);
         CriticalAlarmDiagnostics.Snapshot noOverride =
                 new CriticalAlarmDiagnostics.Snapshot(true, true,
-                        5, 10, true, true, true, true,
+                        5, 10, true, NotificationManager.INTERRUPTION_FILTER_ALL,
+                        true, true, true,
                         noDndOverride, channels, true);
         assertFalse(noOverride.actualConfigured());
         assertFalse(noOverride.maximallyConfigured());
 
         CriticalAlarmDiagnostics.Snapshot noOverlay =
                 new CriticalAlarmDiagnostics.Snapshot(true, true,
-                        5, 10, true, true, false, true,
+                        5, 10, true, NotificationManager.INTERRUPTION_FILTER_ALL,
+                        true, false, true,
                         channels, channels, true);
         assertFalse(noOverlay.overlayAccess);
         assertFalse(noOverlay.maximallyConfigured());
+    }
+
+    @Test
+    public void totalSilenceCannotBeConfiguredEvenWithEveryPermissionGranted() {
+        CriticalAlarmDiagnostics.Snapshot snapshot = configuredSnapshot(
+                NotificationManager.INTERRUPTION_FILTER_NONE, true, true);
+        assertTrue(snapshot.dndPolicyAccess);
+        assertTrue(snapshot.dndBlocksAllAlarms());
+        assertFalse(snapshot.dndModeAllowsAlarmChannels());
+        assertFalse(snapshot.actualConfigured());
+        assertFalse(snapshot.predictiveConfigured());
+        assertFalse(snapshot.signalLossConfigured());
+        assertFalse(snapshot.maximallyConfigured());
+        assertFalse(snapshot.deviceConfigured());
+        assertFalse(FullScreenAlertSettingsPage.forcedFullScreenReady(snapshot));
+    }
+
+    @Test
+    public void unavailableAndUnrecognizedModesNeverReportReady() {
+        for (int filter : new int[]{
+                NotificationManager.INTERRUPTION_FILTER_UNKNOWN, -1, 99}) {
+            CriticalAlarmDiagnostics.Snapshot snapshot =
+                    configuredSnapshot(filter, true, true);
+            assertFalse(snapshot.dndBlocksAllAlarms());
+            assertFalse(snapshot.dndModeAllowsAlarmChannels());
+            assertFalse(snapshot.actualConfigured());
+            assertFalse(snapshot.predictiveConfigured());
+            assertFalse(snapshot.signalLossConfigured());
+            assertFalse(snapshot.maximallyConfigured());
+            assertFalse(snapshot.deviceConfigured());
+            assertFalse(FullScreenAlertSettingsPage.forcedFullScreenReady(snapshot));
+        }
+        assertEquals(NotificationManager.INTERRUPTION_FILTER_UNKNOWN,
+                CriticalAlarmDiagnostics.currentInterruptionFilter(null));
+        assertFalse(CriticalAlarmDiagnostics.Snapshot.unavailable()
+                .deviceConfigured());
+    }
+
+    @Test
+    public void knownAlarmCapableModesKeepPermissionAndChannelRequirements() {
+        for (int filter : new int[]{NotificationManager.INTERRUPTION_FILTER_ALL,
+                NotificationManager.INTERRUPTION_FILTER_ALARMS,
+                NotificationManager.INTERRUPTION_FILTER_PRIORITY}) {
+            CriticalAlarmDiagnostics.Snapshot snapshot =
+                    configuredSnapshot(filter, true, true);
+            assertTrue(snapshot.dndModeAllowsAlarmChannels());
+            assertTrue(snapshot.maximallyConfigured());
+            assertTrue(snapshot.deviceConfigured());
+            assertTrue(FullScreenAlertSettingsPage.forcedFullScreenReady(snapshot));
+            assertFalse(configuredSnapshot(filter, false, true).deviceConfigured());
+            assertFalse(configuredSnapshot(filter, true, false).deviceConfigured());
+            assertFalse(configuredSnapshot(filter, false, true).maximallyConfigured());
+            assertFalse(configuredSnapshot(filter, true, false).maximallyConfigured());
+        }
+    }
+
+    @Test
+    public void deviceConfigurationIsSeparateFromVolumeAndExactAlarmReadiness() {
+        CriticalAlarmDiagnostics.ChannelReadiness channels =
+                new CriticalAlarmDiagnostics.ChannelReadiness(true, true, true, 2);
+        CriticalAlarmDiagnostics.Snapshot snapshot =
+                new CriticalAlarmDiagnostics.Snapshot(true, true, 0, 10,
+                        true, NotificationManager.INTERRUPTION_FILTER_ALL,
+                        true, true, false, channels, channels, channels, true);
+        // The runtime attempts the audible floor when an episode begins.
+        // Snooze scheduling readiness remains an independent diagnostic.
+        assertTrue(snapshot.deviceConfigured());
+        assertTrue(FullScreenAlertSettingsPage.forcedFullScreenReady(snapshot));
+        assertFalse(snapshot.maximallyConfigured());
+    }
+
+    @Test
+    public void inspectReadsTheActiveModeWithoutChangingIt() {
+        Context context = RuntimeEnvironment.getApplication();
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
+        Shadows.shadowOf(manager).setNotificationPolicyAccessGranted(true);
+        manager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE);
+
+        CriticalAlarmDiagnostics.Snapshot snapshot =
+                CriticalAlarmDiagnostics.inspect(context);
+        assertEquals(NotificationManager.INTERRUPTION_FILTER_NONE,
+                snapshot.currentInterruptionFilter);
+        assertTrue(snapshot.dndPolicyAccess);
+        assertFalse(snapshot.deviceConfigured());
+        assertEquals(NotificationManager.INTERRUPTION_FILTER_NONE,
+                manager.getCurrentInterruptionFilter());
+    }
+
+    @Test
+    public void dndRepairOpensGrantScreenBeforeGrantAndModeSettingsAfterGrant() {
+        Application application = RuntimeEnvironment.getApplication();
+        NotificationManager manager = application.getSystemService(NotificationManager.class);
+        Shadows.shadowOf(manager).setNotificationPolicyAccessGranted(false);
+        CriticalAlarmDiagnostics.openDndSettings(application);
+        Intent grantIntent = Shadows.shadowOf(application).getNextStartedActivity();
+        assertEquals(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS,
+                grantIntent.getAction());
+
+        Shadows.shadowOf(manager).setNotificationPolicyAccessGranted(true);
+        manager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE);
+        CriticalAlarmDiagnostics.openDndSettings(application);
+        Intent settingsIntent = Shadows.shadowOf(application).getNextStartedActivity();
+        assertEquals("android.settings.ZEN_MODE_SETTINGS", settingsIntent.getAction());
+        assertEquals(NotificationManager.INTERRUPTION_FILTER_NONE,
+                manager.getCurrentInterruptionFilter());
+    }
+
+    private static CriticalAlarmDiagnostics.Snapshot configuredSnapshot(
+            int interruptionFilter, boolean policyAccess, boolean channelBypass) {
+        CriticalAlarmDiagnostics.ChannelReadiness channels =
+                new CriticalAlarmDiagnostics.ChannelReadiness(
+                        true, true, channelBypass, 2);
+        return new CriticalAlarmDiagnostics.Snapshot(true, true, 5, 10,
+                policyAccess, interruptionFilter, true, true, true,
+                channels, channels, channels, true);
     }
 
     @Test

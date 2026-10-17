@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="intake_thumb_title">ADD ENTRY</string>
+    <string name="intake_thumb_empty_title">Log it your way</string>
+    <string name="intake_thumb_empty_subtitle">Log food or insulin by voice, text or photo. Change any entry right in this conversation.</string>
+    <string name="intake_thumb_insulin">Insulin</string>
+    <string name="intake_thumb_food">Food</string>
+    <string name="intake_thumb_latest">Latest message</string>
+    <string name="intake_thumb_input_label">Message about food or insulin</string>
+    <string name="intake_thumb_recording_elapsed">Recording %1$d:%2$02d · tap stop</string>
+    <string name="intake_thumb_dose_label">Injected insulin · units</string>
+    <string name="intake_thumb_food_label">Food</string>
+    <string name="intake_thumb_carbs_label">Carbohydrates · g</string>
+    <string name="intake_thumb_time_label">When</string>
+</resources>

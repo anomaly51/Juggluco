@@ -21,11 +21,13 @@ import androidx.core.view.WindowInsetsCompat;
 /** Android readiness page for the one supported delivery: forced full screen. */
 public final class FullScreenAlertSettingsPage {
     static final int MIN_TOUCH_TARGET_DP = 48;
+    private static FullScreenAlertSettingsPage activePage;
 
     private final MainActivity activity;
     private final Runnable onClose;
     private FrameLayout root;
     private LinearLayout readinessCard;
+    private ScrollView scroll;
     private boolean closed;
 
     private FullScreenAlertSettingsPage(MainActivity activity,
@@ -66,11 +68,28 @@ public final class FullScreenAlertSettingsPage {
 
     public static void show(MainActivity activity, Runnable onClose) {
         if (activity == null || Applic.isWearable) return;
-        new FullScreenAlertSettingsPage(activity, onClose).show();
+        FullScreenAlertSettingsPage page = new FullScreenAlertSettingsPage(
+                activity, onClose);
+        activePage = page;
+        page.show();
+    }
+
+    static boolean isShowingFor(MainActivity activity) {
+        return activePage != null && activePage.activity == activity
+                && !activePage.closed && activePage.root != null
+                && activePage.root.getParent() != null;
+    }
+
+    static void onHostConfigurationChanged(MainActivity activity) {
+        if (isShowingFor(activity)) activePage.reinflateForConfiguration();
     }
 
     private void show() {
         CriticalGlucoseAlarm.ensureChannels(activity);
+        inflatePage(true, 0);
+    }
+
+    private void inflatePage(boolean registerBack, int restoredScrollY) {
         root = new FrameLayout(activity);
         root.setBackgroundColor(ClinicalUi.window(activity));
         LinearLayout content = ClinicalUi.verticalContent(activity);
@@ -83,12 +102,6 @@ public final class FullScreenAlertSettingsPage {
         content.addView(ClinicalUi.header(activity,
                 activity.getString(R.string.fullscreen_alert_settings_title),
                 close));
-
-        TextView intro = ClinicalUi.body(activity,
-                activity.getString(R.string.fullscreen_alert_settings_intro));
-        intro.setPaddingRelative(ClinicalUi.dp(activity, 4), 0,
-                ClinicalUi.dp(activity, 4), ClinicalUi.dp(activity, 8));
-        content.addView(intro);
 
         content.addView(ClinicalUi.sectionLabel(activity,
                 activity.getString(R.string.fullscreen_alert_behavior_section)));
@@ -111,7 +124,7 @@ public final class FullScreenAlertSettingsPage {
         refresh.setOnClickListener(view -> rebuildReadiness());
         content.addView(refresh);
 
-        ScrollView scroll = ClinicalUi.scrollScreen(activity, content);
+        scroll = ClinicalUi.scrollScreen(activity, content);
         root.addView(scroll, new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
         ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
             Insets safe = insets.getInsets(WindowInsetsCompat.Type.systemBars()
@@ -128,9 +141,19 @@ public final class FullScreenAlertSettingsPage {
         ClinicalUi.reapplyInsetsOnWidthChanges(root);
         activity.addMyContentView(root,
                 new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT), false);
-        MainActivity.setonback(() -> close(false));
+        if (registerBack) MainActivity.setonback(() -> close(false));
         ViewCompat.requestApplyInsets(root);
-        activity.lightBars(false);
+        activity.themeLightBars();
+        if (restoredScrollY > 0) {
+            scroll.post(() -> scroll.scrollTo(0, restoredScrollY));
+        }
+    }
+
+    private void reinflateForConfiguration() {
+        int preservedScrollY = scroll == null ? 0 : scroll.getScrollY();
+        ViewCompat.setOnApplyWindowInsetsListener(root, null);
+        remove(root);
+        inflatePage(false, preservedScrollY);
     }
 
     private View explanationCard() {
@@ -185,10 +208,19 @@ public final class FullScreenAlertSettingsPage {
                         : R.string.critical_alarm_overlay_needed,
                 () -> CriticalAlarmDiagnostics.openOverlaySettings(activity));
         addAction(R.string.critical_alarm_dnd_title,
-                snapshot.dndPolicyAccess
-                        ? R.string.critical_alarm_dnd_ready
-                        : R.string.critical_alarm_dnd_needed,
+                dndStatusResource(snapshot),
                 () -> CriticalAlarmDiagnostics.openDndSettings(activity));
+    }
+
+    static int dndStatusResource(CriticalAlarmDiagnostics.Snapshot snapshot) {
+        if (!snapshot.dndPolicyAccess) return R.string.critical_alarm_dnd_needed;
+        if (snapshot.dndBlocksAllAlarms()) {
+            return R.string.critical_alarm_dnd_total_silence;
+        }
+        if (!snapshot.dndModeAllowsAlarmChannels()) {
+            return R.string.critical_alarm_dnd_mode_unknown;
+        }
+        return R.string.critical_alarm_dnd_ready;
     }
 
     private void addAction(int titleRes, int statusRes, Runnable action) {
@@ -206,19 +238,23 @@ public final class FullScreenAlertSettingsPage {
     private void close(boolean popBack) {
         if (closed) return;
         closed = true;
+        if (activePage == this) activePage = null;
         if (popBack) MainActivity.poponback();
         ViewCompat.setOnApplyWindowInsetsListener(root, null);
-        ViewParent parent = root.getParent();
-        if (parent instanceof ViewGroup) ((ViewGroup) parent).removeView(root);
-        activity.lightBars(false);
+        remove(root);
+        activity.themeLightBars();
         if (onClose != null) onClose.run();
     }
 
-    private static boolean forcedFullScreenReady(
+    private static void remove(View view) {
+        if (view == null) return;
+        ViewParent parent = view.getParent();
+        if (parent instanceof ViewGroup) ((ViewGroup) parent).removeView(view);
+    }
+
+    static boolean forcedFullScreenReady(
             CriticalAlarmDiagnostics.Snapshot snapshot) {
-        return snapshot.notificationAccess() && snapshot.dndPolicyAccess
-                && snapshot.fullScreenAccess && snapshot.overlayAccess
-                && allChannelsReady(snapshot);
+        return snapshot.deviceConfigured();
     }
 
     private static boolean allChannelsReady(

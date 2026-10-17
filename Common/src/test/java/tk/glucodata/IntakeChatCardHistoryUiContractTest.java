@@ -45,9 +45,9 @@ public class IntakeChatCardHistoryUiContractTest {
         assertTrue(composer.contains(
                 "compoundAction\n                                                ? R.string.intake_chat_compound_action_hint\n                                                : R.string.intake_chat_active_replacement_hint"));
         assertTrue(english.contains(
-                "name=\"intake_chat_active_replacement_hint\">This entry is active."));
+                "name=\"intake_chat_active_replacement_hint\">Tap the card to adjust"));
         assertTrue(russian.contains(
-                "name=\"intake_chat_active_replacement_hint\">Эта запись активна."));
+                "name=\"intake_chat_active_replacement_hint\">Нажмите на карточку"));
         assertTrue(composer.contains("intake_chat_proposal_inactive"));
         assertTrue(composer.contains("ViewCompat.setAccessibilityHeading"));
         assertTrue(english.contains(">Replaced<"));

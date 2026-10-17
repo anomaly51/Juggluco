@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="critical_alarm_banner_low">Низкий сахар</string>
+    <string name="critical_alarm_banner_high">Высокий сахар</string>
+    <string name="critical_alarm_banner_predictive_low">Прогноз низкого сахара</string>
+    <string name="critical_alarm_banner_predictive_high">Прогноз высокого сахара</string>
+    <string name="critical_alarm_banner_experimental">Экспериментальный прогноз</string>
+    <string name="critical_alarm_banner_test">Тест · это не тревога</string>
+    <string name="critical_alarm_banner_signal">Нет сигнала</string>
+    <string name="critical_alarm_banner_no_reading">Нет измерения сахара</string>
+    <string name="critical_alarm_banner_measured_now">Измерено только что</string>
+    <string name="critical_alarm_banner_measured_minutes">Измерено %1$d мин назад</string>
+    <string name="critical_alarm_banner_measured_stale">Последнее измерение · %1$d мин назад</string>
     <string name="critical_alarm_channel_actual_low">Критически важный сигнал текущего снижения</string>
     <string name="critical_alarm_channel_actual_low_description">Звук через громкость будильника и экран блокировки при текущей низкой глюкозе</string>
     <string name="critical_alarm_channel_actual_high">Критически важный сигнал текущего повышения</string>
@@ -27,6 +38,13 @@
     <string name="critical_alarm_status_test">Проверка доставки и экрана</string>
     <string name="critical_alarm_instruction">Проверьте глюкозу и следуйте согласованному плану. Сигнал не рассчитывает дозу инсулина или количество углеводов.</string>
     <string name="critical_alarm_ack_button">Остановить звук</string>
+    <string name="critical_alarm_volume_down_hint">Нажмите «Громкость −» 5 раз</string>
+    <plurals name="critical_alarm_volume_down_remaining">
+        <item quantity="one">Осталось %1$d нажатие</item>
+        <item quantity="few">Осталось %1$d нажатия</item>
+        <item quantity="many">Осталось %1$d нажатий</item>
+        <item quantity="other">Осталось %1$d нажатия</item>
+    </plurals>
     <string name="critical_alarm_snooze_button">Напомнить через 5 минут</string>
     <string name="critical_alarm_open_graph_button">Открыть график глюкозы</string>
     <string name="critical_alarm_ack_action">Остановить звук</string>

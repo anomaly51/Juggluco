@@ -123,7 +123,11 @@ public class IntakeSeparatedFlowsContractTest {
         String mealLayout = read(commonPath(Paths.get("src", "main", "res",
                 "layout", "modern_meal_chat.xml")));
 
-        assertTrue(composer.contains("SOFT_INPUT_ADJUST_RESIZE"));
+        // MainActivity is edge-to-edge. The composer owns both system-bar and
+        // IME insets, so asking the Window to resize as well would apply the
+        // keyboard height twice and leave a large empty gap above the IME.
+        assertTrue(composer.contains("SOFT_INPUT_ADJUST_NOTHING"));
+        assertFalse(composer.contains("SOFT_INPUT_ADJUST_RESIZE"));
         assertTrue(composer.contains("WindowInsetsCompat.Type.ime()"));
         assertTrue(composer.contains("Math.max(bars.bottom, ime.bottom)"));
         assertTrue(insulinLayout.contains("actionDone|flagNoExtractUi"));

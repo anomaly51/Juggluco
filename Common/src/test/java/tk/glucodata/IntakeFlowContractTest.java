@@ -34,7 +34,7 @@ public class IntakeFlowContractTest {
         String repository = mainJava("tk/glucodata/IntakeRepository.java");
         String create = methodBody(repository,
                 "void createInsulin(IntakeDraft draft",
-                "private IntakeApiClient client");
+                "private static IntakeApiClient client");
 
         assertTrue("Intake create must enter the durable phone outbox",
                 create.contains("enqueueCreate(PendingIntakeOperation.insulin"));

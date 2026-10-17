@@ -51,6 +51,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
@@ -76,6 +77,8 @@ import java.util.concurrent.TimeUnit;
 //import tk.glucodata.Natives;
 
 public class Notify {
+private static final Object FOREGROUND_SERVICE_LOCK = new Object();
+private static boolean criticalAlarmAudioForeground;
 static {
         makenotification_audio();
         };
@@ -974,7 +977,8 @@ void fornotify(Notification notif) {
          {
             notificationManager.cancel(glucosenotificationid);
             if(keeprunning.theservice!=null) {
-                keeprunning.theservice.startForeground(glucosenotificationid,notif);
+                if(!updateForeground(keeprunning.theservice,notif))
+                    notificationManager.notify(glucosenotificationid,notif);
                    }
             else 
                    notificationManager.notify(glucosenotificationid,notif);
@@ -1080,16 +1084,93 @@ private void novalue() {
     fornotify(getforgroundnotification());
 //    notificationManager.notify(glucosenotificationid,getforgroundnotification());
     }
-public void foregroundno(Service service) {
+public boolean foregroundno(Service service) {
     Notification not=getforgroundnotification();
-    service.startForeground(glucosenotificationid, not);
-    {if(doLog) {Log.i(LOG_ID,"startforeground");};};
+    boolean started=updateForeground(service,not);
+    {if(doLog) {Log.i(LOG_ID,"startforeground="+started);};};
+    return started;
     }
-static public void foregroundnot(Service service) {
+static public boolean foregroundnot(Service service) {
 //    Application app=service.getApplication();
     init(service);
-    onenot.foregroundno(service);
-    }    
+    return onenot.foregroundno(service);
+    }
+
+/**
+ * Adds or removes the media-playback capability on the already-running sensor
+ * foreground service. Keeping this on the existing service avoids attempting
+ * to launch a second foreground service from a background glucose callback.
+ */
+static boolean setCriticalAlarmAudioForeground(Service service,
+        boolean enabled) {
+    if(service==null) return false;
+    init(service);
+    synchronized(FOREGROUND_SERVICE_LOCK) {
+        Notification notification=onenot.getforgroundnotification();
+        if(!startForegroundTyped(service,notification,enabled)) return false;
+        criticalAlarmAudioForeground=enabled;
+        return true;
+        }
+    }
+
+static void resetCriticalAlarmAudioForeground() {
+    synchronized(FOREGROUND_SERVICE_LOCK) {
+        criticalAlarmAudioForeground=false;
+        }
+    }
+
+/** True only while the current service instance proved the media type. */
+static boolean hasCriticalAlarmAudioForeground() {
+    synchronized(FOREGROUND_SERVICE_LOCK) {
+        return criticalAlarmAudioForeground;
+        }
+    }
+
+private static boolean updateForeground(Service service,
+        Notification notification) {
+    if(service==null||notification==null) return false;
+    synchronized(FOREGROUND_SERVICE_LOCK) {
+        return startForegroundTyped(service,notification,
+                criticalAlarmAudioForeground);
+        }
+    }
+
+private static boolean startForegroundTyped(Service service,
+        Notification notification,boolean withAudio) {
+    try {
+        if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.Q) {
+            int types=ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
+            if(withAudio)
+                types|=ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK;
+            service.startForeground(glucosenotificationid,notification,types);
+            }
+        else
+            service.startForeground(glucosenotificationid,notification);
+        return true;
+        }
+    catch(SecurityException|IllegalArgumentException failure) {
+        Log.stack(LOG_ID,"typed startForeground",failure);
+        }
+    catch(RuntimeException failure) {
+        Log.stack(LOG_ID,"startForeground",failure);
+        }
+
+    // API 29-33 accepted the legacy call and did not enforce per-type
+    // permissions. It is a useful OEM fallback there. On API 34+ the legacy
+    // call means "all manifest types", which could accidentally activate
+    // mediaPlayback during boot, so fail closed instead.
+    if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.Q
+            &&Build.VERSION.SDK_INT<Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        try {
+            service.startForeground(glucosenotificationid,notification);
+            return true;
+            }
+        catch(RuntimeException fallbackFailure) {
+            Log.stack(LOG_ID,"legacy startForeground",fallbackFailure);
+            }
+        }
+    return false;
+    }
  public void  placelargenotification(int draw,String message,String type,boolean once) {
         hasvalue=true;
     fornotify(makenotification(draw,message,type,once));

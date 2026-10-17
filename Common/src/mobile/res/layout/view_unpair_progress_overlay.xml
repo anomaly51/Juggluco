@@ -3,7 +3,7 @@
     android:id="@+id/unpairOverlay"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#C70B0D0E"
+    android:background="#D0060301"
     android:clickable="true"
     android:focusable="true"
     android:visibility="gone">
@@ -15,7 +15,7 @@
         android:orientation="vertical"
         android:gravity="center_horizontal"
         android:padding="28dp"
-        android:elevation="16dp"
+        android:elevation="0dp"
         android:background="@drawable/bg_unpair_progress_panel">
 
         <ProgressBar
@@ -24,7 +24,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:indeterminate="true"
-            android:indeterminateTint="#5ACB85" />
+            android:indeterminateTint="@color/lifeprompt_primary" />
 
         <TextView
             android:id="@+id/unpairTitle"
@@ -32,7 +32,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:text="@string/releasingsensor" 
-            android:textColor="#F2F4F3"
+            android:fontFamily="monospace"
+            android:textColor="@color/lifeprompt_on_surface"
             android:textSize="20sp"
             android:textStyle="bold" />
 
@@ -43,7 +44,8 @@
             android:layout_marginTop="12dp"
             android:gravity="center"
             android:text="@string/connecttosensor" 
-            android:textColor="#AAB2AE"
+            android:fontFamily="monospace"
+            android:textColor="@color/lifeprompt_on_surface_variant"
             android:textSize="15sp"
             android:lineSpacingMultiplier="1.15" />
 
@@ -54,7 +56,8 @@
             android:layout_marginTop="20dp"
             android:minHeight="48dp"
             android:textAllCaps="false"
-            android:textColor="#F2F4F3"
+            android:fontFamily="monospace"
+            android:textColor="@color/lifeprompt_primary"
             android:text="@string/closename" 
             android:visibility="gone" />
     </LinearLayout>

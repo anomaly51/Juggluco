@@ -33,8 +33,8 @@ import static tk.glucodata.Log.stack;
 //import static tk.glucodata.Natives.getwakelock;
 
 public class keeprunning extends Service {
-static boolean started=false;
-static keeprunning theservice=null;
+static volatile boolean started=false;
+static volatile keeprunning theservice=null;
 static final String LOG_ID="keeprunning";
 /*
 static void turnonwakelock() {
@@ -82,10 +82,15 @@ static PowerManager.WakeLock wakeLock =null;
                    return Service.START_NOT_STICKY;
                    }
                 }
-             }
-             theservice=this;
-             Notify.foregroundnot(this);
-             return Service.START_STICKY;
+              }
+              theservice=this;
+              if(!Notify.foregroundnot(this)) {
+                 started=false;
+                 theservice=null;
+                 stopSelf();
+                 return Service.START_NOT_STICKY;
+                 }
+              return Service.START_STICKY;
             } 
         catch(Throwable e) {
                  started=false;
@@ -115,6 +120,29 @@ static boolean start(Context context) {
       }
    return false;
    }
+
+/** Makes this existing FGS audio-capable before a critical alarm plays. */
+static synchronized boolean promoteCriticalAlarmAudio() {
+    keeprunning service=theservice;
+    if(!started||service==null) return false;
+    return Notify.setCriticalAlarmAudioForeground(service,true);
+    }
+
+/** Rejects a stale player-side flag after Android destroys this service. */
+static synchronized boolean hasCriticalAlarmAudioForeground() {
+    return started&&theservice!=null
+            &&Notify.hasCriticalAlarmAudioForeground();
+    }
+
+/** Drops the audio capability after ACK/snooze while preserving sensor work. */
+static synchronized boolean demoteCriticalAlarmAudio() {
+    keeprunning service=theservice;
+    if(!started||service==null) {
+        Notify.resetCriticalAlarmAudioForeground();
+        return false;
+        }
+    return Notify.setCriticalAlarmAudioForeground(service,false);
+    }
 void stopper() {
    stopForeground(true);
    stopSelf();
@@ -128,7 +156,19 @@ static void stop() {
       theservice.stopper();
       theservice=null;
       started=false;
-      }
-   }
+       }
+    }
+
+ @Override
+ public void onDestroy() {
+    synchronized(keeprunning.class) {
+       if(theservice==this) {
+          theservice=null;
+          started=false;
+          Notify.resetCriticalAlarmAudioForeground();
+          }
+       }
+    super.onDestroy();
+    }
 
 };

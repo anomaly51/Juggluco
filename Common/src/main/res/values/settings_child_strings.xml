@@ -26,6 +26,13 @@
     <string name="settings_theme_hint">Choose the app appearance</string>
     <string name="settings_iob_hint">Configure insulin-on-board calculation</string>
     <string name="settings_display_help_hint">Explanation of chart and display options</string>
+    <string name="settings_graph_data_disclosure">Data on graph</string>
+    <string name="settings_graph_data_disclosure_summary">Readings, insulin, food and history</string>
+    <string name="settings_ranges_disclosure_summary">Visible scale and fixed target zone</string>
+    <string name="settings_chart_disclosure_summary">Time, axis and forecast behavior</string>
+    <string name="settings_appearance_disclosure_summary">Theme, language and floating glucose</string>
+    <string name="settings_expanded">Expanded</string>
+    <string name="settings_collapsed">Collapsed</string>
 
     <string name="settings_alarm_title">Glucose alerts</string>
     <string name="settings_alarm_intro">Set the alerts that need your attention. Each enabled alert has its own threshold and sound.</string>
@@ -152,6 +159,8 @@
     <string name="critical_alarm_dnd_title">Do Not Disturb access</string>
     <string name="critical_alarm_dnd_ready">Access granted for urgent channels</string>
     <string name="critical_alarm_dnd_needed">Grant access so urgent channels can request an override</string>
+    <string name="critical_alarm_dnd_total_silence">Access granted, but Total silence blocks alarm sound. Open Do Not Disturb and allow alarms.</string>
+    <string name="critical_alarm_dnd_mode_unknown">Access granted, but Android did not report the current mode. Check Do Not Disturb settings.</string>
     <string name="critical_alarm_full_screen_title">Full-screen alerts</string>
     <string name="critical_alarm_full_screen_ready">Allowed by Android</string>
     <string name="critical_alarm_full_screen_needed">Special access is not allowed</string>
@@ -241,12 +250,41 @@
 
     <string name="settings_section_connections">Connections</string>
     <string name="settings_section_technical">Technical</string>
+    <string name="settings_back">Back</string>
+    <string name="settings_guide">App guide</string>
+    <string name="settings_hub_intro">Choose what you want to change.</string>
+    <string name="settings_category_glucose">Glucose &amp; graph</string>
+    <string name="settings_category_glucose_summary">Units, calibration and chart</string>
+    <string name="settings_category_alerts">Alerts</string>
+    <string name="settings_category_alerts_summary">Low, high, forecast and reminders</string>
+    <string name="settings_category_connections">Connections</string>
+    <string name="settings_category_connections_summary">Food and insulin service, sharing and backup</string>
+    <string name="settings_category_data">Data</string>
+    <string name="settings_category_data_summary">Last scan, export and labels</string>
+    <string name="settings_category_behavior">App behavior</string>
+    <string name="settings_category_behavior_summary">Scanning, devices and floating glucose</string>
+    <string name="settings_category_advanced">Advanced</string>
+    <string name="settings_category_advanced_summary">Diagnostics, help and app information</string>
+    <string name="settings_category_glucose_intro">Change the glucose scale or open focused graph controls.</string>
+    <string name="settings_category_alerts_intro">Manage attention-critical glucose alerts and treatment reminders.</string>
+    <string name="settings_category_connections_intro">Choose where readings are sent, received and backed up.</string>
+    <string name="settings_category_data_intro">Open existing records and move your data without changing it here.</string>
+    <string name="settings_category_behavior_intro">Control how Juggluco responds to scans and works with other displays.</string>
+    <string name="settings_category_advanced_intro">Less frequently used support and diagnostic tools.</string>
+    <string name="settings_category_basics">Essentials</string>
+    <string name="settings_forecast_section">Forecast</string>
+    <string name="settings_forecast_title">Glucose forecast</string>
+    <string name="settings_forecast_summary">Trajectory, factors and accuracy</string>
+    <string name="settings_category_alert_rules">Alert rules</string>
+    <string name="settings_category_services">Services</string>
+    <string name="settings_category_history">Data tools</string>
+    <string name="settings_category_input">Scanning</string>
+    <string name="settings_category_devices">Devices and overlays</string>
+    <string name="settings_category_support">Support and diagnostics</string>
     <string name="settings_legacy_title">Legacy</string>
     <string name="settings_legacy_intro">Older and specialist tools are kept here so the main settings stay focused on daily glucose use.</string>
     <string name="settings_legacy_records_section">Records and reports</string>
     <string name="settings_legacy_utilities_section">Device and utilities</string>
-    <string name="settings_legacy_list_hint">Open the existing list of saved treatment records</string>
-    <string name="settings_legacy_statistics_hint">View the existing glucose statistics report</string>
     <string name="settings_legacy_last_scan_hint">Return to the most recent manual sensor scan</string>
     <string name="settings_legacy_export_hint">Create a file from glucose and treatment history</string>
     <string name="settings_legacy_watch_hint">Configure watches and external glucose displays</string>
@@ -257,6 +295,19 @@
     <string name="glucose_alert_hub_intro">Configure every glucose alert in one place. Each alert has its own trigger, repeat timing, sound and minimum alarm volume.</string>
     <string name="glucose_alert_types_section">Glucose alerts</string>
     <string name="glucose_alert_global_section">Global full-screen delivery</string>
+    <string name="glucose_alert_current_section">Current glucose</string>
+    <string name="glucose_alert_forecast_section">Forecast</string>
+    <string name="glucose_alert_signal_section">Sensor connection</string>
+    <string name="glucose_alert_overview_hint">Switch alerts on here. Tap a row for threshold, timing, sound and volume.</string>
+    <string name="glucose_alert_toggle_description">Enable or disable %1$s</string>
+    <string name="glucose_alert_disable_confirm_title">Turn off %1$s?</string>
+    <string name="glucose_alert_disable_confirm_message">You will no longer get this current-glucose warning. You can turn it back on at any time.</string>
+    <string name="glucose_alert_disable_action">Turn off</string>
+    <string name="glucose_alert_save_action">Save</string>
+    <plurals name="glucose_alert_active_count">
+        <item quantity="one">%1$d of 5 alerts active</item>
+        <item quantity="other">%1$d of 5 alerts active</item>
+    </plurals>
     <string name="glucose_alert_auto_save_hint">Changes are saved when you use Close or Back.</string>
     <string name="glucose_alert_current_low_title">Current low glucose</string>
     <string name="glucose_alert_current_high_title">Current high glucose</string>
@@ -325,4 +376,6 @@
     <string name="fullscreen_alert_behavior_title">Always open the urgent form</string>
     <string name="fullscreen_alert_behavior_body">When Android permits it, an alert opens above other apps and the lock screen. Its alarm sound continues until you press the single red acknowledgement button. Android system access can still be revoked, and no app can override blocked hardware.</string>
     <string name="fullscreen_alert_readiness_section">Android readiness</string>
+    <string name="settings_data_unavailable">This data view is not available yet</string>
+    <string name="settings_last_scan_unavailable">No recent scan is available yet</string>
 </resources>

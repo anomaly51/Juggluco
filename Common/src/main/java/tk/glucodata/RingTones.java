@@ -205,7 +205,7 @@ private void mkPhoneViews(MainActivity context,String label,View parview) {
 	name.setText(gettitle(context,uri,kind));
 	name.setTextColor(ClinicalUi.primaryText(context));
 	name.setTextSize(TypedValue.COMPLEX_UNIT_SP,18);
-	name.setTypeface(Typeface.create("sans-serif-medium",Typeface.BOLD));
+	name.setTypeface(Typeface.create("monospace",Typeface.BOLD));
 	name.setPadding(0,ClinicalUi.dp(context,3),ClinicalUi.dp(context,10),0);
 	toneCopy.addView(name);
 	currentTone.addView(toneCopy,new LinearLayout.LayoutParams(0,WRAP_CONTENT,1f));
@@ -304,7 +304,7 @@ private void mkPhoneViews(MainActivity context,String label,View parview) {
 	TextView error=ClinicalUi.body(context,"");
 	error.setTextColor(ClinicalUi.danger(context));
 	error.setTextSize(TypedValue.COMPLEX_UNIT_SP,14);
-	error.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+	error.setTypeface(Typeface.create("monospace",Typeface.NORMAL));
 	error.setPadding(ClinicalUi.dp(context,16),ClinicalUi.dp(context,13),
 			ClinicalUi.dp(context,16),ClinicalUi.dp(context,13));
 	error.setBackground(ClinicalUi.surface(context,false,false));

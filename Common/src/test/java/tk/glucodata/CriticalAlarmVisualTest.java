@@ -116,7 +116,7 @@ public class CriticalAlarmVisualTest {
     }
 
     @Test
-    public void reusableSurfaceRedactsExactLockedDetailsButKeepsTimeline() {
+    public void reusableSurfaceShowsMeasuredGlucoseWithoutArbitrarySessionDetails() {
         Application application = RuntimeEnvironment.getApplication();
         long now = System.currentTimeMillis();
         CriticalGlucoseAlarm.Session session = new CriticalGlucoseAlarm.Session();
@@ -161,8 +161,10 @@ public class CriticalAlarmVisualTest {
         surface.bind(session, false,
                 CriticalAlarmChartData.empty(System.currentTimeMillis()),
                 actions);
-        assertTrue(containsText(surface, "SECRET 3.1 mmol/L"));
-        assertTrue(containsText(surface, "Sensitive medical detail"));
+        assertFalse(containsText(surface, "SECRET 3.1 mmol/L"));
+        assertFalse(containsText(surface, "Sensitive medical detail"));
+        assertEquals("—", ((TextView) surface.findViewById(
+                CriticalAlarmSurface.GLUCOSE_VALUE_ID)).getText().toString());
     }
 
     @Test
@@ -186,7 +188,17 @@ public class CriticalAlarmVisualTest {
                 StandardCharsets.UTF_8);
         assertTrue(activity.contains(
                 "WindowManager.LayoutParams.FLAG_SECURE"));
-        assertTrue(surface.contains("0xFFE5484D"));
+        assertTrue(activity.contains(
+                "WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON"));
+        assertTrue(activity.contains("setShowWhenLocked(true)"));
+        assertTrue(activity.contains("setTurnScreenOn(true)"));
+        assertTrue(activity.contains(
+                "CriticalAlarmVolumeKeyController.dispatch"));
+        assertTrue(activity.contains("R.color.lifeprompt_background"));
+        assertFalse(activity.contains("0xFF090B0D"));
+        assertFalse(activity.contains("0xFF07090A"));
+        assertTrue(surface.contains("R.color.lifeprompt_error"));
+        assertTrue(surface.contains("R.color.lifeprompt_on_error"));
         assertFalse(surface.contains("Button snooze"));
         assertFalse(surface.contains("Button graph"));
     }
@@ -211,9 +223,9 @@ public class CriticalAlarmVisualTest {
                 System.currentTimeMillis()), () -> { });
 
         assertTrue(containsText(surface, application.getString(
-                R.string.critical_alarm_signal_loss_direction)));
+                R.string.critical_alarm_banner_signal)));
         assertTrue(containsText(surface, application.getString(
-                R.string.critical_alarm_signal_loss_instruction)));
+                R.string.critical_alarm_banner_no_reading)));
         assertTrue(containsText(surface, application.getString(
                 R.string.critical_alarm_ack_button)));
         assertFalse(containsText(surface, application.getString(

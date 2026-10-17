@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/menusview"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -17,31 +15,41 @@
         android:background="@drawable/modern_menu_backdrop"
         android:clickable="true"
         android:contentDescription="@string/closename"
-        android:focusable="true" />
+        android:focusable="false"
+        android:importantForAccessibility="no" />
 
     <LinearLayout
         android:id="@+id/modern_menu_panel"
         android:layout_width="360dp"
         android:layout_height="match_parent"
-        android:layout_gravity="start"
+        android:layout_gravity="end"
+        android:accessibilityPaneTitle="@string/dashboard_more"
         android:background="@drawable/modern_menu_panel"
         android:clickable="true"
         android:clipToPadding="false"
-        android:elevation="18dp"
-        android:focusable="false"
-        android:importantForAccessibility="no"
-        android:orientation="vertical"
-        tools:ignore="KeyboardInaccessibleWidget">
+        android:elevation="12dp"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:importantForAccessibility="yes"
+        android:orientation="vertical">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:minHeight="88dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="18dp"
-            android:paddingTop="14dp"
-            android:paddingEnd="12dp"
-            android:paddingBottom="12dp">
+            android:paddingStart="@dimen/lifeprompt_space_lg"
+            android:paddingTop="@dimen/lifeprompt_space_lg"
+            android:paddingEnd="@dimen/lifeprompt_space_xs"
+            android:paddingBottom="@dimen/lifeprompt_space_md">
+
+            <View
+                android:layout_width="2dp"
+                android:layout_height="40dp"
+                android:layout_marginEnd="@dimen/lifeprompt_space_sm"
+                android:background="@color/modern_secondary_accent"
+                android:importantForAccessibility="no" />
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -50,16 +58,20 @@
                 android:orientation="vertical">
 
                 <TextView
+                    android:id="@+id/modern_menu_title"
                     style="@style/ModernMenuTitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:accessibilityHeading="true"
                     android:text="@string/dashboard_more" />
 
                 <TextView
+                    android:id="@+id/modern_menu_subtitle"
                     style="@style/ModernMenuSubtitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="3dp"
+                    android:layout_marginTop="@dimen/lifeprompt_space_xxs"
+                    android:maxLines="2"
                     android:text="@string/menu_screen_subtitle" />
             </LinearLayout>
 
@@ -67,9 +79,11 @@
                 android:id="@+id/menus"
                 android:layout_width="48dp"
                 android:layout_height="48dp"
-                android:layout_marginStart="10dp"
+                android:layout_marginStart="@dimen/lifeprompt_space_xs"
                 android:background="@drawable/modern_menu_action"
                 android:contentDescription="@string/closename"
+                android:minHeight="@dimen/lifeprompt_touch_target"
+                android:minWidth="@dimen/lifeprompt_touch_target"
                 android:padding="12dp"
                 android:src="@drawable/modern_secondary_close" />
         </LinearLayout>
@@ -86,40 +100,36 @@
             android:clipToPadding="false"
             android:fillViewport="true"
             android:overScrollMode="ifContentScrolls"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp">
+            android:paddingStart="@dimen/lifeprompt_space_sm"
+            android:paddingEnd="@dimen/lifeprompt_space_sm">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:paddingTop="10dp"
-                android:paddingBottom="18dp">
+                android:paddingTop="@dimen/lifeprompt_space_sm"
+                android:paddingBottom="@dimen/lifeprompt_space_lg">
 
                 <TextView
                     style="@style/ModernMenuSectionTitle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:paddingStart="8dp"
-                    android:paddingBottom="7dp"
+                    android:accessibilityHeading="true"
+                    android:paddingStart="@dimen/lifeprompt_space_xs"
+                    android:paddingBottom="@dimen/lifeprompt_space_xs"
                     android:text="@string/menu_screen_quick" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical">
+                    android:background="@drawable/modern_menu_section"
+                    android:orientation="vertical"
+                    android:padding="@dimen/lifeprompt_space_xxs">
 
-                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                        <Button android:id="@+id/sensor" style="@style/ModernMenuTileAction" android:layout_width="0dp" android:layout_height="56dp" android:layout_weight="1" android:drawableStart="@drawable/modern_dashboard_sensor" android:text="@string/sensor" />
-                    </LinearLayout>
-                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:visibility="gone">
-                        <Button android:id="@+id/list" style="@style/ModernMenuTileAction" android:layout_width="0dp" android:layout_height="56dp" android:layout_weight="1" android:drawableStart="@drawable/modern_dashboard_records" android:text="@string/list" android:visibility="gone" />
-                        <Button android:id="@+id/statistics" style="@style/ModernMenuTileAction" android:layout_width="0dp" android:layout_height="56dp" android:layout_marginStart="6dp" android:layout_weight="1" android:drawableStart="@drawable/modern_dashboard_statistics" android:text="@string/statistics" android:visibility="gone" />
-                    </LinearLayout>
-                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:orientation="horizontal">
-                        <Button android:id="@+id/settings" style="@style/ModernMenuTileAction" android:layout_width="0dp" android:layout_height="56dp" android:layout_weight="1" android:drawableStart="@drawable/modern_secondary_settings" android:text="@string/settings" />
-                        <Button android:id="@+id/lastscan" style="@style/ModernMenuTileAction" android:layout_width="0dp" android:layout_height="56dp" android:layout_marginStart="6dp" android:layout_weight="1" android:drawableStart="@drawable/modern_secondary_scan" android:text="@string/last_scan" android:visibility="gone" />
-                    </LinearLayout>
+                    <Button android:id="@+id/sensor" style="@style/ModernMenuTileAction" android:layout_width="match_parent" android:layout_height="56dp" android:drawableStart="@drawable/modern_dashboard_sensor" android:text="@string/sensor" />
+                    <Button android:id="@+id/alerts" style="@style/ModernMenuTileAction" android:layout_width="match_parent" android:layout_height="56dp" android:layout_marginTop="2dp" android:drawableStart="@drawable/modern_secondary_alert" android:text="@string/settings_category_alerts" />
+                    <Button android:id="@+id/settings" style="@style/ModernMenuTileAction" android:layout_width="match_parent" android:layout_height="56dp" android:layout_marginTop="2dp" android:drawableStart="@drawable/modern_secondary_settings" android:text="@string/settings" />
+                    <Button android:id="@+id/lastscan" style="@style/ModernMenuTileAction" android:layout_width="match_parent" android:layout_height="56dp" android:layout_marginTop="2dp" android:drawableStart="@drawable/modern_secondary_scan" android:text="@string/last_scan" android:visibility="gone" />
                 </LinearLayout>
 
                 <TextView
@@ -127,9 +137,10 @@
                     style="@style/ModernMenuSectionTitle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:paddingStart="8dp"
-                    android:paddingTop="16dp"
-                    android:paddingBottom="7dp"
+                    android:accessibilityHeading="true"
+                    android:paddingStart="@dimen/lifeprompt_space_xs"
+                    android:paddingTop="@dimen/lifeprompt_space_md"
+                    android:paddingBottom="@dimen/lifeprompt_space_xs"
                     android:text="@string/menu_screen_app" />
 
                 <LinearLayout
@@ -148,5 +159,30 @@
                 </LinearLayout>
             </LinearLayout>
         </ScrollView>
+        <LinearLayout
+            android:id="@+id/modern_menu_footer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="@dimen/lifeprompt_space_lg"
+            android:paddingEnd="@dimen/lifeprompt_space_lg"
+            android:paddingBottom="@dimen/lifeprompt_space_md">
+            <Button
+                android:id="@+id/modern_menu_updates"
+                style="@style/ModernMenuListAction"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/app_update_footer" />
+            <TextView
+                android:id="@+id/modern_menu_version"
+                style="@style/ModernMenuSubtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="end"
+                android:textDirection="ltr"
+                android:textSize="10sp" />
+        </LinearLayout>
     </LinearLayout>
 </FrameLayout>

@@ -50,6 +50,7 @@ public class CriticalGlucoseAlarmOverlayTest {
     @Before
     public void setUp() throws Exception {
         application = RuntimeEnvironment.getApplication();
+        CriticalAlarmTestMedia.resetAndRegister(application);
         shadowOf(application).grantPermissions(
                 Manifest.permission.POST_NOTIFICATIONS);
         notifications = (NotificationManager) application.getSystemService(
@@ -82,6 +83,7 @@ public class CriticalGlucoseAlarmOverlayTest {
         clearController();
         notifications.cancelAll();
         ShadowSettings.setCanDrawOverlays(false);
+        CriticalAlarmTestMedia.reset();
     }
 
     @Test

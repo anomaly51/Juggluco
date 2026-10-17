@@ -82,9 +82,9 @@ public class IntakeEventClusterContractTest {
         String renderer = cppSource("curve.cpp");
         String helper = cppSource("intakemarkers.hpp");
 
-        assertTrue(natives.contains("int[] timelineEventsAt(float x,float y)"));
-        assertTrue(bridge.contains("fromjava(timelineEventsAt)"));
-        assertTrue(bridge.contains("intakeTimelineEventsAt(x,y)"));
+        assertTrue(natives.contains("int[] graphEventsAt(float x,float y)"));
+        assertTrue(bridge.contains("fromjava(graphEventsAt)"));
+        assertTrue(bridge.contains("intakeGraphEventsAt(x,y)"));
         assertTrue(graph.contains("eventKeys.length>1"));
         assertTrue(graph.contains("showIntakeEventCluster(eventKeys)"));
         assertTrue(main.contains("IntakeEventClusterSheet.resolve"));
@@ -94,7 +94,7 @@ public class IntakeEventClusterContractTest {
         assertTrue(renderer.contains("visualCollisionDistance"));
         assertTrue(renderer.contains("intakemarkers::joins_cluster"));
         assertTrue(renderer.contains(
-                "renderRevision==intakeTimelineRevision"));
+                "renderRevision==intakeGraphRevision"));
         assertTrue(helper.contains("nextX-firstX<=maximumSpan"));
     }
 

@@ -114,6 +114,130 @@ public class IntakeChatStateStoreTest {
     }
 
     @Test
+    public void structuredIntentSurvivesRecreationByteForByteWithoutRawText()
+            throws Exception {
+        long when = System.currentTimeMillis() - 300_000L;
+        String intent = IntakeStructuredIntent.insulin(
+                IntakeStructuredIntent.ACTION_ADD, "", when,
+                "NovoRapid", 5.0f,
+                "00000000-0000-0000-0000-000000000088");
+        String display = "NovoRapid · 5 units · 5 min ago";
+        IntakeChatStateStore.Pending pending = new IntakeChatStateStore.Pending(
+                "structured-turn", when, "", null,
+                Collections.emptyList(), false, false, 0, intent, display);
+        IntakeChatStateStore.State state = new IntakeChatStateStore.State(
+                "client-session", "server-session", "", null,
+                Collections.emptyList(), pending);
+
+        assertTrue(IntakeChatStateStore.save(context, "backend", state));
+        IntakeChatStateStore.State restored = IntakeChatStateStore.load(
+                context, "backend");
+
+        assertNotNull(restored);
+        assertNotNull(restored.pending);
+        assertEquals("", restored.pending.text);
+        assertEquals(display, restored.pending.displayText);
+        assertEquals(intent, restored.pending.structuredIntent);
+    }
+
+    @Test
+    public void structuredPendingOutlivesShortLivedMediaRetention()
+            throws Exception {
+        long when = System.currentTimeMillis() - 300_000L;
+        String intent = IntakeStructuredIntent.insulin(
+                IntakeStructuredIntent.ACTION_ADD, "", when,
+                "NovoRapid", 5.0f,
+                "00000000-0000-0000-0000-000000000090");
+        IntakeChatStateStore.Pending pending = new IntakeChatStateStore.Pending(
+                "structured-turn", when, "", null,
+                Collections.emptyList(), false, false, 0, intent,
+                "NovoRapid · 5 units · 5 min ago");
+        IntakeChatStateStore.State state = new IntakeChatStateStore.State(
+                "client-session", "server-session", "", null,
+                Collections.emptyList(), pending);
+        assertTrue(IntakeChatStateStore.save(context, "backend", state));
+        ageStoredStateByHours(7);
+
+        IntakeChatStateStore.State restored = IntakeChatStateStore.load(
+                context, "backend");
+
+        assertNotNull(restored);
+        assertNotNull(restored.pending);
+        assertEquals(intent, restored.pending.structuredIntent);
+        assertTrue(IntakeChatStateStore.hasPendingTurn(context));
+    }
+
+    @Test
+    public void stalePendingMediaExpiresAfterSixHours() throws Exception {
+        File audio = media("meal-voice-", ".m4a", new byte[]{1, 2, 3});
+        IntakeChatStateStore.Pending pending = new IntakeChatStateStore.Pending(
+                "media-turn", System.currentTimeMillis() - 300_000L,
+                "", audio, Collections.emptyList());
+        IntakeChatStateStore.State state = new IntakeChatStateStore.State(
+                "client-session", "server-session", "", null,
+                Collections.emptyList(), pending);
+        assertTrue(IntakeChatStateStore.save(context, "backend", state));
+        ageStoredStateByHours(7);
+
+        IntakeChatStateStore.State restored = IntakeChatStateStore.load(
+                context, "backend");
+
+        assertNotNull(restored);
+        assertNull(restored.pending);
+        assertFalse(IntakeChatStateStore.hasPendingTurn(context));
+    }
+
+    @Test
+    public void staleComposerCannotClearNewerPendingTurn() {
+        IntakeChatStateStore.Pending first = new IntakeChatStateStore.Pending(
+                "turn-a", 123L, "first", null, Collections.emptyList());
+        assertTrue(IntakeChatStateStore.save(context, "backend",
+                new IntakeChatStateStore.State("session-a", "server-a", "",
+                        null, Collections.emptyList(), first)));
+        IntakeChatStateStore.Pending newer = new IntakeChatStateStore.Pending(
+                "turn-b", 456L, "second", null, Collections.emptyList());
+        assertTrue(IntakeChatStateStore.save(context, "backend",
+                new IntakeChatStateStore.State("session-b", "server-b", "",
+                        null, Collections.emptyList(), newer)));
+
+        assertTrue(IntakeChatStateStore.clearPendingIfMatches(context,
+                "backend", "turn-a"));
+        assertTrue(IntakeChatStateStore.clearIfOwned(context, "backend",
+                "session-a"));
+
+        IntakeChatStateStore.State restored = IntakeChatStateStore.load(
+                context, "backend");
+        assertNotNull(restored);
+        assertEquals("session-b", restored.clientSessionId);
+        assertNotNull(restored.pending);
+        assertEquals("turn-b", restored.pending.clientTurnId);
+    }
+
+    @Test
+    public void restoredStructuredIntentCannotBeMixedWithRawText()
+            throws Exception {
+        long when = System.currentTimeMillis() - 60_000L;
+        String intent = IntakeStructuredIntent.insulin(
+                IntakeStructuredIntent.ACTION_ADD, "", when,
+                "NovoRapid", 5.0f,
+                "00000000-0000-0000-0000-000000000089");
+        IntakeChatStateStore.Pending invalid =
+                new IntakeChatStateStore.Pending("structured-turn", when,
+                        "five units", null, Collections.emptyList(),
+                        false, false, 0, intent, "five units");
+        IntakeChatStateStore.State state = new IntakeChatStateStore.State(
+                "client-session", "server-session", "", null,
+                Collections.emptyList(), invalid);
+
+        assertTrue(IntakeChatStateStore.save(context, "backend", state));
+        IntakeChatStateStore.State restored = IntakeChatStateStore.load(
+                context, "backend");
+
+        assertNotNull(restored);
+        assertNull(restored.pending);
+    }
+
+    @Test
     public void restoredMediaMustRemainInsidePrivateIntakeCache()
             throws Exception {
         File outside = File.createTempFile("outside-intake-", ".m4a",
@@ -329,5 +453,15 @@ public class IntakeChatStateStoreTest {
         File file = File.createTempFile(prefix, suffix, mediaDirectory);
         Files.write(file.toPath(), content);
         return file;
+    }
+
+    private void ageStoredStateByHours(int hours) throws Exception {
+        android.content.SharedPreferences preferences = context
+                .getSharedPreferences("intake_chat_state", Context.MODE_PRIVATE);
+        JSONObject state = new JSONObject(preferences.getString("state", ""));
+        state.put("saved_at_ms", System.currentTimeMillis()
+                - hours * 60L * 60L * 1000L);
+        assertTrue(preferences.edit().putString("state", state.toString())
+                .commit());
     }
 }

@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="#151918" />
-    <stroke android:width="1dp" android:color="#252B28" />
-    <corners android:radius="12dp" />
+    <solid android:color="@color/lifeprompt_surface_container" />
+    <stroke
+        android:width="@dimen/lifeprompt_outline_width"
+        android:color="@color/lifeprompt_outline_variant" />
+    <corners android:radius="@dimen/lifeprompt_radius_md" />
 </shape>

@@ -1,5 +1,12 @@
 
 #include <GLES2/gl2.h>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <ctime>
+#include <limits>
+#include <mutex>
+#include <string>
 #include "config.h"
 #include "SensorGlucoseData.hpp"
 #include "sensoren.hpp"
@@ -55,6 +62,23 @@ bool emptytap=false;
 extern bool fixatex,fixatey;
 extern std::vector<shownglucose_t> shownglucose;
 extern void setusedsensors(uint32_t nu) ;
+
+namespace {
+std::mutex numlistemptytextmutex;
+std::string numlistemptytitle;
+std::string numlistemptysubtitle;
+}
+
+void setnumlistemptytext(std::string title,std::string subtitle) {
+    std::lock_guard<std::mutex> guard(numlistemptytextmutex);
+    numlistemptytitle=std::move(title);
+    numlistemptysubtitle=std::move(subtitle);
+    }
+
+static std::pair<std::string,std::string> getnumlistemptytext() {
+    std::lock_guard<std::mutex> guard(numlistemptytextmutex);
+    return {numlistemptytitle,numlistemptysubtitle};
+    }
 
 void JCurve::lockGraphYRangeForPan() {
     if(modernui)
@@ -1155,6 +1179,100 @@ int numsize() {
         tot+=numdatas[i]->size();
     return tot;
 }
+
+namespace {
+constexpr int numpagehasearlier=1;
+constexpr int numpagehaslater=1<<1;
+
+bool hasvalidbefore(const NumIter<Num> &source,const Num *boundary) {
+    if(!boundary||boundary<=source.begin)
+        return false;
+    const Num *const onepastend=source.next(source.end);
+    const Num *cursor=boundary>onepastend?onepastend:boundary;
+    while(cursor>source.begin) {
+        cursor=source.prev(cursor);
+        if(!notvali(cursor))
+            return true;
+        }
+    return false;
+    }
+
+bool hasvalidfrom(const NumIter<Num> &source,const Num *boundary) {
+    if(!boundary||boundary>source.end)
+        return false;
+    const Num *cursor=boundary<source.begin?source.begin:boundary;
+    while(cursor<=source.end) {
+        if(!notvali(cursor))
+            return true;
+        cursor=source.next(cursor);
+        }
+    return false;
+    }
+}
+
+int numpagebounds() {
+    if(!numiters||basecount<=0
+            ||static_cast<int>(numdatas.size())!=basecount||numsize()==0)
+        return 0;
+    std::vector<NumIter<Num>> preview(numiters,numiters+basecount);
+    bool fromstart=false;
+    for(int i=0;i<basecount;i++) {
+        if(getpageoldest(i)) {
+            fromstart=true;
+            break;
+            }
+        }
+    const int percolumn=std::max(1,(int)((appcurve.dheight-
+            numlistcontenttop(appcurve))/numlistrowheight(appcurve)));
+    const int capacity=std::max(1,nrcolumns)*percolumn;
+    int bounds=0;
+    if(fromstart) {
+        for(int i=0;i<basecount;i++) {
+            if(numdatas[i]->size()==0) {
+                preview[i].iter=nullptr;
+                continue;
+                }
+            const Num *const oldest=getpageoldest(i);
+            if(hasvalidbefore(preview[i],oldest))
+                bounds|=numpagehasearlier;
+            preview[i].iter=oldest;
+            }
+        for(int position=0;position<capacity;position++) {
+            if(ifindoldest(preview.data(),0,basecount,notvali)<0)
+                break;
+            }
+        if(ifindoldest(preview.data(),0,basecount,notvali)>=0)
+            bounds|=numpagehaslater;
+        }
+    else {
+        for(int i=0;i<basecount;i++) {
+            if(numdatas[i]->size()==0) {
+                preview[i].iter=nullptr;
+                continue;
+                }
+            const Num *newest=getpagenewest(i);
+            if(hasvalidfrom(preview[i],newest))
+                bounds|=numpagehaslater;
+            if(!newest) {
+                preview[i].iter=nullptr;
+                continue;
+                }
+            const Num *const onepastend=preview[i].next(preview[i].end);
+            if(newest>onepastend)
+                newest=onepastend;
+            preview[i].iter=newest&&newest>preview[i].begin
+                    ?preview[i].prev(newest):nullptr;
+            }
+        for(int position=0;position<capacity;position++) {
+            if(ifindnewest(preview.data(),basecount,notvali)<0)
+                break;
+            }
+        if(ifindnewest(preview.data(),basecount,notvali)>=0)
+            bounds|=numpagehasearlier;
+        }
+    return bounds;
+    }
+
 void    JCurve::showfromend(NVGcontext* avg) {
     settoend() ;
     shownumsback(avg, numiters,basecount);
@@ -1221,8 +1339,7 @@ void JCurve::numpagenum(const uint32_t tim) {
  void    JCurve::shownumlist(NVGcontext* avg) {
     startstep(avg,modernui?modernGraphSurface:*getwhite());
     if(modernui&&numsize()==0) {
-        constexpr char title[]="No records yet";
-        constexpr char subtitle[]="Meals, insulin, exercise and notes will appear here";
+        const auto [title,subtitle]=getnumlistemptytext();
         const float contenttop=numlistcontenttop(*this);
         const float centerx=dleft+dwidth/2.0f;
         const float centery=dtop+contenttop+(dheight-contenttop)*.37f;
@@ -1249,11 +1366,11 @@ void JCurve::numpagenum(const uint32_t tim) {
         nvgFillColor(avg,nvgRGBA(241,245,249,255));
         nvgFontSize(avg,menusize*1.02f);
         nvgText(avg,centerx,centery+iconradius+density*27.0f,
-                title,title+sizeof(title)-1);
+                title.data(),title.data()+title.size());
         nvgFillColor(avg,nvgRGBA(125,145,166,255));
         nvgFontSize(avg,smallsize*.92f);
-        nvgText(avg,centerx,centery+iconradius+density*51.0f,subtitle,
-                subtitle+sizeof(subtitle)-1);
+        nvgText(avg,centerx,centery+iconradius+density*51.0f,
+                subtitle.data(),subtitle.data()+subtitle.size());
         return;
         }
     if(getpageoldest(0)!=nullptr) {
@@ -1494,6 +1611,98 @@ static bool ybezig=false;
         }
     return 0;
     }
+
+namespace {
+constexpr int normalizedGraphMinimumDuration=10*60;
+constexpr int normalizedGraphMaximumDuration=30*24*60*60;
+
+constexpr double clampNormalizedGraphFocus(const double focus) {
+    return focus<0.0?0.0:(focus>1.0?1.0:focus);
+    }
+
+static_assert(clampNormalizedGraphFocus(-0.5)==0.0);
+static_assert(clampNormalizedGraphFocus(0.4)==0.4);
+static_assert(clampNormalizedGraphFocus(1.5)==1.0);
+
+static std::uint32_t saturatedGraphStart(const long double requested) {
+    if(!(requested>0.0L))
+        return 0U;
+    constexpr long double maximum=
+            static_cast<long double>(std::numeric_limits<std::uint32_t>::max());
+    if(requested>=maximum)
+        return std::numeric_limits<std::uint32_t>::max();
+    return static_cast<std::uint32_t>(requested);
+    }
+
+static std::uint32_t normalizedGraphMaximumStart(const int duration) {
+    const std::time_t wallNow=std::time(nullptr);
+    const long double now=wallNow>0?static_cast<long double>(wallNow):0.0L;
+    const std::uint32_t legacyMaximum=saturatedGraphStart(
+            now-0.91L*static_cast<long double>(duration));
+    return forecastgraph::maximum_start(legacyMaximum,
+            static_cast<std::uint32_t>(duration),forecastGraphEndTime());
+    }
+
+static void boundNormalizedGraphStart(JCurve &curve) {
+    const std::uint32_t maximum=normalizedGraphMaximumStart(curve.duration);
+    if(curve.starttime>maximum) {
+        curve.setstarttime(maximum);
+        return;
+        }
+    const std::uint32_t minimum=curve.minstarttime();
+    if(curve.starttime<minimum)
+        curve.setstarttime(minimum);
+    }
+
+static int normalizedGraphScaledDuration(const int current,const float scale) {
+    const double power=std::pow(static_cast<double>(scale),5.0);
+    if(power==0.0)
+        return normalizedGraphMaximumDuration;
+    if(!std::isfinite(power))
+        return normalizedGraphMinimumDuration;
+    const double proposed=static_cast<double>(current)/power;
+    if(!std::isfinite(proposed)||proposed>=normalizedGraphMaximumDuration)
+        return normalizedGraphMaximumDuration;
+    if(proposed<=normalizedGraphMinimumDuration)
+        return normalizedGraphMinimumDuration;
+    return static_cast<int>(std::round(proposed));
+    }
+}
+
+int JCurve::translateGraphFraction(float deltaFraction) {
+    if(!std::isfinite(deltaFraction)||deltaFraction==0.0f||duration<=0)
+        return 0;
+    const long double requested=static_cast<long double>(starttime)+
+            1.2L*static_cast<long double>(deltaFraction)*
+            static_cast<long double>(duration);
+    setstarttime(saturatedGraphStart(requested));
+#ifndef WEAROS
+    if(!showpers)
+#endif
+        boundNormalizedGraphStart(*this);
+    return 1;
+    }
+
+void JCurve::xscaleGraphFraction(float scale,float focusFraction) {
+    unlockGraphYRange();
+    if(fixatex||duration<=0||!std::isfinite(scale)||scale<=0.0f||
+       !std::isfinite(focusFraction))
+        return;
+    const double focus=clampNormalizedGraphFocus(focusFraction);
+    const double oldDuration=duration;
+    const long double focusTime=static_cast<long double>(starttime)+
+            static_cast<long double>(focus*oldDuration);
+    duration=normalizedGraphScaledDuration(duration,scale);
+    setstarttime(saturatedGraphStart(focusTime-
+            static_cast<long double>(focus*duration)));
+#ifndef WEAROS
+    if(!showpers)
+#endif
+        if(starttime>normalizedGraphMaximumStart(duration))
+            setstarttime(normalizedGraphMaximumStart(duration));
+    setend=0;
+    }
+
 void JCurve::xscaleGesture(float scalex,float midx) {
     unlockGraphYRange();
     if(fixatex)

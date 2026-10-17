@@ -1,4 +1,4 @@
-# Juggluco clinical-dark phone UI v7
+# Juggluco phone experience
 
 This branch replaces Juggluco's phone presentation layer with a consistent,
 minimal clinical-dark interface while retaining its existing glucose, sensor,
@@ -7,15 +7,17 @@ small-screen code paths keep their established presentation and behavior.
 
 ## Primary experience
 
-- Primary navigation is intentionally limited to Overview and More. Records
-  and Statistics remain available from More; their stored data and handlers
-  were not removed.
-- Timeline and phone-side new-record creation are hidden for this iteration.
-  Existing records remain readable and editable, and the storage/backend code
-  is retained for a future replacement flow.
-- DashboardChrome presents the date, sensor entry point, current reading, target
-  status, graph range controls, and the native graph without landing-page
-  decoration.
+- Primary navigation is intentionally limited to Home, Add, and More. Timeline
+  and Insights were removed as phone destinations together with their screens,
+  routes, controls, and presentation resources. Glucose storage and the meal /
+  insulin markers drawn on the live graph remain intact.
+- Add opens the unified food-and-insulin conversation. More opens as a modal
+  side drawer over an unchanged live graph, with predictable Back, scrim, and
+  close-button behavior.
+- DashboardChrome is one continuous glucose canvas: current reading and trend,
+  freshness, sensor access, target, forecast, range controls, the native graph,
+  and Now. The old app bar, date decoration, backend badge, summary pane, and
+  duplicate dashboard cards are gone.
 - Portrait uses a compact bottom bar. Landscape follows the device orientation
   and changes to a reading column plus navigation rail, leaving most of the
   width to the graph.
@@ -52,7 +54,7 @@ small-screen code paths keep their established presentation and behavior.
 - ClinicalUi and DynamicThemeUtils provide one dark surface, typography,
   spacing, cards, fields, buttons, toggles, lists, focus states, and safe-inset
   behavior across programmatic and legacy overlays.
-- Records, Search, Export, Statistics, More, Settings, Sensor, reminders,
+- Search, Export, More, Settings, Sensor, reminders,
   sound/vibration, glucose alerts, schedules, floating glucose, calibration,
   labels, amount mapping, themes/colors, diagnostics/logs, Help, date/time
   pickers, active insulin, spoken glucose, watches, and meals use the new phone
@@ -88,7 +90,7 @@ Final local verification completed successfully on 2026-08-02:
   `AA72E7272D14D005C19C2F74A389042CA2DCC2672A13E7D8421106DAAB261AB2`.
 - The final APK was installed on `emulator-5556`; 3h/6h/8h presets,
   horizontal pan with a stable Y range, real two-pointer pinch, adaptive point
-  density, portrait/landscape auto-rotation, More, Graph display, and Records
+  density, portrait/landscape auto-rotation, More, and Graph display
   were smoke-tested with 0 buffered fatal/ANR matches.
 - The same APK was installed as an in-place update on Samsung SM-F966B. It
   cold-launched successfully with the existing live history intact, rendered
@@ -99,17 +101,16 @@ An emulator cannot validate a real BLE/NFC glucose sensor, vendor background
 restrictions, or real alarm delivery. Those backend paths remain connected but
 still require a supported physical-device field test before distribution.
 
-## v8 navigation cleanup
+## Historical v8 navigation cleanup
 
-- PHONE More is now intentionally limited to Sensor, Settings, and Photo. List,
-  Statistics, Last Scan, Watch, Talk, Mirror, Export, and Leave app remain in
-  code but are no longer exposed from that daily-use sheet.
+- At the time, PHONE More was limited to Sensor, Settings, and Photo while older
+  List and Statistics routes were retained. The current redesign supersedes
+  that boundary and removes those phone screens and routes.
 - Settings now separates the focused root into Glucose and display, Alerts and
   data, Connections, Preferences, Technical, and Legacy. Mirror is a first-class
   Connections action; Logging lives under Technical.
-- The new Legacy screen preserves nine specialist routes: List, Statistics,
-  Last Scan, Export, Watch, Talk, Floating glucose, Reminders, and Number
-  Labels. Their existing storage and service handlers are unchanged.
+- The former Legacy screen exposed specialist routes including List and
+  Statistics. Those two routes are no longer present in the current phone UI.
 - Help, Intro, and About are hidden from the PHONE Settings root while their
   implementation remains available in source. Floating glucose, Reminders, and
   Number Labels are no longer duplicated on the root.

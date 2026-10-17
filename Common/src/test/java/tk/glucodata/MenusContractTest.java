@@ -9,17 +9,21 @@ import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
 import android.content.Context;
+import android.graphics.Typeface;
 import android.view.ContextThemeWrapper;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
 import androidx.appcompat.widget.SwitchCompat;
+import androidx.core.view.ViewCompat;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -36,6 +40,7 @@ public class MenusContractTest {
             R.id.menusview,
             R.id.menus,
             R.id.sensor,
+            R.id.alerts,
             R.id.settings,
             R.id.about,
             R.id.menu_app_title,
@@ -43,8 +48,6 @@ public class MenusContractTest {
     };
 
     private static final int[] HIDDEN_LEGACY_MENU_IDS = {
-            R.id.list,
-            R.id.statistics,
             R.id.lastscan,
             R.id.watch,
             R.id.talk,
@@ -67,7 +70,7 @@ public class MenusContractTest {
 
     @Test
     public void requiredMenuIdsRemainInflatable() {
-        assertEquals(7, REQUIRED_MENU_IDS.length);
+        assertEquals(8, REQUIRED_MENU_IDS.length);
         for (int id : REQUIRED_MENU_IDS) {
             assertNotNull("Missing phone More view for resource ID " + id,
                     root.findViewById(id));
@@ -75,8 +78,13 @@ public class MenusContractTest {
     }
 
     @Test
-    public void legacyActionsAreAbsentFromTheVisiblePhoneMoreSurface() {
-        assertEquals(8, HIDDEN_LEGACY_MENU_IDS.length);
+    public void removedDestinationsAreAbsentAndOtherLegacyActionsStayHidden() {
+        assertEquals(0, context.getResources().getIdentifier(
+                "list", "id", context.getPackageName()));
+        assertEquals(0, context.getResources().getIdentifier(
+                "statistics", "id", context.getPackageName()));
+
+        assertEquals(6, HIDDEN_LEGACY_MENU_IDS.length);
         for (int id : HIDDEN_LEGACY_MENU_IDS) {
             View action = root.findViewById(id);
             assertNotNull("Legacy handler lost its resource ID " + id, action);
@@ -89,7 +97,7 @@ public class MenusContractTest {
     }
 
     @Test
-    public void menuIsAnOutlinedSideSheetWithScrollableContent() {
+    public void menuIsAFullHeightEndSidePanelWithScrollableContent() {
         assertTrue(root instanceof FrameLayout);
 
         View backdrop = root.findViewById(R.id.modern_menu_backdrop);
@@ -98,16 +106,20 @@ public class MenusContractTest {
         assertNotNull(panel);
         assertTrue(backdrop.isClickable());
         assertTrue(panel.isClickable());
-        assertTrue(!panel.isFocusable());
-        assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO,
+        assertTrue(panel.isFocusable());
+        assertTrue(panel.isFocusableInTouchMode());
+        assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_YES,
                 panel.getImportantForAccessibility());
+        assertEquals(context.getString(R.string.dashboard_more),
+                ViewCompat.getAccessibilityPaneTitle(panel));
         assertNotNull(panel.getBackground());
         assertSame(root, panel.getParent());
 
         FrameLayout.LayoutParams panelParams =
                 (FrameLayout.LayoutParams) panel.getLayoutParams();
-        assertEquals(Gravity.START, panelParams.gravity);
+        assertEquals(Gravity.END, panelParams.gravity);
         assertEquals(dp(360), panelParams.width);
+        assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, panelParams.height);
 
         ScrollView scrollView = findDescendant(panel, ScrollView.class);
         assertNotNull(scrollView);
@@ -117,10 +129,61 @@ public class MenusContractTest {
     }
 
     @Test
+    public void headerHasAVisibleTerminalHierarchyAndAccessibleCloseAction() {
+        TextView title = root.findViewById(R.id.modern_menu_title);
+        TextView subtitle = root.findViewById(R.id.modern_menu_subtitle);
+        ImageButton close = root.findViewById(R.id.menus);
+
+        assertNotNull(title);
+        assertNotNull(subtitle);
+        assertNotNull(close);
+        assertEquals(View.VISIBLE, subtitle.getVisibility());
+        assertFalse(subtitle.getText().toString().trim().isEmpty());
+        assertTrue(title.getTextSize() > subtitle.getTextSize());
+        assertTrue((title.getTypeface().getStyle() & Typeface.BOLD) != 0);
+        assertTrue(title.isAccessibilityHeading());
+        assertEquals(context.getString(R.string.closename),
+                close.getContentDescription().toString());
+        assertTrue(close.isFocusable());
+        assertTrue(close.getMinimumWidth() >= dp(48));
+        assertTrue(close.getMinimumHeight() >= dp(48));
+    }
+
+    @Test
+    public void visibleDestinationsUseSpacedDirectionalVectorChevrons() {
+        for (int id : new int[]{R.id.sensor, R.id.alerts, R.id.settings}) {
+            Button action = root.findViewById(id);
+            assertNotNull(action.getCompoundDrawablesRelative()[0]);
+            assertNotNull(action.getCompoundDrawablesRelative()[2]);
+            assertEquals(dp(12), action.getCompoundDrawablePadding());
+
+            Menus.configureDirectionalChevron(action);
+            assertTrue(action.getCompoundDrawablesRelative()[2].isAutoMirrored());
+        }
+    }
+
+    @Test
+    public void drawerMotionHonorsSystemAndLifecycleConstraints() {
+        assertTrue(Menus.shouldAnimateDrawer(false, true, true));
+        assertFalse(Menus.shouldAnimateDrawer(true, true, true));
+        assertFalse(Menus.shouldAnimateDrawer(false, false, true));
+        assertFalse(Menus.shouldAnimateDrawer(false, true, false));
+    }
+
+    @Test
+    public void closedPositionMirrorsAtTheEndEdgeInRtl() {
+        float width = dp(360);
+        assertEquals(width, Menus.closedTranslationForLayoutDirection(
+                View.LAYOUT_DIRECTION_LTR, (int) width), 0.0f);
+        assertEquals(-width, Menus.closedTranslationForLayoutDirection(
+                View.LAYOUT_DIRECTION_RTL, (int) width), 0.0f);
+    }
+
+    @Test
     public void visibleActionsMeetTheTouchContract() {
         int minimum = dp(48);
         int[] actions = {
-                R.id.sensor, R.id.settings, R.id.about
+                R.id.sensor, R.id.alerts, R.id.settings, R.id.about
         };
         for (int id : actions) {
             View action = root.findViewById(id);

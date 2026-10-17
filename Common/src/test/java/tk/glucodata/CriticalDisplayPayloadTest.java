@@ -38,6 +38,7 @@ public class CriticalDisplayPayloadTest {
     @Before
     public void setUp() throws Exception {
         application = RuntimeEnvironment.getApplication();
+        CriticalAlarmTestMedia.resetAndRegister(application);
         shadowOf(application).grantPermissions(
                 Manifest.permission.POST_NOTIFICATIONS);
         notifications = (NotificationManager) application.getSystemService(
@@ -55,6 +56,7 @@ public class CriticalDisplayPayloadTest {
     public void tearDown() throws Exception {
         clearController();
         notifications.cancelAll();
+        CriticalAlarmTestMedia.reset();
     }
 
     @Test

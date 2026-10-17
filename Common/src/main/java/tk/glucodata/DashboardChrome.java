@@ -11,58 +11,63 @@ package tk.glucodata;
 import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
-import android.graphics.Color;
+import android.content.res.ColorStateList;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.ViewTreeObserver;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import android.widget.Toast;
 
+import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import java.util.Collections;
-import java.util.Date;
 import java.util.IdentityHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
-import java.text.DateFormat;
 
 /**
  * Phone presentation shell around the native glucose graph.
  *
  * <p>The shell owns only layout, navigation and presentation state. Glucose storage,
- * graph rendering, gestures, records, statistics and sensor management continue to
+ * graph rendering, gestures, treatment records and sensor management continue to
  * use the existing Java/JNI entry points.</p>
  */
 final class DashboardChrome {
+    private static final String LOG_ID = "DashboardChrome";
     private static final long DATA_REFRESH_INTERVAL_MS = 60_000L;
+    private static final long PRESENTATION_TICK_MS = 1_000L;
+    private static final int CADENCE_READING_COUNT = 13;
     private static final long INTAKE_HISTORY_WINDOW_MS = 30L * 24L * 60L * 60L * 1000L;
     static final int RANGE_UNKNOWN = 0;
     static final int RANGE_IN_TARGET = 1;
     static final int RANGE_LOW = 2;
     static final int RANGE_HIGH = 3;
-    private static final int READING_NEUTRAL_COLOR = Color.rgb(242, 244, 243);
-    private static final int READING_IN_TARGET_COLOR = Color.rgb(78, 203, 131);
-    private static final int READING_HIGH_COLOR = Color.rgb(242, 169, 59);
-    private static final int READING_LOW_COLOR = Color.rgb(240, 107, 101);
     private static final int INTAKE_FLAG_MEAL = 1;
     private static final int INTAKE_FLAG_CARBS_PRESENT = 1 << 1;
     private static final int INTAKE_FLAG_RAPID_INSULIN = 1 << 2;
     private static final int INTAKE_FLAG_LONG_INSULIN = 1 << 3;
     private static final int NAVIGATION_RAIL_WIDTH_DP = 72;
-    static final int NAVIGATION_RAIL_ITEM_HEIGHT_DP = 96;
-    private static final int MAX_BODY_CONTENT_WIDTH_DP = 1240;
+    static final int NAVIGATION_RAIL_ITEM_HEIGHT_DP = 68;
+    private static final int NAVIGATION_BAR_HEIGHT_DP = 64;
+    private static final int MAX_BODY_CONTENT_WIDTH_DP = 1320;
+    static final int DESTINATION_HOME = 0;
+    static final int DESTINATION_MORE = 1;
+    static final float COMPACT_ADD_WEIGHT = 1.65f;
+    static final float COMPACT_MORE_WEIGHT = 1.0f;
     private static final int[] RANGE_IDS = {
             R.id.modern_dashboard_range_3h,
             R.id.modern_dashboard_range_6h,
@@ -73,15 +78,7 @@ final class DashboardChrome {
 
     private static final int[] RANGE_HOURS = {3, 6, 8, 12, 24};
 
-    private static final int[] DESTINATION_IDS = {
-            R.id.modern_dashboard_overview,
-            R.id.modern_dashboard_records,
-            R.id.modern_dashboard_statistics,
-            R.id.modern_dashboard_menu
-    };
-
     private static final int[] NAVIGATION_IDS = {
-            R.id.modern_dashboard_overview,
             R.id.modern_dashboard_add_intake,
             R.id.modern_dashboard_menu
     };
@@ -90,48 +87,49 @@ final class DashboardChrome {
     private final GlucoseCurve curve;
     private final IntakeRepository intakeRepository;
     private final ForecastRepository forecastRepository;
-    private final int cardSpacing;
 
     private FrameLayout root;
     private FrameLayout graphHost;
+    private ModernGlucoseChartView modernChartView;
     private LinearLayout content;
     private LinearLayout body;
     private LinearLayout actions;
-    private View appBar;
     private View heroCard;
     private LinearLayout heroContent;
     private LinearLayout readingColumn;
     private LinearLayout heroMeta;
-    private Button sensorAction;
     private View graphCard;
+    private View graphHeader;
     private View graphControls;
+    private View nowAction;
     private HorizontalScrollView rangeScroller;
     private LinearLayout rangeTrack;
-    private View heroReading;
+    private LinearLayout heroReading;
+    private LinearLayout readingValueRow;
     private TextView heroValue;
     private TextView heroTrend;
     private TextView heroUnit;
-    private TextView heroStatus;
     private TextView heroFreshness;
     private TextView heroRangeState;
-    private TextView headerDate;
-    private View backendAction;
-    private TextView backendStatus;
-    private Button forecastAction;
     private TextView targetRange;
-    private View heroMetaSeparator;
-    private View[] presentationControls;
 
     private Insets systemInsets = Insets.NONE;
     private boolean attached;
     private boolean foreground;
     private boolean obscured;
+    private boolean modernRendererActive;
     private boolean graphPreviewEnabled;
-    private int selectedDestination = R.id.modern_dashboard_overview;
+    private int selectedDestination = DESTINATION_HOME;
     private int selectedHours = -1;
     private long lastIntakeRefreshMs;
-    private int backendStatusGeneration;
-    private boolean backendCheckInFlight;
+    private long latestReadingAtMs;
+    private long averageReadingIntervalMs = -1L;
+    private String latestReadingValue = "";
+    private String latestReadingTrendDescription = "";
+    private String latestReadingSensorId = "";
+    private int latestReadingSensorGeneration;
+    private boolean displayedReadingStale;
+    private int currentReadingRange = RANGE_UNKNOWN;
     private CharSequence graphSummaryDescription = "";
 
     private final IntakeRepository.Listener intakeListener;
@@ -160,8 +158,18 @@ final class DashboardChrome {
                 return;
             }
             refreshData();
-            refreshBackendStatus();
             root.postDelayed(this, DATA_REFRESH_INTERVAL_MS);
+        }
+    };
+
+    private final Runnable presentationClock = new Runnable() {
+        @Override
+        public void run() {
+            if (!attached || !foreground || root == null) {
+                return;
+            }
+            refreshLivePresentation();
+            schedulePresentationTick();
         }
     };
 
@@ -178,16 +186,13 @@ final class DashboardChrome {
             // This callback is emitted only for cached/confirmed backend
             // records. Unconfirmed meal-chat proposals never reach it.
             forecastRepository.refreshAfterConfirmedIntake();
-            this.activity.requestRender();
+            // ModernGlucoseChartView owns its repository subscription. This
+            // listener only keeps the native fallback projection warm.
+            requestLegacyGraphRenderIfActive();
         };
-        forecastListener = state -> {
-            updateForecastAction(state);
-            this.activity.requestRender();
-        };
+        forecastListener = state -> requestLegacyGraphRenderIfActive();
         backendConfigurationListener =
                 this::handleBackendConfigurationChanged;
-        cardSpacing = Math.round(
-                8.0f * activity.getResources().getDisplayMetrics().density);
     }
 
     /**
@@ -205,37 +210,29 @@ final class DashboardChrome {
         content = root.findViewById(R.id.modern_dashboard_content);
         body = root.findViewById(R.id.modern_dashboard_body);
         actions = root.findViewById(R.id.modern_dashboard_actions);
-        appBar = root.findViewById(R.id.modern_dashboard_app_bar);
         heroCard = root.findViewById(R.id.modern_dashboard_hero);
         heroContent = root.findViewById(R.id.modern_dashboard_hero_content);
         readingColumn = root.findViewById(R.id.modern_dashboard_reading_column);
         heroMeta = root.findViewById(R.id.modern_dashboard_meta);
-        sensorAction = root.findViewById(R.id.modern_dashboard_sensor);
         graphCard = root.findViewById(R.id.modern_dashboard_graph_card);
-        graphCard.setClipToOutline(true);
+        // The plot already owns the only strong frame on the dashboard. Keeping
+        // this container planar prevents nested rounded cards from competing
+        // with the medical data.
+        graphCard.setClipToOutline(false);
+        graphHeader = root.findViewById(R.id.modern_dashboard_graph_header);
         graphControls = root.findViewById(R.id.modern_dashboard_graph_controls);
+        nowAction = root.findViewById(R.id.modern_dashboard_now);
         rangeScroller = root.findViewById(
                 R.id.modern_dashboard_range_scroller);
         rangeTrack = root.findViewById(R.id.modern_dashboard_ranges);
         heroReading = root.findViewById(R.id.modern_dashboard_hero_reading);
+        readingValueRow = root.findViewById(R.id.modern_dashboard_value_row);
         heroValue = root.findViewById(R.id.modern_dashboard_value);
         heroTrend = root.findViewById(R.id.modern_dashboard_trend);
         heroUnit = root.findViewById(R.id.modern_dashboard_unit);
-        heroStatus = root.findViewById(R.id.modern_dashboard_status);
         heroFreshness = root.findViewById(R.id.modern_dashboard_freshness);
         heroRangeState = root.findViewById(R.id.modern_dashboard_range_state);
-        headerDate = root.findViewById(R.id.modern_dashboard_date);
-        backendAction = root.findViewById(
-                R.id.modern_dashboard_backend_action);
-        backendStatus = root.findViewById(
-                R.id.modern_dashboard_backend_status);
-        forecastAction = root.findViewById(
-                R.id.modern_dashboard_forecast);
         targetRange = root.findViewById(R.id.modern_dashboard_target_range);
-        heroMetaSeparator = root.findViewById(
-                R.id.modern_dashboard_meta_separator);
-        presentationControls = new View[]{appBar, heroCard, graphControls,
-                forecastAction, actions};
 
         ViewParent currentParent = curve.getParent();
         if (currentParent instanceof ViewGroup) {
@@ -244,13 +241,112 @@ final class DashboardChrome {
         graphHost.addView(curve, new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
         curve.setContentDescription(activity.getString(
                 R.string.dashboard_graph_hint));
+        try {
+            modernChartView = new ModernGlucoseChartView(activity);
+            modernChartView.setInteractionEnabled(false);
+            graphHost.addView(modernChartView,
+                    new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+            setModernRendererActive(true);
+        } catch (RuntimeException | LinkageError error) {
+            Log.stack(LOG_ID, "Modern chart unavailable", error);
+            modernChartView = null;
+            setModernRendererActive(false);
+        }
+        installAccessibilityDelegates();
 
+        refreshTheme();
         updateDestinationSelection();
         updateRangeSelection();
-        refreshHeaderDate();
         refreshTargetRange();
         showLoadingState();
         return root;
+    }
+
+    /**
+     * Rebinds the semantic amber-terminal palette after an in-place uiMode change.
+     *
+     * <p>MainActivity handles configuration changes without recreating itself, so
+     * drawables and ColorStateLists already attached to the hierarchy would
+     * otherwise retain stale stateful resource instances.</p>
+     */
+    void refreshTheme() {
+        if (root == null) {
+            return;
+        }
+
+        root.setBackgroundColor(activity.getColor(R.color.lifeprompt_background));
+        if (heroCard != null) {
+            heroCard.setBackgroundResource(
+                    R.drawable.lifeprompt_dashboard_hero_strip);
+        }
+        if (graphCard != null) {
+            graphCard.setBackgroundResource(
+                    R.drawable.lifeprompt_dashboard_graph_card);
+        }
+        if (rangeTrack != null) {
+            rangeTrack.setBackgroundResource(
+                    R.drawable.lifeprompt_dashboard_segmented_track);
+        }
+        int muted = activity.getColor(R.color.lifeprompt_on_surface_variant);
+        if (heroUnit != null) heroUnit.setTextColor(muted);
+        if (targetRange != null) {
+            targetRange.setTextColor(muted);
+        }
+        if (heroFreshness != null) {
+            heroFreshness.setTextColor(colorStateList(
+                    R.color.modern_dashboard_freshness_text));
+        }
+        Button nowAction = root.findViewById(R.id.modern_dashboard_now);
+        if (nowAction != null) {
+            nowAction.setBackgroundResource(
+                    R.drawable.lifeprompt_dashboard_tonal_action);
+            ColorStateList tonalActionText = colorStateList(
+                    R.color.modern_dashboard_tonal_action_text);
+            nowAction.setTextColor(tonalActionText);
+            nowAction.setCompoundDrawableTintList(tonalActionText);
+        }
+
+        ColorStateList rangeText = colorStateList(
+                R.color.modern_dashboard_chip_text);
+        for (int rangeId : RANGE_IDS) {
+            Button range = root.findViewById(rangeId);
+            if (range == null) continue;
+            range.setBackgroundResource(
+                    R.drawable.lifeprompt_dashboard_segmented_item);
+            range.setTextColor(rangeText);
+        }
+
+        ColorStateList navigationText = colorStateList(
+                R.color.modern_dashboard_nav_text);
+        for (int navigationId : NAVIGATION_IDS) {
+            Button navigation = root.findViewById(navigationId);
+            if (navigation == null) continue;
+            boolean primaryAction = navigationId
+                    == R.id.modern_dashboard_add_intake;
+            navigation.setBackgroundResource(primaryAction
+                    ? R.drawable.lifeprompt_dashboard_primary_action
+                    : R.drawable.lifeprompt_dashboard_nav_item);
+            ColorStateList tint = primaryAction
+                    ? colorStateList(
+                            R.color.modern_dashboard_primary_action_text)
+                    : navigationText;
+            navigation.setTextColor(tint);
+            navigation.setCompoundDrawableTintList(tint);
+        }
+
+        applyReadingFreshnessState(displayedReadingStale);
+        updateRangeSelection();
+        updateDestinationSelection();
+        refreshModernChartTheme();
+        root.invalidate();
+    }
+
+    private ColorStateList colorStateList(int resourceId) {
+        ColorStateList colors = AppCompatResources.getColorStateList(
+                activity, resourceId);
+        return colors != null
+                ? colors
+                : ColorStateList.valueOf(activity.getColor(resourceId));
     }
 
     /** Activates the already-created shell. It never adds another Activity view. */
@@ -275,6 +371,7 @@ final class DashboardChrome {
         });
 
         attached = true;
+        updateGraphInteraction();
         intakeRepository.addListener(intakeListener);
         forecastRepository.addListener(forecastListener);
         intakeRepository.addConfigurationListener(
@@ -288,42 +385,18 @@ final class DashboardChrome {
     }
 
     private void configureActions() {
-        configureAction(R.id.modern_dashboard_overview,
-                R.string.dashboard_overview, view -> {
-                    setSelectedDestination(R.id.modern_dashboard_overview);
-                    showNow();
-                });
         configureAction(R.id.modern_dashboard_add_intake,
-                R.string.intake_add_short,
-                view -> activity.showIntakeComposer());
-        configureAction(R.id.modern_dashboard_records,
-                R.string.dashboard_records, view -> {
-                    setSelectedDestination(R.id.modern_dashboard_records);
-                    showRecords();
-                });
-        configureAction(R.id.modern_dashboard_statistics,
-                R.string.dashboard_insights, view -> {
-                    setSelectedDestination(R.id.modern_dashboard_statistics);
-                    showStatistics();
+                R.string.dashboard_add_description,
+                view -> {
+                    activity.showIntakeComposer();
                 });
         configureAction(R.id.modern_dashboard_menu,
-                R.string.dashboard_more, view -> {
-                    setSelectedDestination(R.id.modern_dashboard_menu);
+                R.string.dashboard_more_description, view -> {
+                    setSelectedDestination(DESTINATION_MORE);
                     openMenu();
                 });
-        configureAction(R.id.modern_dashboard_sensor,
-                R.string.dashboard_sensor_status,
-                view -> bluediag.start(activity));
         configureAction(R.id.modern_dashboard_now,
                 R.string.now, view -> showNow());
-        backendAction.setOnClickListener(view ->
-                IntakeBackendSettings.show(activity));
-        ViewCompat.setTooltipText(backendAction,
-                activity.getString(R.string.dashboard_backend_settings));
-        forecastAction.setOnClickListener(view ->
-                activity.showForecastDetails());
-        ViewCompat.setTooltipText(forecastAction,
-                activity.getString(R.string.forecast_dashboard_unavailable));
 
         for (int index = 0; index < RANGE_IDS.length; index++) {
             final int hours = RANGE_HOURS[index];
@@ -337,8 +410,6 @@ final class DashboardChrome {
     private void configureAction(int viewId, int descriptionId,
             View.OnClickListener listener) {
         View action = root.findViewById(viewId);
-        // Records and Insights deliberately no longer live in the primary chrome.
-        // Their IDs and handlers remain available to secondary entry points.
         if (action == null) {
             if (isPrimaryNavigationAction(viewId)) {
                 throw new IllegalStateException(
@@ -356,15 +427,9 @@ final class DashboardChrome {
             return;
         }
         int[] actionIds = {
-                R.id.modern_dashboard_overview,
                 R.id.modern_dashboard_add_intake,
-                R.id.modern_dashboard_records,
-                R.id.modern_dashboard_statistics,
                 R.id.modern_dashboard_menu,
-                R.id.modern_dashboard_sensor,
-                R.id.modern_dashboard_now,
-                R.id.modern_dashboard_backend_action,
-                R.id.modern_dashboard_forecast
+                R.id.modern_dashboard_now
         };
         for (int actionId : actionIds) {
             View action = root.findViewById(actionId);
@@ -381,11 +446,24 @@ final class DashboardChrome {
     }
 
     private void selectRange(int hours) {
+        if (selectedHours == hours) {
+            return;
+        }
         selectedHours = hours;
         updateRangeSelection();
         Natives.setgraphhours(hours);
-        activity.requestRender();
+        refreshData();
+        requestLegacyGraphRenderIfActive();
+        if (nowAction != null) {
+            nowAction.setVisibility(View.GONE);
+        }
         if (root != null) {
+            View selected = rangeView(hours);
+            if (selected != null) {
+                selected.performHapticFeedback(
+                        HapticFeedbackConstants.CLOCK_TICK);
+                centerRangeOption(selected);
+            }
             root.announceForAccessibility(
                     activity.getString(R.string.dashboard_hours_selected, hours));
         }
@@ -400,27 +478,47 @@ final class DashboardChrome {
             boolean selected = RANGE_HOURS[index] == selectedHours;
             range.setSelected(selected);
             range.setActivated(selected);
+            range.setContentDescription(activity.getString(selected
+                    ? R.string.dashboard_hours_selected
+                    : R.string.dashboard_show_hours, RANGE_HOURS[index]));
         }
+    }
+
+    private View rangeView(int hours) {
+        if (root == null) return null;
+        for (int index = 0; index < RANGE_HOURS.length; index++) {
+            if (RANGE_HOURS[index] == hours) {
+                return root.findViewById(RANGE_IDS[index]);
+            }
+        }
+        return null;
+    }
+
+    private void centerRangeOption(View option) {
+        if (rangeScroller == null || option == null
+                || rangeScroller.getWidth() <= 0) return;
+        int destination = option.getLeft() -
+                (rangeScroller.getWidth() - option.getWidth()) / 2;
+        rangeScroller.smoothScrollTo(Math.max(0, destination), 0);
     }
 
     private void setSelectedDestination(int destinationId) {
         selectedDestination = destinationId;
         updateDestinationSelection();
+        updateGraphInteraction();
     }
 
     private void updateDestinationSelection() {
         if (root == null) {
             return;
         }
-        for (int destinationId : DESTINATION_IDS) {
-            View destination = root.findViewById(destinationId);
-            if (destination == null) {
-                continue;
-            }
-            boolean selected = destinationId == selectedDestination;
-            destination.setSelected(selected);
-            destination.setActivated(selected);
+        View more = root.findViewById(R.id.modern_dashboard_menu);
+        if (more != null) {
+            boolean selected = selectedDestination == DESTINATION_MORE;
+            more.setSelected(selected);
+            more.setActivated(selected);
         }
+        refreshGraphAccessibilityDescription();
     }
 
     /**
@@ -438,10 +536,10 @@ final class DashboardChrome {
         }
 
         syncRangeSelection();
-        refreshHeaderDate();
         refreshTargetRange();
         refreshIntakeEvents(false);
         forecastRepository.refreshFromDashboard();
+        refreshModernChartData();
 
         final strGlucose glucose;
         try {
@@ -464,23 +562,25 @@ final class DashboardChrome {
             return;
         }
 
+        showReadingState(glucose);
+    }
+
+    private void showReadingState(strGlucose glucose) {
         setGraphPreviewEnabled(false);
-
-        long nowSeconds = System.currentTimeMillis() / 1000L;
-        long ageSeconds = Math.max(0L, nowSeconds - glucose.time);
-        boolean stale = isReadingStale(ageSeconds);
-
+        long readingAtMs = glucose.time > Long.MAX_VALUE / 1_000L
+                ? Long.MAX_VALUE : glucose.time * 1_000L;
+        boolean newSample = readingAtMs != latestReadingAtMs
+                || !Objects.equals(glucose.sensorid, latestReadingSensorId)
+                || glucose.sensorgen2 != latestReadingSensorGeneration;
+        latestReadingAtMs = readingAtMs;
+        latestReadingValue = glucose.value;
+        latestReadingSensorId = glucose.sensorid;
+        latestReadingSensorGeneration = glucose.sensorgen2;
+        if (newSample || averageReadingIntervalMs <= 0L) {
+            refreshReadingCadence();
+        }
         heroValue.setText(glucose.value);
         heroUnit.setText(readUnitLabel());
-        heroStatus.setText(stale
-                ? R.string.dashboard_status_outdated
-                : R.string.dashboard_status_live);
-        heroStatus.setSelected(!stale);
-        heroStatus.setActivated(stale);
-        heroFreshness.setText(freshnessText(ageSeconds, stale));
-        heroFreshness.setActivated(stale);
-        heroFreshness.setVisibility(View.VISIBLE);
-        heroReading.setActivated(stale);
         int readingRange = applyReadingRangeColor(glucose.value);
         updateReadingRangeState(readingRange);
 
@@ -497,18 +597,126 @@ final class DashboardChrome {
                     trendDescriptionForName(trendName)));
         }
 
-        String unit = heroUnit.getText().toString();
-        String trendDescription = trendArrow.isEmpty()
+        latestReadingTrendDescription = trendArrow.isEmpty()
                 ? activity.getString(R.string.dashboard_trend_unavailable)
                 : heroTrend.getContentDescription().toString();
-        heroReading.setContentDescription(activity.getString(
-                R.string.dashboard_reading_description,
-                glucose.value,
-                unit,
-                trendDescription,
-                heroFreshness.getText()));
+        updateTimingPresentation(System.currentTimeMillis(), newSample);
+    }
+
+    private void refreshLivePresentation() {
+        if (root == null || graphPreviewEnabled) return;
+        // Real readings already invalidate MainActivity immediately. The one-second
+        // clock only advances visible timing; the slower refresh remains a fallback.
+        updateTimingPresentation(System.currentTimeMillis(), false);
+    }
+
+    private void refreshReadingCadence() {
+        try {
+            averageReadingIntervalMs = calculateAverageReadingIntervalMs(
+                    Natives.recentCurrentSensorReadingTimes(
+                            CADENCE_READING_COUNT),
+                    Notify.glucosetimeoutSEC * 1_000L);
+        } catch (UnsatisfiedLinkError error) {
+            averageReadingIntervalMs = -1L;
+        }
+    }
+
+    private void updateTimingPresentation(long nowMs, boolean forceAccessibility) {
+        if (latestReadingAtMs <= 0L || heroFreshness == null) return;
+        long ageMs = Math.max(0L, nowMs - latestReadingAtMs);
+        boolean stale = isReadingStale(ageMs / 1_000L);
+        heroFreshness.setText(timingText(nowMs, ageMs, averageReadingIntervalMs));
+        heroFreshness.setActivated(stale);
+        heroFreshness.setVisibility(View.VISIBLE);
+        heroReading.setActivated(stale);
+
+        boolean staleChanged = stale != displayedReadingStale;
+        if (forceAccessibility || staleChanged) {
+            applyReadingFreshnessState(stale);
+        }
+        boolean refreshAccessibility = forceAccessibility || staleChanged;
+        if (!refreshAccessibility) return;
+        heroReading.setContentDescription(
+                currentReadingAccessibilityDescription(nowMs));
         graphSummaryDescription = heroReading.getContentDescription();
         refreshGraphAccessibilityDescription();
+    }
+
+    private void installAccessibilityDelegates() {
+        heroReading.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+            @Override
+            public void onInitializeAccessibilityNodeInfo(View host,
+                    AccessibilityNodeInfo info) {
+                super.onInitializeAccessibilityNodeInfo(host, info);
+                CharSequence liveDescription =
+                        currentReadingAccessibilityDescription(
+                                System.currentTimeMillis());
+                if (liveDescription != null) {
+                    info.setContentDescription(liveDescription);
+                }
+            }
+        });
+        curve.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+            @Override
+            public void onInitializeAccessibilityNodeInfo(View host,
+                    AccessibilityNodeInfo info) {
+                super.onInitializeAccessibilityNodeInfo(host, info);
+                CharSequence liveDescription =
+                        currentGraphAccessibilityDescription(
+                                System.currentTimeMillis());
+                if (liveDescription != null) {
+                    info.setContentDescription(liveDescription);
+                }
+            }
+        });
+        if (modernChartView != null) {
+            modernChartView.setAccessibilityDelegate(
+                    new View.AccessibilityDelegate() {
+                        @Override
+                        public void onInitializeAccessibilityNodeInfo(View host,
+                                AccessibilityNodeInfo info) {
+                            super.onInitializeAccessibilityNodeInfo(host, info);
+                            CharSequence liveDescription =
+                                    currentGraphAccessibilityDescription(
+                                            System.currentTimeMillis());
+                            if (liveDescription != null) {
+                                info.setContentDescription(liveDescription);
+                            }
+                        }
+                    });
+        }
+    }
+
+    private CharSequence currentReadingAccessibilityDescription(long nowMs) {
+        if (latestReadingAtMs <= 0L || heroUnit == null) return null;
+        long ageMs = Math.max(0L, nowMs - latestReadingAtMs);
+        boolean stale = isReadingStale(ageMs / 1_000L);
+        String actualRange = activity.getString(
+                readingRangeLabel(currentReadingRange));
+        CharSequence rangeDescription = stale
+                ? activity.getString(R.string.dashboard_state_stale_description,
+                        actualRange)
+                : actualRange;
+        return activity.getString(R.string.dashboard_reading_description,
+                latestReadingValue,
+                heroUnit.getText(),
+                latestReadingTrendDescription,
+                rangeDescription,
+                timingText(nowMs, ageMs, averageReadingIntervalMs));
+    }
+
+    private CharSequence currentGraphAccessibilityDescription(long nowMs) {
+        CharSequence readingDescription =
+                currentReadingAccessibilityDescription(nowMs);
+        if (readingDescription == null) return null;
+        StringBuilder description = new StringBuilder();
+        appendAccessibilitySentence(description, readingDescription);
+        if (targetRange != null && targetRange.getText().length() > 0) {
+            appendAccessibilitySentence(description, targetRange.getText());
+        }
+        appendAccessibilitySentence(description,
+                activity.getString(R.string.dashboard_graph_hint));
+        return description;
     }
 
     private void setGraphPreviewEnabled(boolean enabled) {
@@ -525,12 +733,10 @@ final class DashboardChrome {
             if (enabled && BuildConfig.DEBUG) {
                 forecastRepository.showDebugPreview(
                         System.currentTimeMillis(), previewMgDl());
-                updateForecastAction(forecastRepository.snapshot());
             } else {
                 forecastRepository.restoreGraphProjection();
-                updateForecastAction(forecastRepository.snapshot());
             }
-            activity.requestRender();
+            requestLegacyGraphRenderIfActive();
         } catch (UnsatisfiedLinkError error) {
             graphPreviewEnabled = false;
             forecastRepository.restoreGraphProjection();
@@ -569,15 +775,13 @@ final class DashboardChrome {
         if (heroValue == null) {
             return;
         }
-        setReadingColor(READING_NEUTRAL_COLOR);
+        setReadingColor(readingColor(RANGE_UNKNOWN));
+        clearReadingTiming();
         heroValue.setText(R.string.dashboard_empty_value);
         heroUnit.setText("");
         heroTrend.setText("");
         heroTrend.setVisibility(View.GONE);
         heroTrend.setContentDescription(null);
-        heroStatus.setText(R.string.dashboard_status_waiting);
-        heroStatus.setSelected(false);
-        heroStatus.setActivated(false);
         updateReadingRangeState(RANGE_UNKNOWN);
         heroRangeState.setText(R.string.dashboard_state_waiting);
         heroFreshness.setText(R.string.dashboard_no_current_reading);
@@ -599,7 +803,8 @@ final class DashboardChrome {
             unit = activity.getString(R.string.mgdL);
         }
         String value = previewValueLabel();
-        setReadingColor(READING_IN_TARGET_COLOR);
+        clearReadingTiming();
+        setReadingColor(readingColor(RANGE_IN_TARGET));
         updateReadingRangeState(RANGE_IN_TARGET);
         heroValue.setText(value);
         heroUnit.setText(unit);
@@ -607,9 +812,6 @@ final class DashboardChrome {
         heroTrend.setVisibility(View.VISIBLE);
         heroTrend.setContentDescription(
                 activity.getString(R.string.dashboard_trend_steady));
-        heroStatus.setText(R.string.dashboard_status_demo);
-        heroStatus.setSelected(false);
-        heroStatus.setActivated(false);
         heroFreshness.setText(R.string.dashboard_preview_short);
         heroFreshness.setActivated(false);
         heroFreshness.setVisibility(View.VISIBLE);
@@ -624,16 +826,14 @@ final class DashboardChrome {
         if (heroValue == null) {
             return;
         }
-        setReadingColor(READING_NEUTRAL_COLOR);
+        setReadingColor(readingColor(RANGE_UNKNOWN));
+        clearReadingTiming();
         updateReadingRangeState(RANGE_UNKNOWN);
         heroValue.setText(R.string.dashboard_empty_value);
         heroUnit.setText("");
         heroTrend.setText("");
         heroTrend.setVisibility(View.GONE);
         heroTrend.setContentDescription(null);
-        heroStatus.setText(R.string.dashboard_status_loading);
-        heroStatus.setSelected(false);
-        heroStatus.setActivated(false);
         heroFreshness.setText("");
         heroFreshness.setActivated(false);
         heroFreshness.setVisibility(View.GONE);
@@ -642,6 +842,16 @@ final class DashboardChrome {
                 activity.getString(R.string.dashboard_loading_description));
         graphSummaryDescription = heroReading.getContentDescription();
         refreshGraphAccessibilityDescription();
+    }
+
+    private void clearReadingTiming() {
+        latestReadingAtMs = 0L;
+        averageReadingIntervalMs = -1L;
+        latestReadingValue = "";
+        latestReadingTrendDescription = "";
+        latestReadingSensorId = "";
+        latestReadingSensorGeneration = 0;
+        displayedReadingStale = false;
     }
 
     private String previewValueLabel() {
@@ -669,24 +879,11 @@ final class DashboardChrome {
             low = Natives.targetlow();
             high = Natives.targethigh();
         } catch (UnsatisfiedLinkError error) {
-            setReadingColor(READING_NEUTRAL_COLOR);
+            setReadingColor(readingColor(RANGE_UNKNOWN));
             return RANGE_UNKNOWN;
         }
         int range = classifyReadingRange(value, low, high);
-        switch (range) {
-            case RANGE_IN_TARGET:
-                setReadingColor(READING_IN_TARGET_COLOR);
-                break;
-            case RANGE_LOW:
-                setReadingColor(READING_LOW_COLOR);
-                break;
-            case RANGE_HIGH:
-                setReadingColor(READING_HIGH_COLOR);
-                break;
-            default:
-                setReadingColor(READING_NEUTRAL_COLOR);
-                break;
-        }
+        setReadingColor(readingColor(range));
         return range;
     }
 
@@ -694,36 +891,36 @@ final class DashboardChrome {
         if (heroRangeState == null) {
             return;
         }
-        int label;
-        int color;
-        switch (range) {
-            case RANGE_IN_TARGET:
-                label = R.string.dashboard_state_in_target;
-                color = READING_IN_TARGET_COLOR;
-                break;
-            case RANGE_LOW:
-                label = R.string.dashboard_state_low;
-                color = READING_LOW_COLOR;
-                break;
-            case RANGE_HIGH:
-                label = R.string.dashboard_state_high;
-                color = READING_HIGH_COLOR;
-                break;
-            default:
-                label = R.string.dashboard_state_unknown;
-                color = Color.rgb(147, 155, 151);
-                break;
-        }
-        heroRangeState.setText(label);
-        heroRangeState.setTextColor(color);
+        currentReadingRange = range;
+        heroRangeState.setText(readingRangeLabel(range));
+        heroRangeState.setTextColor(readingColor(range));
     }
 
-    private void refreshHeaderDate() {
-        if (headerDate == null) {
+    private int readingRangeLabel(int range) {
+        switch (range) {
+            case RANGE_IN_TARGET:
+                return R.string.dashboard_state_in_target;
+            case RANGE_LOW:
+                return R.string.dashboard_state_low;
+            case RANGE_HIGH:
+                return R.string.dashboard_state_high;
+            default:
+                return R.string.dashboard_state_unknown;
+        }
+    }
+
+    private void applyReadingFreshnessState(boolean stale) {
+        displayedReadingStale = stale;
+        if (stale) {
+            int neutral = readingColor(RANGE_UNKNOWN);
+            setReadingColor(neutral);
+            heroRangeState.setText(R.string.dashboard_state_stale);
+            heroRangeState.setTextColor(neutral);
             return;
         }
-        headerDate.setText(DateFormat.getDateInstance(
-                DateFormat.MEDIUM, Locale.getDefault()).format(new Date()));
+        setReadingColor(readingColor(currentReadingRange));
+        heroRangeState.setText(readingRangeLabel(currentReadingRange));
+        heroRangeState.setTextColor(readingColor(currentReadingRange));
     }
 
     private void refreshTargetRange() {
@@ -763,6 +960,9 @@ final class DashboardChrome {
         appendAccessibilitySentence(description,
                 activity.getString(R.string.dashboard_graph_hint));
         curve.setContentDescription(description);
+        if (modernChartView != null) {
+            modernChartView.setContentSummary(description);
+        }
     }
 
     static void appendAccessibilitySentence(StringBuilder target,
@@ -789,6 +989,25 @@ final class DashboardChrome {
     private void setReadingColor(int color) {
         heroValue.setTextColor(color);
         heroTrend.setTextColor(color);
+    }
+
+    private int readingColor(int range) {
+        final int resource;
+        switch (range) {
+            case RANGE_IN_TARGET:
+                resource = R.color.lifeprompt_glucose_in_target;
+                break;
+            case RANGE_LOW:
+                resource = R.color.lifeprompt_glucose_low;
+                break;
+            case RANGE_HIGH:
+                resource = R.color.lifeprompt_glucose_high;
+                break;
+            default:
+                resource = R.color.lifeprompt_glucose_neutral;
+                break;
+        }
+        return activity.getColor(resource);
     }
 
     static int classifyReadingRange(String value, float low, float high) {
@@ -843,16 +1062,83 @@ final class DashboardChrome {
         }
     }
 
-    private CharSequence freshnessText(long ageSeconds, boolean stale) {
-        if (ageSeconds < 60L) {
-            return activity.getString(R.string.dashboard_updated_just_now);
+    private CharSequence timingText(long nowMs, long ageMs, long averageIntervalMs) {
+        String age = compactDuration(Math.max(0L, ageMs) / 1_000L);
+        if (averageIntervalMs <= 0L || latestReadingAtMs <= 0L) {
+            return activity.getString(R.string.dashboard_timing_unknown, age);
         }
-        int minutes = (int) Math.min(Integer.MAX_VALUE, ageSeconds / 60L);
-        int plurals = stale
-                ? R.plurals.dashboard_outdated_minutes
-                : R.plurals.dashboard_updated_minutes;
-        return activity.getResources().getQuantityString(
-                plurals, minutes, minutes);
+        String average = averageDuration(averageIntervalMs);
+        long expectedAtMs = latestReadingAtMs > Long.MAX_VALUE - averageIntervalMs
+                ? Long.MAX_VALUE : latestReadingAtMs + averageIntervalMs;
+        final String next;
+        if (expectedAtMs >= nowMs) {
+            long remainingMs = expectedAtMs - nowMs;
+            long remainingSeconds = remainingMs / 1_000L
+                    + (remainingMs % 1_000L == 0L ? 0L : 1L);
+            next = remainingSeconds == 0L
+                    ? activity.getString(R.string.dashboard_timing_due_now)
+                    : activity.getString(R.string.dashboard_timing_next,
+                            compactDuration(remainingSeconds));
+        } else {
+            long overdueSeconds = Math.max(1L,
+                    (nowMs - expectedAtMs) / 1_000L);
+            next = activity.getString(R.string.dashboard_timing_overdue,
+                    compactDuration(overdueSeconds));
+        }
+        return activity.getString(R.string.dashboard_timing_summary,
+                age, average, next);
+    }
+
+    private String averageDuration(long intervalMs) {
+        long seconds = Math.max(1L, Math.round(intervalMs / 1_000.0));
+        if (seconds < 90L) {
+            return activity.getString(R.string.dashboard_seconds_short, seconds);
+        }
+        long minutes = Math.max(1L, Math.round(seconds / 60.0));
+        return activity.getString(R.string.dashboard_minutes_short, minutes);
+    }
+
+    private String compactDuration(long seconds) {
+        long safeSeconds = Math.max(0L, seconds);
+        if (safeSeconds < 60L) {
+            return activity.getString(R.string.dashboard_seconds_short,
+                    safeSeconds);
+        }
+        return formatClockDuration(safeSeconds);
+    }
+
+    static String formatClockDuration(long seconds) {
+        long safeSeconds = Math.max(0L, seconds);
+        long hours = safeSeconds / 3_600L;
+        long minutes = (safeSeconds % 3_600L) / 60L;
+        long remainder = safeSeconds % 60L;
+        if (hours > 0L) {
+            return String.format(Locale.ROOT, "%d:%02d:%02d",
+                    hours, minutes, remainder);
+        }
+        return String.format(Locale.ROOT, "%d:%02d", minutes, remainder);
+    }
+
+    static long calculateAverageReadingIntervalMs(long[] timestamps,
+            long outageThresholdMs) {
+        if (timestamps == null || timestamps.length < 2
+                || outageThresholdMs <= 0L) return -1L;
+        long previous = -1L;
+        long sum = 0L;
+        int count = 0;
+        for (long timestamp : timestamps) {
+            if (timestamp <= 0L || timestamp <= previous) continue;
+            if (previous > 0L) {
+                long gap = timestamp - previous;
+                if (gap > 0L && gap < outageThresholdMs) {
+                    if (Long.MAX_VALUE - sum < gap) return -1L;
+                    sum += gap;
+                    count++;
+                }
+            }
+            previous = timestamp;
+        }
+        return count == 0 ? -1L : Math.round(sum / (double) count);
     }
 
     static boolean isReadingStale(long ageSeconds) {
@@ -907,10 +1193,7 @@ final class DashboardChrome {
         }
     }
 
-    /**
-     * Keeps all presentation controls out of sight and out of the accessibility
-     * tree while a legacy modal view is shown. The graph stays attached and visible.
-     */
+    /** Keeps the live canvas visible but inert behind a modal or side drawer. */
     void trackOverlay(View overlay) {
         if (!attached || root == null || overlay == root
                 || overlays.contains(overlay)) {
@@ -937,24 +1220,62 @@ final class DashboardChrome {
     static boolean isGraphGestureState(boolean attached, boolean obscured,
             int selectedDestination) {
         return attached && !obscured
-                && selectedDestination == R.id.modern_dashboard_overview;
+                && selectedDestination == DESTINATION_HOME;
     }
 
-    /** True only while the native chart is the unobscured dashboard surface. */
-    boolean acceptsGraphGestures() {
-        if (!isGraphGestureState(attached, obscured, selectedDestination)
-                || root == null || graphHost == null
-                || curve.getParent() != graphHost || !curve.isShown()) {
-            return false;
+    static boolean isGraphInteractionState(boolean attached, boolean foreground,
+            boolean obscured, int selectedDestination) {
+        return foreground && isGraphGestureState(attached, obscured,
+                selectedDestination);
+    }
+
+    private View activeDashboardGraphView() {
+        if (graphHost == null) {
+            return null;
         }
+        if (modernRendererActive && modernChartView != null
+                && modernChartView.getParent() == graphHost
+                && modernChartView.getVisibility() == View.VISIBLE) {
+            return modernChartView;
+        }
+        if (curve.getParent() == graphHost
+                && curve.getVisibility() == View.VISIBLE) {
+            return curve;
+        }
+        return null;
+    }
+
+    private boolean hasVisibleOverlay() {
         for (View overlay : overlays) {
             if (overlay.isAttachedToWindow()
                     && overlay.getVisibility() == View.VISIBLE
                     && overlay.isShown()) {
-                return false;
+                return true;
             }
         }
-        return true;
+        return false;
+    }
+
+    private void updateGraphInteraction() {
+        if (modernChartView == null) {
+            return;
+        }
+        boolean enabled = modernChartView == activeDashboardGraphView()
+                && isGraphInteractionState(attached, foreground, obscured,
+                        selectedDestination)
+                && !hasVisibleOverlay();
+        modernChartView.setInteractionEnabled(enabled);
+    }
+
+    /** True only while the legacy graph is the active, unobscured fallback. */
+    boolean acceptsGraphGestures() {
+        View activeGraph = activeDashboardGraphView();
+        if (!isGraphInteractionState(attached, foreground, obscured,
+                selectedDestination) || root == null || graphHost == null
+                || activeGraph != curve || !curve.isShown()) {
+            return false;
+        }
+        return !hasVisibleOverlay();
     }
 
     private void untrackOverlay(View overlay) {
@@ -970,32 +1291,31 @@ final class DashboardChrome {
     }
 
     private void updateOverlayVisibility() {
-        if (!attached || root == null || presentationControls == null) {
+        if (!attached || root == null) {
             return;
         }
-        boolean nowObscured = false;
+        int visibleOverlayCount = 0;
         for (View overlay : overlays) {
             if (overlay.isAttachedToWindow()
                     && overlay.getVisibility() == View.VISIBLE
                     && overlay.isShown()) {
-                nowObscured = true;
-                break;
+                visibleOverlayCount++;
             }
         }
+        boolean nowObscured = visibleOverlayCount > 0;
+        boolean obscuredChanged = obscured != nowObscured;
+        obscured = nowObscured;
+        updateGraphInteraction();
 
-        if (obscured != nowObscured) {
-            obscured = nowObscured;
-            for (View presentationControl : presentationControls) {
-                presentationControl.setVisibility(
-                        obscured ? View.GONE : View.VISIBLE);
-                presentationControl.setImportantForAccessibility(obscured
-                        ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-                        : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
-            }
-            if (!obscured) {
-                setSelectedDestination(R.id.modern_dashboard_overview);
-                activity.lightBars(false);
-            }
+        // Sibling destinations cover this surface. Keep its geometry stable so
+        // the translucent side drawer opens over an unchanged live graph, while
+        // removing the background from the accessibility and gesture planes.
+        root.setImportantForAccessibility(obscured
+                ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+        if (obscuredChanged && !obscured) {
+            setSelectedDestination(DESTINATION_HOME);
+            activity.syncDashboardSystemBars();
         }
 
         if (!obscured) {
@@ -1007,6 +1327,7 @@ final class DashboardChrome {
         if (!attached || root == null) {
             return;
         }
+        refreshTheme();
         root.setLayoutDirection(
                 activity.getResources().getConfiguration().getLayoutDirection());
         root.post(() -> {
@@ -1024,10 +1345,24 @@ final class DashboardChrome {
             return;
         }
         foreground = true;
+        updateGraphInteraction();
         forecastRepository.onForeground();
-        forceRefreshBackendStatus();
         root.removeCallbacks(refreshClock);
         root.postDelayed(refreshClock, DATA_REFRESH_INTERVAL_MS);
+        root.removeCallbacks(presentationClock);
+        refreshLivePresentation();
+        schedulePresentationTick();
+    }
+
+    private void schedulePresentationTick() {
+        if (!attached || !foreground || root == null) return;
+        root.removeCallbacks(presentationClock);
+        long remainder = Math.floorMod(System.currentTimeMillis(),
+                PRESENTATION_TICK_MS);
+        long delay = remainder == 0L
+                ? PRESENTATION_TICK_MS
+                : PRESENTATION_TICK_MS - remainder;
+        root.postDelayed(presentationClock, delay);
     }
 
     /** Stops polling and invalidates callbacks as soon as the Activity is paused. */
@@ -1036,10 +1371,10 @@ final class DashboardChrome {
             return;
         }
         foreground = false;
+        updateGraphInteraction();
         forecastRepository.onBackground();
         root.removeCallbacks(refreshClock);
-        backendStatusGeneration++;
-        backendCheckInFlight = false;
+        root.removeCallbacks(presentationClock);
     }
 
     void detach() {
@@ -1052,16 +1387,16 @@ final class DashboardChrome {
         intakeRepository.removeConfigurationListener(
                 backendConfigurationListener);
         try {
-            Natives.setTimelineEvents(new int[0],new long[0],
+            Natives.setGraphEvents(new int[0],new long[0],
                     new float[0],new float[0],new int[0]);
         } catch (UnsatisfiedLinkError ignored) {
         }
         ForecastRepository.clearNativeForecast();
         attached = false;
         foreground = false;
-        backendStatusGeneration++;
-        backendCheckInFlight = false;
+        disposeModernChart();
         root.removeCallbacks(refreshClock);
+        root.removeCallbacks(presentationClock);
 
         ViewTreeObserver observer = root.getViewTreeObserver();
         if (observer.isAlive()) {
@@ -1078,6 +1413,94 @@ final class DashboardChrome {
         clearActionListeners();
         obscured = false;
         systemInsets = Insets.NONE;
+    }
+
+    private void refreshModernChartData() {
+        if (!modernRendererActive || modernChartView == null) {
+            return;
+        }
+        try {
+            modernChartView.refreshData();
+        } catch (RuntimeException | LinkageError error) {
+            activateLegacyGraphFallback(error);
+        }
+    }
+
+    private void refreshModernChartTheme() {
+        if (!modernRendererActive || modernChartView == null) {
+            return;
+        }
+        try {
+            modernChartView.refreshTheme();
+        } catch (RuntimeException | LinkageError error) {
+            activateLegacyGraphFallback(error);
+        }
+    }
+
+    /**
+     * Keeps the GL surface laid out so its native viewport geometry remains a
+     * valid compatibility boundary, but only one renderer is interactive and
+     * exposed to accessibility at a time.
+     */
+    private void setModernRendererActive(boolean active) {
+        boolean useModern = active && modernChartView != null
+                && graphHost != null
+                && modernChartView.getParent() == graphHost;
+        modernRendererActive = useModern;
+        curve.setVisibility(View.VISIBLE);
+        curve.setEnabled(!useModern);
+        curve.setImportantForAccessibility(useModern
+                ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                : View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+        if (modernChartView != null) {
+            modernChartView.setVisibility(useModern ? View.VISIBLE : View.GONE);
+            modernChartView.setImportantForAccessibility(useModern
+                    ? View.IMPORTANT_FOR_ACCESSIBILITY_YES
+                    : View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+            if (!useModern) {
+                modernChartView.setInteractionEnabled(false);
+            }
+        }
+        updateGraphInteraction();
+    }
+
+    boolean isLegacyGraphRendererActive() {
+        return !modernRendererActive;
+    }
+
+    private void requestLegacyGraphRenderIfActive() {
+        if (isLegacyGraphRendererActive() && curve.getParent() == graphHost) {
+            curve.requestRender();
+        }
+    }
+
+    private void activateLegacyGraphFallback(Throwable error) {
+        if (!modernRendererActive && modernChartView == null) {
+            return;
+        }
+        Log.stack(LOG_ID, "Modern chart failed; using legacy graph", error);
+        setModernRendererActive(false);
+        disposeModernChart();
+        requestLegacyGraphRenderIfActive();
+        refreshGraphAccessibilityDescription();
+    }
+
+    private void disposeModernChart() {
+        if (modernChartView == null) {
+            modernRendererActive = false;
+            return;
+        }
+        modernRendererActive = false;
+        modernChartView.setInteractionEnabled(false);
+        modernChartView.dispose();
+        ViewParent parent = modernChartView.getParent();
+        if (parent instanceof ViewGroup) {
+            ((ViewGroup) parent).removeView(modernChartView);
+        }
+        modernChartView = null;
+        curve.setEnabled(true);
+        curve.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_YES);
     }
 
     private void refreshIntakeEvents(boolean force) {
@@ -1099,123 +1522,9 @@ final class DashboardChrome {
                 });
     }
 
-    /**
-     * Checks the actual configured service, including the protected read used by
-     * {@link IntakeRepository#health}. The chip therefore reports reachability,
-     * not merely whether a URL has been entered in Settings.
-     */
-    private void refreshBackendStatus() {
-        if (!attached || !foreground || backendStatus == null
-                || backendCheckInFlight) {
-            return;
-        }
-        backendCheckInFlight = true;
-        final int generation = ++backendStatusGeneration;
-        if (backendStatus.getText().length() == 0) {
-            showBackendStatus(R.string.dashboard_backend_checking,
-                    false, false);
-        }
-        intakeRepository.health(new IntakeRepository.Callback<org.json.JSONObject>() {
-            @Override
-            public void onSuccess(org.json.JSONObject value) {
-                if (generation != backendStatusGeneration) {
-                    return;
-                }
-                backendCheckInFlight = false;
-                if (!attached || backendStatus == null) {
-                    return;
-                }
-                boolean connected = "ok".equalsIgnoreCase(
-                        value.optString("status", "ok"))
-                        && "ok".equalsIgnoreCase(
-                        value.optString("database", ""));
-                showBackendStatus(connected
-                                ? R.string.dashboard_backend_connected
-                                : R.string.dashboard_backend_offline,
-                        connected, !connected);
-            }
-
-            @Override
-            public void onError(String message) {
-                if (generation != backendStatusGeneration) {
-                    return;
-                }
-                backendCheckInFlight = false;
-                if (!attached || backendStatus == null) {
-                    return;
-                }
-                showBackendStatus(R.string.dashboard_backend_offline,
-                        false, true);
-            }
-        });
-    }
-
-    private void forceRefreshBackendStatus() {
-        backendStatusGeneration++;
-        backendCheckInFlight = false;
-        if (attached && foreground && backendStatus != null) {
-            showBackendStatus(R.string.dashboard_backend_checking,
-                    false, false);
-            refreshBackendStatus();
-        }
-    }
-
     private void handleBackendConfigurationChanged() {
         lastIntakeRefreshMs = 0L;
-        forceRefreshBackendStatus();
         if (attached) refreshIntakeEvents(true);
-    }
-
-    private void showBackendStatus(int label, boolean connected,
-            boolean offline) {
-        backendStatus.setSelected(connected);
-        backendStatus.setActivated(offline);
-        backendStatus.setText(label);
-        String state = activity.getString(label);
-        String actionDescription = activity.getString(
-                R.string.dashboard_backend_open_settings, state);
-        backendAction.setContentDescription(actionDescription);
-        ViewCompat.setTooltipText(backendAction, actionDescription);
-    }
-
-    private void updateForecastAction(ForecastRepository.State state) {
-        if (forecastAction == null || state == null) return;
-        if (graphPreviewEnabled) {
-            forecastAction.setText(R.string.forecast_dashboard_preview);
-            forecastAction.setSelected(false);
-            forecastAction.setTextColor(activity.getColor(
-                    R.color.modern_secondary_text_secondary));
-            String description = activity.getString(
-                    R.string.forecast_dashboard_description,
-                    forecastAction.getText());
-            forecastAction.setContentDescription(description);
-            ViewCompat.setTooltipText(forecastAction, description);
-            return;
-        }
-        ForecastSnapshot forecast = state.forecast;
-        boolean usable = state.error.isEmpty()
-                && forecast.isGraphUsable(System.currentTimeMillis());
-        if (state.loading && state.updatedAtMs == 0L) {
-            forecastAction.setText(R.string.forecast_dashboard_loading);
-        } else if (usable) {
-            forecastAction.setText(activity.getString(
-                    R.string.forecast_dashboard_ready,
-                    forecast.horizonMinutes));
-        } else if ("learning".equalsIgnoreCase(forecast.status)
-                || "cold_start".equalsIgnoreCase(forecast.status)) {
-            forecastAction.setText(R.string.forecast_dashboard_learning);
-        } else {
-            forecastAction.setText(R.string.forecast_dashboard_unavailable);
-        }
-        forecastAction.setSelected(usable);
-        forecastAction.setTextColor(activity.getColor(usable
-                ? R.color.modern_secondary_accent
-                : R.color.modern_secondary_text_secondary));
-        String description = activity.getString(
-                R.string.forecast_dashboard_description,
-                forecastAction.getText());
-        forecastAction.setContentDescription(description);
-        ViewCompat.setTooltipText(forecastAction, description);
     }
 
     private void pushIntakeEventsToGraph(java.util.List<IntakeEvent> events) {
@@ -1235,7 +1544,7 @@ final class DashboardChrome {
                     |insulinGraphFlag(event);
         }
         try {
-            Natives.setTimelineEvents(keys,times,carbs,insulin,flags);
+            Natives.setGraphEvents(keys,times,carbs,insulin,flags);
         } catch (UnsatisfiedLinkError ignored) {
         }
     }
@@ -1255,9 +1564,10 @@ final class DashboardChrome {
 
     private void updateLayout(int width, int height) {
         if (root == null || content == null || body == null || actions == null
-                || appBar == null || heroCard == null || graphCard == null
-                || heroContent == null || readingColumn == null || heroMeta == null
-                || heroMetaSeparator == null || sensorAction == null
+                || heroCard == null || graphCard == null
+                || graphHeader == null || heroContent == null
+                || readingColumn == null || heroReading == null
+                || readingValueRow == null || heroMeta == null
                 || width <= 0 || height <= 0) {
             return;
         }
@@ -1276,32 +1586,34 @@ final class DashboardChrome {
         int widthDp = Math.round(availableWidth / density);
         int heightDp = Math.round(availableHeight / density);
         boolean railLayout = shouldUseNavigationRail(widthDp, heightDp);
-        boolean twoPaneLayout = shouldUseTwoPaneLayout(widthDp, heightDp);
+        boolean stackedHeader = usesStackedHeader(
+                activity.getResources().getConfiguration().fontScale, widthDp);
         int horizontalGutter = chartContentGutterDp(
                 widthDp, railLayout);
 
         content.setOrientation(railLayout
                 ? LinearLayout.HORIZONTAL
                 : LinearLayout.VERTICAL);
-        body.setOrientation(twoPaneLayout
-                ? LinearLayout.HORIZONTAL
-                : LinearLayout.VERTICAL);
+        body.setOrientation(LinearLayout.VERTICAL);
         heroContent.setOrientation(LinearLayout.HORIZONTAL);
-        heroMeta.setOrientation(twoPaneLayout
-                ? LinearLayout.VERTICAL
-                : LinearLayout.HORIZONTAL);
-        heroMetaSeparator.setVisibility(twoPaneLayout ? View.GONE : View.VISIBLE);
+        // Keep the value, trend and unit as one scannable expression even at
+        // larger font scales; only the secondary metadata is allowed to stack.
+        heroReading.setOrientation(LinearLayout.HORIZONTAL);
+        heroReading.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        heroMeta.setOrientation(stackedHeader
+                ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
         actions.setOrientation(railLayout
                 ? LinearLayout.VERTICAL
                 : LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.CENTER);
-        body.setPadding(dp(horizontalGutter), 0, dp(horizontalGutter),
-                dp(railLayout ? 12 : 8));
-        appBar.setPadding(dp(horizontalGutter + 4
-                        + (railLayout ? NAVIGATION_RAIL_WIDTH_DP : 0)), 0,
-                dp(horizontalGutter), 0);
+        body.setPadding(dp(horizontalGutter), dp(railLayout ? 12 : 6),
+                dp(horizontalGutter), dp(railLayout ? 12 : 0));
         if (rangeScroller != null) {
             rangeScroller.setFillViewport(true);
+            LinearLayout.LayoutParams rangeParams = new LinearLayout.LayoutParams(
+                    railLayout ? dp(400) : MATCH_PARENT, dp(48));
+            rangeParams.gravity = Gravity.END;
+            rangeScroller.setLayoutParams(rangeParams);
         }
         if (rangeTrack != null) {
             rangeTrack.setGravity(Gravity.CENTER);
@@ -1313,83 +1625,124 @@ final class DashboardChrome {
             content.addView(actions, desiredActionsIndex);
         }
 
-        LinearLayout.LayoutParams appBarParams =
-                (LinearLayout.LayoutParams) appBar.getLayoutParams();
-        appBarParams.height = dp(railLayout ? 52 : 56);
-        appBar.setLayoutParams(appBarParams);
-
         LinearLayout.LayoutParams bodyParams = railLayout
                 ? new LinearLayout.LayoutParams(0, MATCH_PARENT, 1.0f)
                 : new LinearLayout.LayoutParams(MATCH_PARENT, 0, 1.0f);
         LinearLayout.LayoutParams actionsParams = railLayout
                 ? new LinearLayout.LayoutParams(dp(NAVIGATION_RAIL_WIDTH_DP),
                         MATCH_PARENT)
-                : new LinearLayout.LayoutParams(MATCH_PARENT, dp(64));
+                : new LinearLayout.LayoutParams(MATCH_PARENT,
+                        dp(NAVIGATION_BAR_HEIGHT_DP));
+        if (railLayout) {
+            actionsParams.setMargins(0, 0, 0, 0);
+        } else {
+            actionsParams.setMargins(0, 0, 0, 0);
+        }
         body.setLayoutParams(bodyParams);
         actions.setLayoutParams(actionsParams);
         actions.setBackgroundResource(railLayout
-                ? R.drawable.modern_dashboard_nav_rail_background
-                : R.drawable.modern_dashboard_nav_background);
-        actions.setPadding(dp(4), railLayout ? dp(6) : 0,
-                dp(4), railLayout ? dp(6) : 0);
+                ? R.drawable.lifeprompt_dashboard_nav_rail_background
+                : R.drawable.lifeprompt_dashboard_nav_background);
+        // Let the selected destination indicator share the dock hairline instead
+        // of rendering as a second parallel rule four dp below it.
+        actions.setPadding(0, 0, 0, 0);
 
         for (int navigationId : NAVIGATION_IDS) {
-            View navigation = root.findViewById(navigationId);
+            Button navigation = root.findViewById(navigationId);
             if (navigation == null) {
                 continue;
             }
             LinearLayout.LayoutParams navigationParams = railLayout
                     ? new LinearLayout.LayoutParams(MATCH_PARENT,
                             dp(NAVIGATION_RAIL_ITEM_HEIGHT_DP))
-                    : new LinearLayout.LayoutParams(0, MATCH_PARENT, 1.0f);
+                    : new LinearLayout.LayoutParams(0, MATCH_PARENT,
+                            compactNavigationWeight(navigationId));
+            if (navigationId == R.id.modern_dashboard_add_intake) {
+                int horizontalMargin = dp(railLayout ? 6 : 8);
+                int verticalMargin = dp(railLayout ? 8 : 6);
+                navigationParams.setMargins(horizontalMargin, verticalMargin,
+                        horizontalMargin, verticalMargin);
+            }
             navigation.setLayoutParams(navigationParams);
+            int icon = navigationIcon(navigationId);
+            navigation.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                    railLayout ? 0 : icon,
+                    railLayout ? icon : 0,
+                    0,
+                    0);
+            navigation.setCompoundDrawablePadding(dp(railLayout ? 2 : 6));
         }
 
-        int twoPaneHeroWidth = summaryPaneWidthDp(widthDp, horizontalGutter,
-                railLayout);
-        LinearLayout.LayoutParams heroParams = twoPaneLayout
-                ? new LinearLayout.LayoutParams(dp(twoPaneHeroWidth), WRAP_CONTENT)
-                : new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
-        LinearLayout.LayoutParams graphParams = twoPaneLayout
-                ? new LinearLayout.LayoutParams(0, MATCH_PARENT, 1.0f)
-                : new LinearLayout.LayoutParams(MATCH_PARENT, 0, 1.0f);
+        LinearLayout.LayoutParams heroParams =
+                new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
+        LinearLayout.LayoutParams graphParams =
+                new LinearLayout.LayoutParams(MATCH_PARENT, 0, 1.0f);
         LinearLayout.LayoutParams heroContentParams =
                 new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
 
         LinearLayout.LayoutParams readingParams =
-                new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT);
-        LinearLayout.LayoutParams sensorParams =
-                new LinearLayout.LayoutParams(WRAP_CONTENT, dp(48));
-        LinearLayout.LayoutParams freshnessParams = twoPaneLayout
+                new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1.0f);
+        LinearLayout.LayoutParams freshnessParams = stackedHeader
                 ? new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
                 : new LinearLayout.LayoutParams(0, WRAP_CONTENT, 1.0f);
-        freshnessParams.topMargin = twoPaneLayout ? dp(5) : 0;
+        freshnessParams.setMarginStart(stackedHeader ? 0 : dp(12));
+        freshnessParams.topMargin = stackedHeader ? dp(3) : 0;
 
-        if (twoPaneLayout) {
-            heroParams.setMarginEnd(cardSpacing);
-            heroParams.gravity = Gravity.CENTER_VERTICAL;
-        } else {
-            heroParams.bottomMargin = cardSpacing;
-        }
         heroCard.setLayoutParams(heroParams);
         graphCard.setLayoutParams(graphParams);
         heroContent.setLayoutParams(heroContentParams);
         readingColumn.setLayoutParams(readingParams);
         heroFreshness.setLayoutParams(freshnessParams);
-        sensorAction.setLayoutParams(sensorParams);
-        int expandedChipWidth = railLayout ? 176 : 128;
-        targetRange.setMaxWidth(dp(expandedChipWidth));
-        targetRange.setVisibility(railLayout ? View.VISIBLE : View.GONE);
-        forecastAction.setMaxWidth(dp(railLayout ? 120 : 88));
-        int heroHorizontalPadding = twoPaneLayout ? 18 : 16;
-        int heroVerticalPadding = twoPaneLayout ? 18 : 12;
+        heroFreshness.setGravity(stackedHeader ? Gravity.START : Gravity.END);
+        heroFreshness.setMaxLines(stackedHeader ? 3 : 2);
+        readingValueRow.setLayoutParams(new LinearLayout.LayoutParams(
+                WRAP_CONTENT, WRAP_CONTENT));
+        LinearLayout.LayoutParams unitParams = new LinearLayout.LayoutParams(
+                WRAP_CONTENT, WRAP_CONTENT);
+        unitParams.gravity = Gravity.BOTTOM;
+        unitParams.setMarginStart(dp(7));
+        unitParams.bottomMargin = dp(stackedHeader ? 6 : 8);
+        heroUnit.setLayoutParams(unitParams);
+        heroValue.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
+                stackedHeader ? 46 : 54);
+        heroTrend.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
+                stackedHeader ? 27 : 30);
+        targetRange.setMaxWidth(Integer.MAX_VALUE);
+        targetRange.setMaxLines(stackedHeader ? 2 : 1);
+        targetRange.setEllipsize(stackedHeader
+                ? null : android.text.TextUtils.TruncateAt.END);
+        targetRange.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
+                stackedHeader ? 13 : 12);
+        targetRange.setVisibility(View.VISIBLE);
+        ViewGroup.LayoutParams graphHeaderParams = graphHeader.getLayoutParams();
+        graphHeaderParams.height = stackedHeader ? WRAP_CONTENT : dp(32);
+        graphHeader.setLayoutParams(graphHeaderParams);
+        graphHeader.setMinimumHeight(dp(32));
+        int heroHorizontalPadding = railLayout ? 20 : 16;
+        int heroVerticalPadding = railLayout ? 12 : 10;
         heroCard.setPadding(dp(heroHorizontalPadding),
                 dp(heroVerticalPadding), dp(heroHorizontalPadding),
-                dp(twoPaneLayout ? 18 : 13));
+                dp(heroVerticalPadding));
     }
 
     static boolean shouldUseNavigationRail(int widthDp, int heightDp) {
         return widthDp >= 600 && heightDp >= 360;
+    }
+
+    static float compactNavigationWeight(int navigationId) {
+        return navigationId == R.id.modern_dashboard_add_intake
+                ? COMPACT_ADD_WEIGHT : COMPACT_MORE_WEIGHT;
+    }
+
+    private static int navigationIcon(int navigationId) {
+        if (navigationId == R.id.modern_dashboard_add_intake) {
+            return R.drawable.modern_dashboard_intake;
+        }
+        return R.drawable.modern_dashboard_menu;
+    }
+
+    static boolean usesStackedHeader(float fontScale, int widthDp) {
+        return fontScale >= 1.3f && widthDp < 600;
     }
 
     static boolean isPrimaryNavigationAction(int viewId) {
@@ -1401,32 +1754,17 @@ final class DashboardChrome {
         return false;
     }
 
-    static boolean shouldUseTwoPaneLayout(int widthDp, int heightDp) {
-        return shouldUseNavigationRail(widthDp, heightDp)
-                && widthDp >= 700
-                && widthDp > heightDp;
-    }
-
     /**
-     * Medical timelines benefit from more horizontal context than text pages.
-     * Keep the plot comfortably inset while allowing up to 1240dp of data.
+     * Medical time-series charts benefit from more horizontal context than text pages.
+     * Keep the plot comfortably inset while allowing up to 1320dp of data.
      */
     static int chartContentGutterDp(int widthDp, boolean railLayout) {
         int usableWidth = Math.max(0, widthDp
                 - (railLayout ? NAVIGATION_RAIL_WIDTH_DP : 0));
-        int baseGutter = usableWidth >= 840 ? 20 : 12;
+        int baseGutter = usableWidth >= 840 ? 24 : 16;
         int excess = Math.max(0,
                 usableWidth - (MAX_BODY_CONTENT_WIDTH_DP + baseGutter * 2));
         return baseGutter + excess / 2;
-    }
-
-    static int summaryPaneWidthDp(int widthDp, int horizontalGutter,
-            boolean railLayout) {
-        int usableWidth = Math.max(0, widthDp
-                - (railLayout ? NAVIGATION_RAIL_WIDTH_DP : 0)
-                - horizontalGutter * 2);
-        return Math.max(232, Math.min(320,
-                Math.round(usableWidth * 0.28f)));
     }
 
     private int dp(int value) {
@@ -1442,27 +1780,22 @@ final class DashboardChrome {
 
     private void showNow() {
         Natives.settonow();
-        activity.requestRender();
+        refreshData();
+        requestLegacyGraphRenderIfActive();
+        if (nowAction != null) {
+            nowAction.setVisibility(View.GONE);
+        }
         if (root != null) {
             root.announceForAccessibility(
                     activity.getString(R.string.now));
         }
     }
 
-    private void showRecords() {
-        Natives.makenumbers();
-        curve.getnumcontrol(activity);
-        activity.requestRender();
-    }
-
-    private void showStatistics() {
-        if (Natives.makepercentages()) {
-            activity.requestRender();
-            Stats.mkstats(activity);
-        } else {
-            setSelectedDestination(R.id.modern_dashboard_overview);
-            Toast.makeText(activity, R.string.dashboard_no_insights_yet,
-                    Toast.LENGTH_SHORT).show();
+    void showReturnToNow() {
+        if (nowAction != null && selectedDestination
+                == DESTINATION_HOME) {
+            nowAction.setVisibility(View.VISIBLE);
         }
     }
+
 }

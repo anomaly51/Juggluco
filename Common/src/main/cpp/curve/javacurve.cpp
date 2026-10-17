@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <utility>
 #include <vector>
 #include <string_view>
@@ -17,6 +18,7 @@
 //#include "nanovg_gl_utils.h"
 //#define OLDEVERSENSE
 #include "JCurve.hpp"
+#include "calibrate/Calibrate.hpp"
 #include "forecastgraph.hpp"
 #include "intakeevents.hpp"
 
@@ -74,11 +76,11 @@ extern "C" JNIEXPORT jint JNICALL fromjava(getgraphhours)(JNIEnv* env, jclass ob
  return appcurve.getgraphhours();
  }
 
-extern "C" JNIEXPORT void JNICALL fromjava(setTimelineEvents)(JNIEnv* env,
+extern "C" JNIEXPORT void JNICALL fromjava(setGraphEvents)(JNIEnv* env,
         jclass obj,jintArray keys,jlongArray timesMs,jfloatArray carbs,
         jfloatArray insulin,jintArray flags) {
  if(!keys||!timesMs||!carbs||!insulin||!flags) {
-     replaceIntakeTimelineEvents({});
+     replaceIntakeGraphEvents({});
      return;
      }
  const jsize count=std::min({env->GetArrayLength(keys),
@@ -99,7 +101,7 @@ extern "C" JNIEXPORT void JNICALL fromjava(setTimelineEvents)(JNIEnv* env,
      env->GetFloatArrayRegion(insulin,0,count,insulinValues.data());
      env->GetIntArrayRegion(flags,0,count,flagValues.data());
      }
- std::vector<IntakeTimelineEvent> events;
+ std::vector<IntakeGraphEvent> events;
  events.reserve(count);
  for(jsize index=0;index<count;index++) {
      const jlong millis=timeValues[index];
@@ -114,7 +116,7 @@ extern "C" JNIEXPORT void JNICALL fromjava(setTimelineEvents)(JNIEnv* env,
                        static_cast<float>(insulinValues[index]),
                        static_cast<uint32_t>(flagValues[index])});
      }
- replaceIntakeTimelineEvents(std::move(events));
+ replaceIntakeGraphEvents(std::move(events));
  }
 
 extern "C" JNIEXPORT void JNICALL fromjava(setForecast)(JNIEnv* env,
@@ -579,14 +581,401 @@ extern "C" JNIEXPORT jlongArray JNICALL fromjava(forecastReadings)(JNIEnv* env,
  return result;
  }
 
-extern "C" JNIEXPORT jint JNICALL fromjava(timelineEventAt)(JNIEnv* env,
+namespace {
+constexpr std::int32_t dashboardHistorySource=1;
+constexpr std::int32_t dashboardStreamSource=2;
+constexpr std::int32_t dashboardScanSource=3;
+constexpr std::int32_t dashboardCalibratedSource=0x100;
+constexpr int dashboardMaximumReadings=20'000;
+
+struct DashboardChartReading {
+    std::uint32_t time;
+    float displayMgDl;
+    std::int32_t sourceKind;
+    float rateMgDlPerMinute;
+    std::int32_t sensorSeriesId;
+    };
+
+static std::uint64_t dashboardMillis(const std::uint32_t seconds) {
+    return static_cast<std::uint64_t>(seconds)*1000ULL;
+    }
+
+static float dashboardRate(const float value) {
+    return std::isfinite(value)?value:std::numeric_limits<float>::quiet_NaN();
+    }
+
+static std::vector<const ScanData*> dashboardScanWindow(
+        const std::span<const ScanData> source,const std::uint64_t startMs,
+        const std::uint64_t endMs,const std::uint32_t latestActual) {
+    std::vector<const ScanData*> result;
+    const ScanData *before=nullptr;
+    bool enteredWindow=false;
+    for(const ScanData &point:source) {
+        if(!point.t||point.t>latestActual||!point.valid(0))
+            continue;
+        const std::uint64_t pointMs=dashboardMillis(point.t);
+        if(pointMs<startMs) {
+            before=&point;
+            continue;
+            }
+        if(!enteredWindow) {
+            if(before)
+                result.push_back(before);
+            enteredWindow=true;
+            }
+        result.push_back(&point);
+        if(pointMs>endMs)
+            break;
+        }
+    if(!enteredWindow&&before)
+        result.push_back(before);
+    return result;
+    }
+
+static std::vector<const Glucose*> dashboardHistoryWindow(
+        const SensorGlucoseData *sensor,const std::uint64_t startMs,
+        const std::uint64_t endMs,const std::uint32_t latestActual) {
+    std::vector<const Glucose*> result;
+    // Dexcom's history slot is the vendor prediction written by
+    // saveDexFuture(), not an actual CGM measurement. Only sensors with real
+    // history may contribute to this actual-data bridge.
+    if(!sensor||!sensor->hasRealHistory())
+        return result;
+    const int first=std::max(sensor->getstarthistory(),0);
+    const int end=std::max(sensor->getAllendhistory(),0);
+    if(end<=first)
+        return result;
+    const Glucose *before=nullptr;
+    bool enteredWindow=false;
+    for(int position=first;position<end;++position) {
+        const Glucose *point=sensor->getglucose(position);
+        if(!point||!point->valid()||point->gettime()>latestActual)
+            continue;
+        const std::uint64_t pointMs=dashboardMillis(point->gettime());
+        if(pointMs<startMs) {
+            before=point;
+            continue;
+            }
+        if(!enteredWindow) {
+            if(before)
+                result.push_back(before);
+            enteredWindow=true;
+            }
+        result.push_back(point);
+        if(pointMs>endMs)
+            break;
+        }
+    if(!enteredWindow&&before)
+        result.push_back(before);
+    return result;
+    }
+
+static void appendDashboardRawScans(std::vector<DashboardChartReading> &output,
+        const std::vector<const ScanData*> &points,const std::int32_t sourceKind,
+        const std::int32_t sensorSeriesId) {
+    for(const ScanData *point:points) {
+        output.push_back({point->gettime(),static_cast<float>(point->getmgdL()),
+                          sourceKind,dashboardRate(point->getchange()),
+                          sensorSeriesId});
+        }
+    }
+
+static void appendDashboardCalibratedScans(
+        std::vector<DashboardChartReading> &output,
+        const SensorGlucoseData *sensor,
+        const std::vector<const ScanData*> &points,
+        const std::int32_t sourceKind,const bool calibratePast,
+        const bool allValues,const std::int32_t sensorSeriesId) {
+    if(points.empty())
+        return;
+    CalibrateBackward<ScanData> calibrator(sensor,calibratePast);
+    if(calibrator.size()<=0) {
+        if(allValues)
+            appendDashboardRawScans(output,points,
+                    sourceKind|dashboardCalibratedSource,sensorSeriesId);
+        return;
+        }
+    std::vector<DashboardChartReading> layer;
+    layer.reserve(points.size());
+    bool rawForEarlier=false;
+    for(auto iterator=points.rbegin();iterator!=points.rend();++iterator) {
+        const ScanData *point=*iterator;
+        double calibrated=point->getmgdL();
+        if(!rawForEarlier)
+            calibrated=calibrator.backvalue(point->gettime(),point->getmgdL());
+        if(!std::isfinite(calibrated)) {
+            if(!allValues)
+                break;
+            rawForEarlier=true;
+            calibrated=point->getmgdL();
+            }
+        // makecalibrated() writes the result back to ScanData::g, an integer
+        // mg/dL field. Preserve that exact presentation precision here.
+        if(calibrated<=0.0||calibrated>=552.0||
+           calibrated>static_cast<double>(std::numeric_limits<std::int32_t>::max()))
+            continue;
+        const auto display=static_cast<std::int32_t>(calibrated);
+        if(display<=0||display>=552)
+            continue;
+        layer.push_back({point->gettime(),static_cast<float>(display),
+                         sourceKind|dashboardCalibratedSource,
+                         dashboardRate(point->getchange()),sensorSeriesId});
+        }
+    std::reverse(layer.begin(),layer.end());
+    output.insert(output.end(),layer.begin(),layer.end());
+    }
+
+static void appendDashboardRawHistory(
+        std::vector<DashboardChartReading> &output,
+        const std::vector<const Glucose*> &points,
+        const std::int32_t sourceKind,const std::int32_t sensorSeriesId) {
+    const float noRate=std::numeric_limits<float>::quiet_NaN();
+    for(const Glucose *point:points) {
+        output.push_back({point->gettime(),point->getsputnik()/10.0f,
+                          sourceKind,noRate,sensorSeriesId});
+        }
+    }
+
+static void appendDashboardCalibratedHistory(
+        std::vector<DashboardChartReading> &output,
+        const SensorGlucoseData *sensor,
+        const std::vector<const Glucose*> &points,
+        const bool calibratePast,const bool allValues,
+        const std::int32_t sensorSeriesId) {
+    if(points.empty())
+        return;
+    CalibrateBackward<Glucose> calibrator(sensor,calibratePast);
+    if(calibrator.size()<=0) {
+        if(allValues)
+            appendDashboardRawHistory(output,points,
+                    dashboardHistorySource|dashboardCalibratedSource,
+                    sensorSeriesId);
+        return;
+        }
+    const float noRate=std::numeric_limits<float>::quiet_NaN();
+    std::vector<DashboardChartReading> layer;
+    layer.reserve(points.size());
+    bool rawForEarlier=false;
+    for(auto iterator=points.rbegin();iterator!=points.rend();++iterator) {
+        const Glucose *point=*iterator;
+        // calihistcurve() calibrates integer mg/dL and rounds its display value
+        // back to tenths of mg/dL.
+        double calibrated=point->getmgdL();
+        if(!rawForEarlier)
+            calibrated=calibrator.backvalue(point->gettime(),point->getmgdL());
+        if(!std::isfinite(calibrated)) {
+            if(!allValues)
+                break;
+            rawForEarlier=true;
+            calibrated=point->getmgdL();
+            }
+        if(calibrated<=0.0||
+           calibrated>static_cast<double>(std::numeric_limits<std::uint32_t>::max())/10.0)
+            continue;
+        const float display=static_cast<float>(std::round(calibrated*10.0)/10.0);
+        if(!std::isfinite(display))
+            continue;
+        layer.push_back({point->gettime(),display,
+                         dashboardHistorySource|dashboardCalibratedSource,
+                         noRate,sensorSeriesId});
+        }
+    std::reverse(layer.begin(),layer.end());
+    output.insert(output.end(),layer.begin(),layer.end());
+    }
+
+static std::vector<DashboardChartReading> dashboardBoundedWindow(
+        const std::vector<DashboardChartReading> &source,
+        const std::uint64_t startMs,const std::uint64_t endMs,
+        const std::size_t limit) {
+    std::vector<DashboardChartReading> result;
+    if(source.empty()||limit==0)
+        return result;
+    const auto firstIn=std::lower_bound(source.begin(),source.end(),startMs,
+            [](const DashboardChartReading &point,const std::uint64_t value) {
+                return dashboardMillis(point.time)<value;
+            });
+    const auto afterIn=std::upper_bound(firstIn,source.end(),endMs,
+            [](const std::uint64_t value,const DashboardChartReading &point) {
+                return value<dashboardMillis(point.time);
+            });
+    const bool hasBefore=firstIn!=source.begin();
+    const bool hasAfter=afterIn!=source.end();
+    const std::size_t inCount=static_cast<std::size_t>(afterIn-firstIn);
+    const std::size_t total=inCount+(hasBefore?1U:0U)+(hasAfter?1U:0U);
+    if(total<=limit) {
+        const auto begin=hasBefore?firstIn-1:firstIn;
+        const auto end=hasAfter?afterIn+1:afterIn;
+        result.assign(begin,end);
+        return result;
+        }
+
+    // A meaningful viewport point wins when a caller supplies an impossibly
+    // small limit. With normal limits, reserve room for both context points.
+    if(inCount==0) {
+        if(hasBefore)
+            result.push_back(*(firstIn-1));
+        if(hasAfter&&result.size()<limit)
+            result.push_back(*afterIn);
+        return result;
+        }
+    std::size_t neighborSlots=std::min<std::size_t>(
+            (hasBefore?1U:0U)+(hasAfter?1U:0U),limit-1U);
+    const bool keepBefore=hasBefore&&neighborSlots>0;
+    if(keepBefore)
+        --neighborSlots;
+    const bool keepAfter=hasAfter&&neighborSlots>0;
+    const std::size_t inSlots=limit-(keepBefore?1U:0U)-(keepAfter?1U:0U);
+    result.reserve(limit);
+    if(keepBefore)
+        result.push_back(*(firstIn-1));
+    if(inCount<=inSlots) {
+        result.insert(result.end(),firstIn,afterIn);
+        }
+    else if(inSlots==1U) {
+        result.push_back(*(firstIn+static_cast<std::ptrdiff_t>((inCount-1U)/2U)));
+        }
+    else {
+        for(std::size_t slot=0;slot<inSlots;++slot) {
+            const long double fraction=static_cast<long double>(slot)/
+                    static_cast<long double>(inSlots-1U);
+            const std::size_t offset=static_cast<std::size_t>(
+                    std::llround(fraction*static_cast<long double>(inCount-1U)));
+            result.push_back(*(firstIn+static_cast<std::ptrdiff_t>(offset)));
+            }
+        }
+    if(keepAfter)
+        result.push_back(*afterIn);
+    return result;
+    }
+}
+
+extern "C" JNIEXPORT jlongArray JNICALL fromjava(dashboardChartReadings)(
+        JNIEnv* env,jclass obj,jlong requestedStartMs,jlong requestedEndMs,
+        jint requestedLimit) {
+    const int limit=std::clamp<int>(requestedLimit,0,dashboardMaximumReadings);
+    const auto empty=[env]() { return env->NewLongArray(0); };
+    if(limit==0||!sensors||!settings||requestedStartMs<0||
+       requestedEndMs<requestedStartMs)
+        return empty();
+    const std::time_t now=std::time(nullptr);
+    if(now<=0)
+        return empty();
+    const std::uint64_t latest64=std::min<std::uint64_t>(
+            static_cast<std::uint64_t>(now)+60ULL,
+            std::numeric_limits<std::uint32_t>::max());
+    const auto latestActual=static_cast<std::uint32_t>(latest64);
+    const std::uint64_t startMs=static_cast<std::uint64_t>(requestedStartMs);
+    const std::uint64_t endMs=static_cast<std::uint64_t>(requestedEndMs);
+
+    struct SensorWindow {
+        const SensorGlucoseData *sensor;
+        std::int32_t sensorSeriesId;
+        std::vector<const Glucose*> history;
+        std::vector<const ScanData*> stream;
+        std::vector<const ScanData*> scans;
+        };
+    std::vector<SensorWindow> windows;
+    const std::uint32_t sensorPeriodEnd=latestActual==
+            std::numeric_limits<std::uint32_t>::max()?latestActual:
+            latestActual+1U;
+    const std::vector<int> visibleSensors=
+            sensors->shownSensorsInPeriod(1U,sensorPeriodEnd);
+    windows.reserve(visibleSensors.size());
+    // displaycurve() traverses the newest-to-oldest sensor list in reverse, so
+    // later/newer sensors win equal timestamps within the same presentation layer.
+    for(auto index=visibleSensors.rbegin();index!=visibleSensors.rend();++index) {
+        const SensorGlucoseData *sensor=sensors->getSensorData(*index);
+        if(!sensor)
+            continue;
+        windows.push_back({sensor,static_cast<std::int32_t>(sensor->sensorIndex),
+                dashboardHistoryWindow(sensor,startMs,endMs,latestActual),
+                dashboardScanWindow(sensor->getPolldata(),startMs,endMs,
+                                    latestActual),
+                dashboardScanWindow(sensor->getScandata(),startMs,endMs,
+                                    latestActual)});
+        }
+
+    const auto *display=settings->data();
+    const bool calibratePast=display->CalibratePast;
+    const bool allValues=display->AllValues;
+    std::vector<DashboardChartReading> readings;
+    readings.reserve(std::min<std::size_t>(
+            static_cast<std::size_t>(limit)*6U,120'000U));
+    // Preserve the established native render order. stable_sort plus replace on
+    // equal timestamp below makes the last enabled layer the presentation winner.
+    if(display->showhistories)
+        for(const SensorWindow &window:windows)
+            appendDashboardRawHistory(readings,window.history,
+                                      dashboardHistorySource,
+                                      window.sensorSeriesId);
+    if(display->showcalibratedhistories)
+        for(const SensorWindow &window:windows)
+            appendDashboardCalibratedHistory(readings,window.sensor,
+                    window.history,calibratePast,allValues,
+                    window.sensorSeriesId);
+    if(display->showcalibratedstream)
+        for(const SensorWindow &window:windows)
+            appendDashboardCalibratedScans(readings,window.sensor,window.stream,
+                    dashboardStreamSource,calibratePast,allValues,
+                    window.sensorSeriesId);
+    if(display->showstream)
+        for(const SensorWindow &window:windows)
+            appendDashboardRawScans(readings,window.stream,
+                                    dashboardStreamSource,
+                                    window.sensorSeriesId);
+    if(display->showcalibratedscans)
+        for(const SensorWindow &window:windows)
+            appendDashboardCalibratedScans(readings,window.sensor,window.scans,
+                    dashboardScanSource,calibratePast,allValues,
+                    window.sensorSeriesId);
+    if(display->showscans)
+        for(const SensorWindow &window:windows)
+            appendDashboardRawScans(readings,window.scans,dashboardScanSource,
+                                    window.sensorSeriesId);
+
+    std::stable_sort(readings.begin(),readings.end(),
+            [](const DashboardChartReading &left,
+               const DashboardChartReading &right) {
+                return left.time<right.time;
+            });
+    std::vector<DashboardChartReading> unique;
+    unique.reserve(readings.size());
+    for(const DashboardChartReading &reading:readings) {
+        if(!unique.empty()&&unique.back().time==reading.time)
+            unique.back()=reading;
+        else
+            unique.push_back(reading);
+        }
+    const std::vector<DashboardChartReading> selected=dashboardBoundedWindow(
+            unique,startMs,endMs,static_cast<std::size_t>(limit));
+    std::vector<jlong> flat;
+    flat.reserve(selected.size()*5U);
+    for(const DashboardChartReading &reading:selected) {
+        std::uint32_t glucoseBits=0U,rateBits=0U;
+        static_assert(sizeof(glucoseBits)==sizeof(reading.displayMgDl));
+        static_assert(sizeof(rateBits)==sizeof(reading.rateMgDlPerMinute));
+        std::memcpy(&glucoseBits,&reading.displayMgDl,sizeof(glucoseBits));
+        std::memcpy(&rateBits,&reading.rateMgDlPerMinute,sizeof(rateBits));
+        flat.push_back(static_cast<jlong>(reading.time)*1000LL);
+        flat.push_back(static_cast<jlong>(static_cast<std::uint64_t>(glucoseBits)));
+        flat.push_back(static_cast<jlong>(reading.sourceKind));
+        flat.push_back(static_cast<jlong>(static_cast<std::uint64_t>(rateBits)));
+        flat.push_back(static_cast<jlong>(reading.sensorSeriesId));
+        }
+    jlongArray result=env->NewLongArray(static_cast<jsize>(flat.size()));
+    if(result&&!flat.empty())
+        env->SetLongArrayRegion(result,0,static_cast<jsize>(flat.size()),flat.data());
+    return result;
+    }
+
+extern "C" JNIEXPORT jint JNICALL fromjava(graphEventAt)(JNIEnv* env,
         jclass obj,jfloat x,jfloat y) {
- return intakeTimelineEventAt(x,y);
+ return intakeGraphEventAt(x,y);
  }
 
-extern "C" JNIEXPORT jintArray JNICALL fromjava(timelineEventsAt)(JNIEnv* env,
+extern "C" JNIEXPORT jintArray JNICALL fromjava(graphEventsAt)(JNIEnv* env,
         jclass obj,jfloat x,jfloat y) {
- const std::vector<std::int32_t> keys=intakeTimelineEventsAt(x,y);
+ const std::vector<std::int32_t> keys=intakeGraphEventsAt(x,y);
  jintArray result=env->NewIntArray(static_cast<jsize>(keys.size()));
  if(result&&!keys.empty()) {
      static_assert(sizeof(jint)==sizeof(std::int32_t));
@@ -640,8 +1029,6 @@ extern "C" JNIEXPORT void  JNICALL   fromjava(setpaused)(JNIEnv *env, jclass cl,
  }
 #ifndef NOJAVA
 JavaVM *vmptr;
-static jmethodID summaryready=nullptr;
-
 static jmethodID showsensorinfo=nullptr;
 jmethodID jdoglucose=nullptr, jupdateDevices=nullptr, jbluetoothEnabled=nullptr,jspeak=nullptr, jresetWearOS=nullptr, jbluePermission=nullptr;
 //jmethodID jchangedProfile;
@@ -707,12 +1094,10 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
 {
 const jclass cl=env->FindClass("tk/glucodata/GlucoseCurve");
 if(!cl) {
- summaryready=nullptr;
  LOGAR("Can't find GlucoseCurve");
  }
 else {
  LOGAR("found GlucoseCurve");
- summaryready=env->GetMethodID(cl,"summaryready","()V");
  showsensorinfo=env->GetMethodID(cl,"showsensorinfo","(Ljava/lang/String;J)V");
  env->DeleteLocalRef(cl);
  }
@@ -893,18 +1278,6 @@ void changedProfile() {
  }
  getenv()->CallStaticVoidMethod(JNIApplic,jchangedProfile);
  } */
-void visiblebutton() {
-     if(glucosecurve) {
-         if(summaryready)  {
-             JNIEnv *env =getenv(); 
-             LOGAR("call summaryready");
-             env->CallVoidMethod(glucosecurve,summaryready);
-            }
-         else
-           LOGAR("didn't find GlucoseCurve");
-     }
- }
-
 void callshowsensorinfo(const char *text, SensorGlucoseData *sensorptr) {
  if(glucosecurve) {
  if(showsensorinfo)  {
@@ -1035,6 +1408,10 @@ extern "C" JNIEXPORT void JNICALL fromjava(flingX) (JNIEnv *env, jclass clazz,jf
 extern "C" JNIEXPORT jint JNICALL fromjava(translate) (JNIEnv *env, jclass clazz,jfloat dx,jfloat dy,jfloat yold,jfloat y) {
  return appcurve.translate(dx,dy,yold,y);
  }
+extern "C" JNIEXPORT jint JNICALL fromjava(translateGraphFraction) (
+        JNIEnv *env,jclass clazz,jfloat deltaFraction) {
+ return appcurve.translateGraphFraction(deltaFraction);
+ }
 extern "C" JNIEXPORT void JNICALL fromjava(lockGraphYRangeForPan) (JNIEnv *env, jclass clazz) {
  appcurve.lockGraphYRangeForPan();
  }
@@ -1045,6 +1422,10 @@ extern "C" JNIEXPORT jint JNICALL fromjava(mouseScale)(JNIEnv *env, jclass clazz
 void xscaleGesture(float scalex,float midx);
 extern "C" JNIEXPORT void JNICALL fromjava(xscale) (JNIEnv *env, jclass clazz,jfloat scalex,jfloat midx) {
  appcurve.xscaleGesture(scalex,midx);
+ }
+extern "C" JNIEXPORT void JNICALL fromjava(xscaleGraphFraction) (
+        JNIEnv *env,jclass clazz,jfloat scale,jfloat focusFraction) {
+ appcurve.xscaleGraphFraction(scale,focusFraction);
  }
 
 void prevscr() ;
@@ -1143,6 +1524,13 @@ extern "C" JNIEXPORT jlong JNICALL fromjava(getstarttime) (JNIEnv *env, jclass c
  return static_cast<jlong>(appcurve.starttime)*1000l;
  };
 
+extern "C" JNIEXPORT jlong JNICALL fromjava(getgraphviewendtime) (JNIEnv *env, jclass clazz) {
+ const uint64_t end=static_cast<uint64_t>(appcurve.starttime)+
+                    static_cast<uint64_t>(std::max(appcurve.duration,0));
+ return static_cast<jlong>(std::min<uint64_t>(
+         end,static_cast<uint64_t>(INT64_MAX)/1000ULL))*1000LL;
+ };
+
 extern "C" JNIEXPORT jlong JNICALL fromjava(getendtime) (JNIEnv *env, jclass clazz) {
  auto end=   std::min(appcurve.starttime+appcurve.duration,(uint32_t)time(nullptr));
  return static_cast<jlong>(end)*1000l;
@@ -1214,21 +1602,6 @@ extern "C" JNIEXPORT jlong JNICALL fromjava(lastpoll)(JNIEnv *env, jclass thiz) 
  return 0LL;
  }*/
 //#include "oldest.hpp"
-#ifndef WEAROS
-void numfirstpage() ;
-extern "C" JNIEXPORT void JNICALL fromjava(firstpage)(JNIEnv *env, jclass thiz) {
- numfirstpage();
- }
-
-uint32_t maxtime();
-extern "C" JNIEXPORT void JNICALL fromjava(lastpage)(JNIEnv *env, jclass thiz) {
- appcurve.numpagenum(maxtime());
- }
-
-extern "C" JNIEXPORT void JNICALL fromjava(endnumlist)(JNIEnv *env, jclass thiz) {
- appcurve.endnumlist();
- }
-#endif
 extern int showui;
 extern "C" JNIEXPORT jboolean JNICALL fromjava(getsystemUI)(JNIEnv *env, jclass thiz) {
  return showui;
@@ -1261,19 +1634,6 @@ extern "C" JNIEXPORT jint JNICALL fromjava(getlastcolor)(JNIEnv *env, jclass thi
  return 0xFFFFFFFF;
  return  fromNVGcolor(appcurve.getcolor(appcurve.lasttouchedcolor));
  }
-#ifndef WEAROS
-extern bool makepercetages() ;
-extern "C" JNIEXPORT jboolean JNICALL fromjava(makepercentages)(JNIEnv *env, jclass thiz) {
- return makepercetages();
- }
-extern int numlist;
-extern "C" JNIEXPORT void JNICALL fromjava(makenumbers)(JNIEnv *env, jclass thiz) {
- if(!numlist) {
- appcurve.numiterinit();
- numlist=1;
- }
- }
-#endif
 /*
 static float screenwidthcm=0;
 //extern bool iswatch;
@@ -1466,56 +1826,6 @@ extern "C" JNIEXPORT void JNICALL fromjava(systembar)(JNIEnv *env, jclass thiz,j
 
 
 #include "fromjava.h"
-extern bool fixatey;
-
-extern bool showsummarygraph;
-extern "C" JNIEXPORT void JNICALL fromjava(summarygraph) (JNIEnv *env, jclass clazz,jboolean val) {
-	 showsummarygraph=val;
-	 if(val) {
-		 fixatey=false;
-		 }
-	else {
-	 fixatey=settings->data()->fixatey;
-
-		}
-	}
-
-extern int daystoanalyse;
-extern bool showhistory;
-extern bool mkpercentiles(int days,bool history);
-extern "C" JNIEXPORT jboolean JNICALL fromjava(analysedays) (JNIEnv *env, jclass clazz,jint days,jboolean history) {
-         if(days > 0) {
-             daystoanalyse = days;
-             }
-         showhistory=history;
-         auto ret=mkpercentiles(daystoanalyse,history);
-         LOGGER("end analysedays(%d)=%d\n",days,ret);
-         return ret;
-	}
-extern "C" JNIEXPORT jint JNICALL fromjava(getAnalysedays) (JNIEnv *env, jclass clazz) {
-	return daystoanalyse;
-	}
-extern "C" JNIEXPORT jboolean JNICALL fromjava(getAnalysehistory) (JNIEnv *env, jclass clazz) {
-	return showhistory;
-	}
-
-extern bool showpers;
-extern "C" JNIEXPORT void JNICALL fromjava(endstats) (JNIEnv *env, jclass clazz) {
-	showpers=0;
-	appcurve.begrenstijd() ;
-	}
-#include "net/watchserver/Getopts.hpp"
-extern int getminutes(time_t tim);
-extern "C" JNIEXPORT jlong JNICALL fromjava(percentileEndtime) (JNIEnv *env, jclass clazz,jint days) {
- const uint32_t  endtime=appcurve.starttime+appcurve.duration;
- const uint32_t startday=endtime-getminutes(endtime)*60;
- const uint32_t endday=startday+daysecs-1;
- Getopts opts;
- opts.end=endday;
- opts.start=endday-days*daysecs;
- return endtime;
- }
-
 #endif
 extern "C" JNIEXPORT void  JNICALL   fromjava(setInvertColors)(JNIEnv *env, jclass cl,jboolean val) {
 	appcurve.setinvertcolors(val);

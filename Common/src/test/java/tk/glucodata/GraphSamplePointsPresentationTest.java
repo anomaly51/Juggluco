@@ -16,12 +16,12 @@ import org.junit.Test;
 public class GraphSamplePointsPresentationTest {
     @Test
     public void markerGeometryGetsQuieterAsTheVisibleRangeGrows() {
-        assertEquals(2.45f,sampleRadius(1.0f,3,false),0.0001f);
-        assertEquals(1.75f,sampleRadius(1.0f,24,false),0.0001f);
-        assertEquals(2.70f,sampleRadius(1.0f,3,true),0.0001f);
-        assertEquals(2.00f,sampleRadius(1.0f,24,true),0.0001f);
-        assertEquals(5.50f,minimumSpacing(1.0f,3),0.0001f);
-        assertEquals(7.00f,minimumSpacing(1.0f,24),0.0001f);
+        assertEquals(1.55f,sampleRadius(1.0f,3,false),0.0001f);
+        assertEquals(1.30f,sampleRadius(1.0f,24,false),0.0001f);
+        assertEquals(1.60f,sampleRadius(1.0f,3,true),0.0001f);
+        assertEquals(1.35f,sampleRadius(1.0f,24,true),0.0001f);
+        assertEquals(18.0f,minimumSpacing(1.0f,3),0.0001f);
+        assertEquals(26.0f,minimumSpacing(1.0f,24),0.0001f);
     }
 
     @Test
@@ -91,9 +91,9 @@ public class GraphSamplePointsPresentationTest {
     public void rangeColorsAndScanStreamSwitchesKeepTheirExistingSemantics() throws Exception {
         String palette=cpp("curve.hpp");
         String source=cpp("curve.cpp");
-        assertTrue(palette.contains("modernGraphGlucose=hexcolor(0x4ECB83)"));
-        assertTrue(palette.contains("modernGraphHigh=hexcolor(0xF2A93B)"));
-        assertTrue(palette.contains("modernGraphLow=hexcolor(0xF06B65)"));
+        assertTrue(palette.contains("modernGraphGlucose=hexcolor(0x55E39A)"));
+        assertTrue(palette.contains("modernGraphHigh=hexcolor(0xFFA63A)"));
+        assertTrue(palette.contains("modernGraphLow=hexcolor(0xFF675C)"));
         assertTrue(source.contains("if(showstream)"));
         assertTrue(source.contains("showlineScan(avg,pollranges[i].first,pollranges[i].second"));
         assertTrue(source.contains("if(showscans)"));
@@ -102,6 +102,49 @@ public class GraphSamplePointsPresentationTest {
         assertTrue(source.contains("histcurve(avg,sensors->getSensorData(index)"));
         assertTrue(source.contains("if(showcalibratedhistories)"));
         assertTrue(source.contains("calihistcurve(avg,sensors->getSensorData(index)"));
+    }
+
+    @Test
+    public void retroChromeUsesAmberWithoutReplacingClinicalSemantics()
+            throws Exception {
+        String palette=cpp("curve.hpp");
+        String header=cpp("JCurve.hpp");
+        String source=cpp("curve.cpp");
+
+        assertTrue(palette.contains("modernGraphSurface=hexcolor(0x0D0602)"));
+        assertTrue(palette.contains("modernGraphSurfaceRaised=hexcolor(0x180B03)"));
+        assertTrue(palette.contains("modernGraphText=hexcolor(0xFFD99A)"));
+        assertTrue(palette.contains("modernGraphChrome=hexcolor(0xFFA21A)"));
+        assertTrue(palette.contains("0xD9/255.0f,0x85/255.0f,0x25/255.0f,0.08f"));
+        assertTrue(palette.contains("0xD9/255.0f,0x85/255.0f,0x25/255.0f,0.30f"));
+        assertTrue(palette.contains("modernGraphNow=modernGraphChrome"));
+        assertTrue(palette.contains("modernGraphTargetFill="));
+        assertTrue(header.contains("monofont=-1"));
+        assertTrue(source.contains("static int getMonoFont"));
+        assertTrue(source.contains("fontpath \"CutiveMono.ttf\""));
+        assertTrue(source.contains("fontpath \"DroidSansMono.ttf\""));
+        assertTrue(source.contains("monofont=whitefont"));
+        assertTrue(source.contains("nvgAddFallbackFontId(avg,monofont,whitefont)"));
+    }
+
+    @Test
+    public void graphDensityKeepsTraceForecastAndAxisChromeQuiet() throws Exception {
+        String palette=cpp("curve.hpp");
+        String source=cpp("curve.cpp");
+
+        assertTrue(palette.contains("modernGraphGlucoseGlow=nvgRGBAf2(0x55/255.0f,0xE3/255.0f,0x9A/255.0f,0.075f)"));
+        assertTrue(palette.contains("modernGraphGlucoseAreaTop=nvgRGBAf2(0x55/255.0f,0xE3/255.0f,0x9A/255.0f,0.035f)"));
+        assertTrue(source.contains("return std::max(density*2.0f,1.5f)"));
+        assertTrue(source.contains("return std::max(density*3.4f,2.5f)"));
+        assertTrue(source.contains("const float alphaBase=.035f+.060f*confidence"));
+        assertTrue(source.contains("1.0f-.78f*progressLeft"));
+        assertTrue(source.contains("nvgStrokeWidth(avg,std::max(density*1.65f,1.35f))"));
+        String axes=between(source,"template <class LT> void    JCurve::glucoselines",
+                "struct displaytime");
+        assertTrue(axes.contains("const float horizontal=density*2.0f"));
+        assertTrue(axes.contains("const float vertical=density*.65f"));
+        assertTrue(axes.contains("nvgRect(avg,bounds[0]-horizontal"));
+        assertFalse(axes.contains("nvgRoundedRect(avg,bounds[0]-horizontal"));
     }
 
     @Test
@@ -140,12 +183,12 @@ public class GraphSamplePointsPresentationTest {
 
     private static float sampleRadius(float density,int hours,boolean discrete) {
         float safeDensity=Math.max(density,0.1f);
-        float radiusDp=2.45f-densityScale(hours)*0.70f+(discrete?0.25f:0f);
+        float radiusDp=1.55f-densityScale(hours)*0.25f+(discrete?0.05f:0f);
         return Math.max(1f,safeDensity*radiusDp);
     }
 
     private static float minimumSpacing(float density,int hours) {
-        return Math.max(density,0.1f)*(5.50f+densityScale(hours)*1.50f);
+        return Math.max(density,0.1f)*(18.0f+densityScale(hours)*8.0f);
     }
 
     private static boolean shouldDraw(float x,float lastX,float spacing,

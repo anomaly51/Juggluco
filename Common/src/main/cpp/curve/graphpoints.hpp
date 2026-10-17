@@ -40,14 +40,14 @@ constexpr float density_scale(const std::uint32_t durationseconds) {
 }
 
 // Samples stay legible at short ranges, then become deliberately quieter as
-// the graph approaches a dense 24-hour overview. Discrete scans are slightly
-// larger because they are normally much sparser than the stream curve.
+// the graph approaches a dense 24-hour overview. State crossings and the
+// separately emphasized current sample are never sacrificed by this sizing.
 constexpr float sample_radius(const float density,
                               const std::uint32_t durationseconds,
                               const bool discrete) {
     const float safeDensity=std::max(density,0.1f);
-    const float radiusDp=2.45f-density_scale(durationseconds)*0.70f+
-                         (discrete?0.25f:0.0f);
+    const float radiusDp=1.55f-density_scale(durationseconds)*0.25f+
+                         (discrete?0.05f:0.0f);
     return std::max(1.0f,safeDensity*radiusDp);
 }
 
@@ -56,7 +56,7 @@ constexpr float sample_radius(const float density,
 constexpr float minimum_spacing(const float density,
                                 const std::uint32_t durationseconds) {
     const float safeDensity=std::max(density,0.1f);
-    return safeDensity*(5.50f+density_scale(durationseconds)*1.50f);
+    return safeDensity*(18.0f+density_scale(durationseconds)*8.0f);
 }
 
 constexpr bool should_draw_sample(const float x,const float lastdrawx,

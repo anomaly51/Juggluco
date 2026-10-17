@@ -134,12 +134,6 @@ public final class PredictiveAlertSettingsPage {
         content.addView(ClinicalUi.header(activity,
                 activity.getString(R.string.predictive_alert_settings_title), close));
 
-        TextView intro = ClinicalUi.body(activity,
-                activity.getString(R.string.predictive_alert_settings_intro));
-        intro.setPaddingRelative(ClinicalUi.dp(activity, 4), 0,
-                ClinicalUi.dp(activity, 4), ClinicalUi.dp(activity, 8));
-        content.addView(intro);
-
         content.addView(ClinicalUi.sectionLabel(activity,
                 activity.getString(R.string.predictive_alert_target_section)));
         content.addView(targetHero());
@@ -209,20 +203,10 @@ public final class PredictiveAlertSettingsPage {
 
         content.addView(ClinicalUi.sectionLabel(activity,
                 activity.getString(R.string.critical_alarm_sound_section)));
-        TextView soundIntro = ClinicalUi.body(activity,
-                activity.getString(R.string.critical_alarm_sound_intro));
-        soundIntro.setPaddingRelative(ClinicalUi.dp(activity, 4), 0,
-                ClinicalUi.dp(activity, 4), ClinicalUi.dp(activity, 8));
-        content.addView(soundIntro);
         content.addView(soundSelectionCard());
 
         content.addView(ClinicalUi.sectionLabel(activity,
                 activity.getString(R.string.critical_alarm_delivery_section)));
-        TextView criticalIntro = ClinicalUi.body(activity,
-                activity.getString(R.string.critical_alarm_delivery_intro));
-        criticalIntro.setPaddingRelative(ClinicalUi.dp(activity, 4), 0,
-                ClinicalUi.dp(activity, 4), ClinicalUi.dp(activity, 8));
-        content.addView(criticalIntro);
         content.addView(criticalDeliveryCard());
         criticalTest = ClinicalUi.button(activity,
                 activity.getString(R.string.critical_alarm_test_button),
@@ -306,7 +290,7 @@ public final class PredictiveAlertSettingsPage {
                 new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT), false);
         MainActivity.setonback(() -> close(false));
         ViewCompat.requestApplyInsets(root);
-        activity.lightBars(false);
+        activity.themeLightBars();
 
         forecastListener = this::updateForecastStatus;
         ForecastRepository.get(activity).addListener(forecastListener);
@@ -320,7 +304,7 @@ public final class PredictiveAlertSettingsPage {
         hero.setOrientation(LinearLayout.VERTICAL);
         hero.setPadding(ClinicalUi.dp(activity, 20), ClinicalUi.dp(activity, 18),
                 ClinicalUi.dp(activity, 20), ClinicalUi.dp(activity, 18));
-        hero.setBackground(ClinicalUi.surface(activity, true, false));
+        hero.setBackground(ClinicalUi.surface(activity, false, false));
 
         TextView label = ClinicalUi.body(activity,
                 activity.getString(R.string.predictive_alert_target_label));
@@ -331,7 +315,7 @@ public final class PredictiveAlertSettingsPage {
         mmol.setText(R.string.predictive_alert_target_mmol);
         mmol.setTextColor(ClinicalUi.primaryText(activity));
         mmol.setTextSize(TypedValue.COMPLEX_UNIT_SP, 27);
-        mmol.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+        mmol.setTypeface(Typeface.create("monospace", Typeface.BOLD));
         mmol.setIncludeFontPadding(false);
         mmol.setPadding(0, ClinicalUi.dp(activity, 5), 0, 0);
         hero.addView(mmol);
@@ -355,7 +339,7 @@ public final class PredictiveAlertSettingsPage {
         title.setText(R.string.predictive_alert_safety_title);
         title.setTextColor(ClinicalUi.primaryText(activity));
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        title.setTypeface(Typeface.create("monospace", Typeface.NORMAL));
         card.addView(title);
 
         TextView body = ClinicalUi.body(activity,
@@ -799,10 +783,9 @@ public final class PredictiveAlertSettingsPage {
                         R.string.critical_alarm_volume_silent),
                 volumeReady);
         styleCriticalDiagnostic(criticalDndAccess,
-                activity.getString(snapshot.dndPolicyAccess
-                        ? R.string.critical_alarm_dnd_ready
-                        : R.string.critical_alarm_dnd_needed),
-                snapshot.dndPolicyAccess);
+                activity.getString(
+                        FullScreenAlertSettingsPage.dndStatusResource(snapshot)),
+                snapshot.dndPolicyAccess && snapshot.dndModeAllowsAlarmChannels());
         styleCriticalDiagnostic(criticalFullScreenAccess,
                 activity.getString(snapshot.fullScreenAccess
                         ? R.string.critical_alarm_full_screen_ready
@@ -965,7 +948,7 @@ public final class PredictiveAlertSettingsPage {
         CriticalAlarmSoundCatalog.stopPreview();
         ViewParent parent = root.getParent();
         if (parent instanceof ViewGroup) ((ViewGroup) parent).removeView(root);
-        activity.lightBars(false);
+        activity.themeLightBars();
         if (onClose != null) onClose.run();
     }
 

@@ -407,6 +407,13 @@ public final class IntakeRepository {
     Cancellable sendIntakeChat(String sessionId, String clientTurnId,
             long occurredAtMs, String text, File audio, List<File> photos,
             Callback<IntakeChatTurn> callback) {
+        return sendIntakeChat(sessionId, clientTurnId, occurredAtMs, text,
+                audio, photos, "", callback);
+    }
+
+    Cancellable sendIntakeChat(String sessionId, String clientTurnId,
+            long occurredAtMs, String text, File audio, List<File> photos,
+            String structuredIntent, Callback<IntakeChatTurn> callback) {
         final BackendIdentity identity = backendIdentity();
         final long generation = identity.generation;
         final IntakeApiClient api = client(identity);
@@ -424,7 +431,7 @@ public final class IntakeRepository {
                 try {
                     result = api.sendIntakeChatTurn(sessionId, clientTurnId,
                             occurredAtMs, text, audio, photoSnapshot,
-                            cancellation);
+                            structuredIntent, cancellation);
                 } catch (IntakeApiClient.ApiException
                         | IntakeApiClient.ApiContractException definitive) {
                     throw definitive;
@@ -439,7 +446,7 @@ public final class IntakeRepository {
                     hadAmbiguousAttempt = true;
                     result = api.sendIntakeChatTurn(sessionId, clientTurnId,
                             occurredAtMs, text, audio, photoSnapshot,
-                            cancellation);
+                            structuredIntent, cancellation);
                 }
                 final IntakeChatTurn receipt = result;
                 main.post(() -> deliverIntakeChatResult(generation,

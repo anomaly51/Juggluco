@@ -22,7 +22,6 @@
 package tk.glucodata.NovoPen;
 
 import static android.graphics.Typeface.BOLD;
-import static android.graphics.Typeface.DEFAULT_BOLD;
 import static android.view.View.INVISIBLE;
 import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
@@ -176,7 +175,7 @@ static void setInsulin(MainActivity context, OpContext op) {
             ClinicalUi.dp(context,8));
     var device=ClinicalUi.body(context,"PEN "+serial);
     device.setTextColor(ClinicalUi.accent(context));
-    device.setTypeface(DEFAULT_BOLD,BOLD);
+    device.setTypeface(android.graphics.Typeface.create("monospace",BOLD));
     var cancel=ClinicalUi.button(context,context.getString(R.string.cancel),
             ClinicalUi.ButtonRole.SECONDARY);
     var ok=ClinicalUi.button(context,context.getString(R.string.save),

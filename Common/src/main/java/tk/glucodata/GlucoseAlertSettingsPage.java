@@ -29,6 +29,7 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.widget.SwitchCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -41,6 +42,8 @@ import tk.glucodata.settings.Settings;
 /** Unified, phone-only home and detail flow for every glucose alert. */
 public final class GlucoseAlertSettingsPage {
     static final int MIN_TOUCH_TARGET_DP = 48;
+    private static GlucoseAlertSettingsPage activeHub;
+    private static DetailPage activeDetail;
 
     enum Kind {
         CURRENT_LOW(R.string.glucose_alert_current_low_title,
@@ -87,8 +90,12 @@ public final class GlucoseAlertSettingsPage {
     private final MainActivity activity;
     private final Runnable onClose;
     private FrameLayout root;
-    private LinearLayout alertCard;
+    private LinearLayout currentAlertCard;
+    private LinearLayout forecastAlertCard;
+    private LinearLayout signalAlertCard;
+    private TextView overviewTitle;
     private LinearLayout fullScreenCard;
+    private ScrollView scroll;
     private boolean closed;
 
     private GlucoseAlertSettingsPage(MainActivity activity, Runnable onClose) {
@@ -98,13 +105,41 @@ public final class GlucoseAlertSettingsPage {
 
     public static void show(MainActivity activity, Runnable onClose) {
         if (activity == null || Applic.isWearable) return;
-        new GlucoseAlertSettingsPage(activity, onClose).show();
+        GlucoseAlertSettingsPage page = new GlucoseAlertSettingsPage(
+                activity, onClose);
+        activeHub = page;
+        page.show();
+    }
+
+    static boolean hasActiveScreen(MainActivity activity) {
+        return (activeHub != null && activeHub.isShowingFor(activity))
+                || (activeDetail != null
+                && activeDetail.isShowingFor(activity))
+                || FullScreenAlertSettingsPage.isShowingFor(activity);
+    }
+
+    static void onHostConfigurationChanged(MainActivity activity) {
+        if (activeHub != null && activeHub.isShowingFor(activity)) {
+            activeHub.reinflateForConfiguration();
+        }
+        if (activeDetail != null && activeDetail.isShowingFor(activity)) {
+            activeDetail.reinflateForConfiguration();
+        }
+        FullScreenAlertSettingsPage.onHostConfigurationChanged(activity);
+    }
+
+    private boolean isShowingFor(MainActivity host) {
+        return activity == host && !closed && root != null
+                && root.getParent() != null;
     }
 
     private void show() {
         disableValueAvailableAlarm();
         CriticalGlucoseAlarm.ensureChannels(activity);
+        inflateHub(true, 0);
+    }
 
+    private void inflateHub(boolean registerBack, int restoredScrollY) {
         root = new FrameLayout(activity);
         root.setBackgroundColor(ClinicalUi.window(activity));
         LinearLayout content = ClinicalUi.verticalContent(activity);
@@ -117,16 +152,22 @@ public final class GlucoseAlertSettingsPage {
         content.addView(ClinicalUi.header(activity,
                 activity.getString(R.string.settings_alarm_title), close));
 
-        TextView intro = ClinicalUi.body(activity,
-                activity.getString(R.string.glucose_alert_hub_intro));
-        intro.setPaddingRelative(ClinicalUi.dp(activity, 4), 0,
-                ClinicalUi.dp(activity, 4), ClinicalUi.dp(activity, 4));
-        content.addView(intro);
+        content.addView(overviewCard());
 
         content.addView(ClinicalUi.sectionLabel(activity,
-                activity.getString(R.string.glucose_alert_types_section)));
-        alertCard = ClinicalUi.card(activity);
-        content.addView(alertCard);
+                activity.getString(R.string.glucose_alert_current_section)));
+        currentAlertCard = ClinicalUi.card(activity);
+        content.addView(currentAlertCard);
+
+        content.addView(ClinicalUi.sectionLabel(activity,
+                activity.getString(R.string.glucose_alert_forecast_section)));
+        forecastAlertCard = ClinicalUi.card(activity);
+        content.addView(forecastAlertCard);
+
+        content.addView(ClinicalUi.sectionLabel(activity,
+                activity.getString(R.string.glucose_alert_signal_section)));
+        signalAlertCard = ClinicalUi.card(activity);
+        content.addView(signalAlertCard);
         rebuildAlertRows();
 
         content.addView(ClinicalUi.sectionLabel(activity,
@@ -136,37 +177,243 @@ public final class GlucoseAlertSettingsPage {
                 activity, this::refreshFullScreenEntry));
         content.addView(fullScreenCard);
 
-        TextView automatic = ClinicalUi.body(activity,
-                activity.getString(R.string.glucose_alert_auto_save_hint));
-        automatic.setPaddingRelative(ClinicalUi.dp(activity, 4),
-                ClinicalUi.dp(activity, 16), ClinicalUi.dp(activity, 4), 0);
-        content.addView(automatic);
-
-        ScrollView scroll = ClinicalUi.scrollScreen(activity, content);
+        scroll = ClinicalUi.scrollScreen(activity, content);
         root.addView(scroll, new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
         applyInsets(root, content);
         activity.addMyContentView(root,
                 new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT), false);
-        MainActivity.setonback(() -> close(false));
+        if (registerBack) MainActivity.setonback(() -> close(false));
         ViewCompat.requestApplyInsets(root);
-        activity.lightBars(false);
+        activity.themeLightBars();
+        if (restoredScrollY > 0) {
+            scroll.post(() -> scroll.scrollTo(0, restoredScrollY));
+        }
+    }
+
+    private void reinflateForConfiguration() {
+        int preservedScrollY = scroll == null ? 0 : scroll.getScrollY();
+        ViewCompat.setOnApplyWindowInsetsListener(root, null);
+        remove(root);
+        inflateHub(false, preservedScrollY);
     }
 
     private void rebuildAlertRows() {
-        if (alertCard == null) return;
-        alertCard.removeAllViews();
-        for (int index = 0; index < HUB_ALERT_TYPES.length; index++) {
-            if (index > 0) alertCard.addView(ClinicalUi.divider(activity));
-            Kind kind = HUB_ALERT_TYPES[index];
-            LinearLayout row = ClinicalUi.actionRow(activity,
-                    activity.getString(kind.titleRes), summary(kind));
-            row.setMinimumHeight(ClinicalUi.dp(activity, 70));
-            row.setContentDescription(activity.getString(kind.titleRes)
-                    + ", " + summary(kind));
-            row.setOnClickListener(view -> DetailPage.show(activity, kind,
-                    this::rebuildAlertRows));
-            alertCard.addView(row, new LinearLayout.LayoutParams(
-                    MATCH_PARENT, WRAP_CONTENT));
+        if (currentAlertCard == null || forecastAlertCard == null
+                || signalAlertCard == null) return;
+        currentAlertCard.removeAllViews();
+        forecastAlertCard.removeAllViews();
+        signalAlertCard.removeAllViews();
+        addAlertRow(currentAlertCard, Kind.CURRENT_LOW, false);
+        addAlertRow(currentAlertCard, Kind.CURRENT_HIGH, true);
+        addAlertRow(forecastAlertCard, Kind.FORECAST_LOW, false);
+        addAlertRow(forecastAlertCard, Kind.FORECAST_HIGH, true);
+        addAlertRow(signalAlertCard, Kind.SIGNAL_LOSS, false);
+        if (overviewTitle != null) {
+            int count = activeAlertCount();
+            overviewTitle.setText(activity.getResources().getQuantityString(
+                    R.plurals.glucose_alert_active_count, count, count));
+        }
+    }
+
+    private View overviewCard() {
+        LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(ClinicalUi.dp(activity, 18),
+                ClinicalUi.dp(activity, 16), ClinicalUi.dp(activity, 18),
+                ClinicalUi.dp(activity, 16));
+        overviewTitle = new TextView(activity);
+        overviewTitle.setTextColor(ClinicalUi.primaryText(activity));
+        overviewTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        overviewTitle.setTypeface(Typeface.create("monospace",
+                Typeface.NORMAL));
+        row.addView(overviewTitle);
+        TextView hint = ClinicalUi.body(activity,
+                activity.getString(R.string.glucose_alert_overview_hint));
+        hint.setPadding(0, ClinicalUi.dp(activity, 4), 0, 0);
+        row.addView(hint);
+        int count = activeAlertCount();
+        overviewTitle.setText(activity.getResources().getQuantityString(
+                R.plurals.glucose_alert_active_count, count, count));
+        return ClinicalUi.card(activity, row);
+    }
+
+    private void addAlertRow(LinearLayout card, Kind kind,
+            boolean addDivider) {
+        if (addDivider) card.addView(ClinicalUi.divider(activity));
+        card.addView(alertRow(kind), new LinearLayout.LayoutParams(
+                MATCH_PARENT, WRAP_CONTENT));
+    }
+
+    private View alertRow(Kind kind) {
+        LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(ClinicalUi.dp(activity, 78));
+        row.setPaddingRelative(ClinicalUi.dp(activity, 10),
+                ClinicalUi.dp(activity, 6), ClinicalUi.dp(activity, 8),
+                ClinicalUi.dp(activity, 6));
+
+        LinearLayout destination = new LinearLayout(activity);
+        destination.setOrientation(LinearLayout.HORIZONTAL);
+        destination.setGravity(Gravity.CENTER_VERTICAL);
+        destination.setBackground(ClinicalUi.rowSurface(activity));
+        destination.setMinimumHeight(ClinicalUi.dp(activity, 64));
+        destination.setContentDescription(activity.getString(kind.titleRes)
+                + ", " + summary(kind));
+        destination.setOnClickListener(view -> DetailPage.show(activity, kind,
+                this::rebuildAlertRows));
+
+        TextView glyph = new TextView(activity);
+        glyph.setText(kind == Kind.SIGNAL_LOSS ? "⌁" : kind.low() ? "↓" : "↑");
+        glyph.setGravity(Gravity.CENTER);
+        glyph.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        glyph.setTextColor(ContextCompat.getColor(activity, kind.low()
+                ? R.color.lifeprompt_glucose_low
+                : kind == Kind.SIGNAL_LOSS
+                ? R.color.lifeprompt_secondary
+                : R.color.lifeprompt_glucose_high));
+        glyph.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        destination.addView(glyph, new LinearLayout.LayoutParams(
+                ClinicalUi.dp(activity, 44), ClinicalUi.dp(activity, 48)));
+
+        LinearLayout copy = new LinearLayout(activity);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = new TextView(activity);
+        title.setText(kind.titleRes);
+        title.setTextColor(ClinicalUi.primaryText(activity));
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        title.setTypeface(Typeface.create("monospace",
+                Typeface.NORMAL));
+        copy.addView(title);
+        TextView subtitle = ClinicalUi.body(activity, summary(kind));
+        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        subtitle.setMaxLines(2);
+        subtitle.setPadding(0, ClinicalUi.dp(activity, 2), 0, 0);
+        copy.addView(subtitle);
+        destination.addView(copy, new LinearLayout.LayoutParams(
+                0, WRAP_CONTENT, 1f));
+
+        TextView chevron = new TextView(activity);
+        chevron.setText("›");
+        chevron.setTextColor(ClinicalUi.secondaryText(activity));
+        chevron.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        chevron.setGravity(Gravity.CENTER);
+        chevron.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        destination.addView(chevron, new LinearLayout.LayoutParams(
+                ClinicalUi.dp(activity, 30), ClinicalUi.dp(activity, 48)));
+        row.addView(destination, new LinearLayout.LayoutParams(
+                0, WRAP_CONTENT, 1f));
+
+        SwitchCompat toggle = hubSwitch(isEnabled(kind));
+        toggle.setContentDescription(activity.getString(
+                R.string.glucose_alert_toggle_description,
+                activity.getString(kind.titleRes)));
+        toggle.setOnCheckedChangeListener((button, checked) -> {
+            if (!checked && kind.current() && isEnabled(kind)) {
+                // A stray thumb tap must not silently disable a current-value
+                // safety alarm. Restore persisted state while confirmation is
+                // visible; enabling remains a one-tap action.
+                button.post(this::rebuildAlertRows);
+                confirmDisableCurrentAlert(kind);
+                return;
+            }
+            if (setEnabled(kind, checked)) rebuildAlertRows();
+            else button.post(this::rebuildAlertRows);
+        });
+        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
+                WRAP_CONTENT, ClinicalUi.dp(activity, MIN_TOUCH_TARGET_DP));
+        toggleParams.setMarginStart(ClinicalUi.dp(activity, 8));
+        row.addView(toggle, toggleParams);
+        return row;
+    }
+
+    private SwitchCompat hubSwitch(boolean checked) {
+        SwitchCompat toggle = new SwitchCompat(activity);
+        toggle.setShowText(false);
+        toggle.setChecked(checked);
+        toggle.setMinimumWidth(ClinicalUi.dp(activity, 56));
+        toggle.setMinimumHeight(ClinicalUi.dp(activity, MIN_TOUCH_TARGET_DP));
+        toggle.setThumbTintList(ClinicalUi.selectionTint(activity));
+        toggle.setTrackTintList(ClinicalUi.switchTrackTint(activity));
+        return toggle;
+    }
+
+    private void confirmDisableCurrentAlert(Kind kind) {
+        new AlertDialog.Builder(activity)
+                .setTitle(activity.getString(
+                        R.string.glucose_alert_disable_confirm_title,
+                        activity.getString(kind.titleRes)))
+                .setMessage(R.string.glucose_alert_disable_confirm_message)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.glucose_alert_disable_action,
+                        (dialog, which) -> {
+                            if (setEnabled(kind, false)) rebuildAlertRows();
+                        })
+                .show();
+    }
+
+    private boolean isEnabled(Kind kind) {
+        try {
+            if (kind == Kind.CURRENT_LOW) return Natives.hasalarmlow();
+            if (kind == Kind.CURRENT_HIGH) return Natives.hasalarmhigh();
+            if (kind == Kind.SIGNAL_LOSS) return Natives.hasalarmloss();
+            PredictiveAlertPreferences.Snapshot snapshot =
+                    new PredictiveAlertPreferences(activity).snapshot();
+            return snapshot.enabled && (kind.low()
+                    ? snapshot.lowEnabled : snapshot.highEnabled);
+        } catch (Throwable unavailable) {
+            return false;
+        }
+    }
+
+    private int activeAlertCount() {
+        int count = 0;
+        for (Kind kind : HUB_ALERT_TYPES) if (isEnabled(kind)) count++;
+        return count;
+    }
+
+    private boolean setEnabled(Kind kind, boolean enabled) {
+        try {
+            if (kind.current()) {
+                boolean low = kind == Kind.CURRENT_LOW
+                        ? enabled : Natives.hasalarmlow();
+                boolean high = kind == Kind.CURRENT_HIGH
+                        ? enabled : Natives.hasalarmhigh();
+                Natives.setalarms(Natives.alarmlow(), Natives.alarmhigh(),
+                        low, high, false, Natives.hasalarmloss());
+            } else if (kind == Kind.SIGNAL_LOSS) {
+                Natives.setalarms(Natives.alarmlow(), Natives.alarmhigh(),
+                        Natives.hasalarmlow(), Natives.hasalarmhigh(), false,
+                        enabled);
+                if (SuperGattCallback.glucosealarms != null) {
+                    SuperGattCallback.glucosealarms.setLossAlarm();
+                }
+            } else {
+                PredictiveAlertPreferences preferences =
+                        new PredictiveAlertPreferences(activity);
+                preferences.setDirectionEnabled(kind.low(), enabled);
+                if (enabled) {
+                    preferences.setEnabled(true);
+                    PredictiveAlertNotifier.ensureChannels(activity);
+                    if (!PredictiveAlertNotifier.canPost(activity)) {
+                        activity.askNotify();
+                    }
+                } else {
+                    PredictiveAlertPreferences.Snapshot saved =
+                            preferences.snapshot();
+                    if (!saved.lowEnabled && !saved.highEnabled) {
+                        preferences.setEnabled(false);
+                    }
+                }
+                PredictiveAlertCoordinator.get(activity).onSettingsChanged();
+            }
+            return true;
+        } catch (Throwable unavailable) {
+            Toast.makeText(activity, R.string.glucose_alert_summary_unavailable,
+                    Toast.LENGTH_SHORT).show();
+            return false;
         }
     }
 
@@ -218,11 +465,12 @@ public final class GlucoseAlertSettingsPage {
     private void close(boolean popBack) {
         if (closed) return;
         closed = true;
+        if (activeHub == this) activeHub = null;
         disableValueAvailableAlarm();
         if (popBack) MainActivity.poponback();
         ViewCompat.setOnApplyWindowInsetsListener(root, null);
         remove(root);
-        activity.lightBars(false);
+        activity.themeLightBars();
         if (onClose != null) onClose.run();
     }
 
@@ -291,7 +539,34 @@ public final class GlucoseAlertSettingsPage {
         private LinearLayout soundRow;
         private TextView selectedSound;
         private AlertDialog soundDialog;
+        private ScrollView scroll;
+        private boolean initiallyEnabled;
+        private boolean initialStateCaptured;
         private boolean closed;
+
+        private static final class DetailDraft {
+            final boolean enabled;
+            final String threshold;
+            final String repeat;
+            final String lossWait;
+            final Integer horizon;
+            final Integer sensitivity;
+            final Integer forecastRepeat;
+            final Integer volume;
+
+            DetailDraft(boolean enabled, String threshold, String repeat,
+                    String lossWait, Integer horizon, Integer sensitivity,
+                    Integer forecastRepeat, Integer volume) {
+                this.enabled = enabled;
+                this.threshold = threshold;
+                this.repeat = repeat;
+                this.lossWait = lossWait;
+                this.horizon = horizon;
+                this.sensitivity = sensitivity;
+                this.forecastRepeat = forecastRepeat;
+                this.volume = volume;
+            }
+        }
 
         private DetailPage(MainActivity activity, Kind kind, Runnable onClose) {
             this.activity = activity;
@@ -301,31 +576,42 @@ public final class GlucoseAlertSettingsPage {
         }
 
         static void show(MainActivity activity, Kind kind, Runnable onClose) {
-            new DetailPage(activity, kind, onClose).show();
+            DetailPage page = new DetailPage(activity, kind, onClose);
+            activeDetail = page;
+            page.show();
         }
 
         private void show() {
+            inflateDetail(true, null, 0);
+        }
+
+        private boolean isShowingFor(MainActivity host) {
+            return activity == host && !closed && root != null
+                    && root.getParent() != null;
+        }
+
+        private void inflateDetail(boolean registerBack, DetailDraft draft,
+                int restoredScrollY) {
             root = new FrameLayout(activity);
             root.setBackgroundColor(ClinicalUi.window(activity));
             LinearLayout content = ClinicalUi.verticalContent(activity);
 
             Button close = ClinicalUi.button(activity,
-                    activity.getString(R.string.closename),
+                    activity.getString(R.string.glucose_alert_save_action),
                     ClinicalUi.ButtonRole.SECONDARY);
             close.setMinimumHeight(ClinicalUi.dp(activity, MIN_TOUCH_TARGET_DP));
             close.setOnClickListener(view -> close(true));
             content.addView(ClinicalUi.header(activity,
                     activity.getString(kind.titleRes), close));
 
-            TextView intro = ClinicalUi.body(activity,
-                    activity.getString(introRes()));
-            intro.setPaddingRelative(ClinicalUi.dp(activity, 4), 0,
-                    ClinicalUi.dp(activity, 4), ClinicalUi.dp(activity, 4));
-            content.addView(intro);
-
             content.addView(ClinicalUi.sectionLabel(activity,
                     activity.getString(R.string.glucose_alert_status_section)));
-            enabled = switchControl(initialEnabled());
+            if (!initialStateCaptured) {
+                initiallyEnabled = initialEnabled();
+                initialStateCaptured = true;
+            }
+            enabled = switchControl(draft == null
+                    ? initiallyEnabled : draft.enabled);
             content.addView(ClinicalUi.card(activity, enabledRow(enabled)));
 
             if (kind.current()) addCurrentControls(content);
@@ -333,22 +619,64 @@ public final class GlucoseAlertSettingsPage {
             if (kind == Kind.SIGNAL_LOSS) addSignalControls(content);
             addSoundAndVolume(content);
             addTest(content);
+            if (draft != null) applyDraft(draft);
 
-            TextView automatic = ClinicalUi.body(activity,
-                    activity.getString(R.string.glucose_alert_auto_save_hint));
-            automatic.setPaddingRelative(ClinicalUi.dp(activity, 4),
-                    ClinicalUi.dp(activity, 16), ClinicalUi.dp(activity, 4), 0);
-            content.addView(automatic);
-
-            ScrollView scroll = ClinicalUi.scrollScreen(activity, content);
+            scroll = ClinicalUi.scrollScreen(activity, content);
             root.addView(scroll, new FrameLayout.LayoutParams(
                     MATCH_PARENT, MATCH_PARENT));
             applyInsets(root, content);
             activity.addMyContentView(root,
                     new ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT), false);
-            MainActivity.setonback(() -> close(false));
+            if (registerBack) MainActivity.setonback(() -> close(false));
             ViewCompat.requestApplyInsets(root);
-            activity.lightBars(false);
+            activity.themeLightBars();
+            if (restoredScrollY > 0) {
+                scroll.post(() -> scroll.scrollTo(0, restoredScrollY));
+            }
+        }
+
+        private DetailDraft captureDraft() {
+            return new DetailDraft(enabled != null && enabled.isChecked(),
+                    editTextValue(threshold), editTextValue(repeat),
+                    editTextValue(lossWait), selectedValue(horizon),
+                    selectedValue(sensitivity), selectedValue(forecastRepeat),
+                    selectedValue(volume));
+        }
+
+        private void applyDraft(DetailDraft draft) {
+            setEditTextValue(threshold, draft.threshold);
+            setEditTextValue(repeat, draft.repeat);
+            setEditTextValue(lossWait, draft.lossWait);
+            selectValue(horizon, draft.horizon);
+            selectValue(sensitivity, draft.sensitivity);
+            selectValue(forecastRepeat, draft.forecastRepeat);
+            selectValue(volume, draft.volume);
+        }
+
+        private void reinflateForConfiguration() {
+            DetailDraft draft = captureDraft();
+            int preservedScrollY = scroll == null ? 0 : scroll.getScrollY();
+            if (soundDialog != null) soundDialog.dismiss();
+            CriticalAlarmSoundCatalog.stopPreview();
+            ViewCompat.setOnApplyWindowInsetsListener(root, null);
+            remove(root);
+            inflateDetail(false, draft, preservedScrollY);
+        }
+
+        private static String editTextValue(EditText input) {
+            return input == null ? null : input.getText().toString();
+        }
+
+        private static void setEditTextValue(EditText input, String value) {
+            if (input != null && value != null) input.setText(value);
+        }
+
+        private static Integer selectedValue(ChoiceGroup choices) {
+            return choices == null ? null : choices.selected();
+        }
+
+        private static void selectValue(ChoiceGroup choices, Integer value) {
+            if (choices != null && value != null) choices.select(value);
         }
 
         private int introRes() {
@@ -595,7 +923,7 @@ public final class GlucoseAlertSettingsPage {
             TextView selectedCaption = ClinicalUi.body(activity,
                     activity.getString(R.string.critical_alarm_sound_selected));
             selectedCaption.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-            selectedCaption.setTypeface(Typeface.create("sans-serif-medium",
+            selectedCaption.setTypeface(Typeface.create("monospace",
                     Typeface.BOLD));
             selectedCard.addView(selectedCaption);
 
@@ -603,7 +931,7 @@ public final class GlucoseAlertSettingsPage {
             picker.selectedName.setTextColor(ClinicalUi.primaryText(activity));
             picker.selectedName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 21);
             picker.selectedName.setTypeface(Typeface.create(
-                    "sans-serif-medium", Typeface.BOLD));
+                    "monospace", Typeface.BOLD));
             picker.selectedName.setPadding(0, ClinicalUi.dp(activity, 3), 0, 0);
             selectedCard.addView(picker.selectedName);
 
@@ -719,7 +1047,8 @@ public final class GlucoseAlertSettingsPage {
             chip.setShape(GradientDrawable.RECTANGLE);
             chip.setColor(ClinicalUi.blend(selected ? accent : primary,
                     window, selected ? .16f : .055f));
-            chip.setCornerRadius(ClinicalUi.dp(activity, 22));
+            chip.setCornerRadius(ClinicalUi.dp(activity,
+                    ClinicalUi.RETRO_CORNER_RADIUS_DP));
             chip.setStroke(ClinicalUi.dp(activity, selected ? 2 : 1),
                     ClinicalUi.blend(selected ? accent : primary, window,
                             selected ? .75f : .17f));
@@ -862,7 +1191,8 @@ public final class GlucoseAlertSettingsPage {
             GradientDrawable content = new GradientDrawable();
             content.setShape(GradientDrawable.RECTANGLE);
             content.setColor(fill);
-            content.setCornerRadius(ClinicalUi.dp(activity, 14));
+            content.setCornerRadius(ClinicalUi.dp(activity,
+                    ClinicalUi.RETRO_CORNER_RADIUS_DP));
             content.setStroke(ClinicalUi.dp(activity, selected ? 2 : 1),
                     stroke);
             if (!interactive) return content;
@@ -870,7 +1200,8 @@ public final class GlucoseAlertSettingsPage {
             GradientDrawable mask = new GradientDrawable();
             mask.setShape(GradientDrawable.RECTANGLE);
             mask.setColor(Color.WHITE);
-            mask.setCornerRadius(ClinicalUi.dp(activity, 14));
+            mask.setCornerRadius(ClinicalUi.dp(activity,
+                    ClinicalUi.RETRO_CORNER_RADIUS_DP));
             return new RippleDrawable(ColorStateList.valueOf(
                     ClinicalUi.blend(accent, fill, .24f)), content, mask);
         }
@@ -988,18 +1319,43 @@ public final class GlucoseAlertSettingsPage {
         }
 
         private void close(boolean popBack) {
+            close(popBack, false);
+        }
+
+        private void close(boolean popBack, boolean disableConfirmed) {
             if (closed) return;
+            if (!disableConfirmed && kind.current() && initiallyEnabled
+                    && !enabled.isChecked()) {
+                Runnable restoreBack = () -> {
+                    if (!popBack && !closed) {
+                        MainActivity.setonback(() -> close(false));
+                    }
+                };
+                new AlertDialog.Builder(activity)
+                        .setTitle(activity.getString(
+                                R.string.glucose_alert_disable_confirm_title,
+                                activity.getString(kind.titleRes)))
+                        .setMessage(R.string.glucose_alert_disable_confirm_message)
+                        .setNegativeButton(R.string.cancel,
+                                (dialog, which) -> restoreBack.run())
+                        .setOnCancelListener(dialog -> restoreBack.run())
+                        .setPositiveButton(R.string.glucose_alert_disable_action,
+                                (dialog, which) -> close(popBack, true))
+                        .show();
+                return;
+            }
             if (!save()) {
                 if (!popBack) MainActivity.setonback(() -> close(false));
                 return;
             }
             closed = true;
+            if (activeDetail == this) activeDetail = null;
             if (popBack) MainActivity.poponback();
             if (soundDialog != null) soundDialog.dismiss();
             CriticalAlarmSoundCatalog.stopPreview();
             ViewCompat.setOnApplyWindowInsetsListener(root, null);
             remove(root);
-            activity.lightBars(false);
+            activity.themeLightBars();
             if (onClose != null) onClose.run();
         }
 
@@ -1100,7 +1456,7 @@ public final class GlucoseAlertSettingsPage {
             text.setText(textRes);
             text.setTextColor(ClinicalUi.primaryText(activity));
             text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-            text.setTypeface(Typeface.create("sans-serif-medium",
+            text.setTypeface(Typeface.create("monospace",
                     Typeface.NORMAL));
             return text;
         }
@@ -1127,6 +1483,9 @@ public final class GlucoseAlertSettingsPage {
                 }
                 return value;
             } catch (RuntimeException invalid) {
+                input.setError(activity.getString(
+                        R.string.glucose_alert_invalid_value));
+                input.requestFocus();
                 throw new IllegalArgumentException(invalid);
             }
         }
@@ -1139,6 +1498,9 @@ public final class GlucoseAlertSettingsPage {
                 }
                 return (short) value;
             } catch (RuntimeException invalid) {
+                input.setError(activity.getString(
+                        R.string.glucose_alert_invalid_value));
+                input.requestFocus();
                 throw new IllegalArgumentException(invalid);
             }
         }
@@ -1215,6 +1577,17 @@ public final class GlucoseAlertSettingsPage {
             View selected = group.findViewById(group.getCheckedRadioButtonId());
             return selected != null && selected.getTag() instanceof Integer
                     ? (Integer) selected.getTag() : null;
+        }
+
+        void select(int value) {
+            for (int index = 0; index < group.getChildCount(); index++) {
+                View option = group.getChildAt(index);
+                if (option.getTag() instanceof Integer
+                        && ((Integer) option.getTag()) == value) {
+                    group.check(option.getId());
+                    return;
+                }
+            }
         }
     }
 }

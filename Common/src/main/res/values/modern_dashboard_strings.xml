@@ -1,18 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="dashboard_today">Today</string>
-    <string name="dashboard_graph_title">Glucose trend</string>
-    <string name="dashboard_state_in_target">In target</string>
-    <string name="dashboard_state_low">Below target</string>
-    <string name="dashboard_state_high">Above target</string>
-    <string name="dashboard_state_unknown">Range unavailable</string>
+    <string name="dashboard_home">Home</string>
+    <string name="dashboard_home_description">Home. Current glucose and graph.</string>
+    <string name="dashboard_add_description">Add insulin or food.</string>
+    <string name="dashboard_more_description">More actions and settings.</string>
+    <string name="dashboard_state_in_target">In range</string>
+    <string name="dashboard_state_low">Below range</string>
+    <string name="dashboard_state_high">Above range</string>
+    <string name="dashboard_state_unknown">No range</string>
     <string name="dashboard_state_waiting">Waiting for sensor</string>
+    <string name="dashboard_state_stale">Reading outdated</string>
+    <string name="dashboard_state_stale_description">Reading outdated; last value was %1$s</string>
     <string name="dashboard_target_range">Target %1$s–%2$s %3$s</string>
     <string name="dashboard_target_unavailable">Target range</string>
     <string name="dashboard_preview_short">Preview only — no sensor data</string>
-    <string name="dashboard_backend_checking">Checking connection</string>
-    <string name="dashboard_backend_connected">Connected</string>
-    <string name="dashboard_backend_offline">Offline</string>
-    <string name="dashboard_backend_settings">Connection status. Open settings.</string>
-    <string name="dashboard_backend_open_settings">%1$s. Open connection settings.</string>
+    <string name="dashboard_seconds_short">%1$d s</string>
+    <string name="dashboard_minutes_short">%1$d min</string>
+    <string name="dashboard_timing_summary">%1$s ago · avg %2$s · %3$s</string>
+    <string name="dashboard_timing_unknown">%1$s ago · avg — · next —</string>
+    <string name="dashboard_timing_next">next %1$s</string>
+    <string name="dashboard_timing_due_now">due now</string>
+    <string name="dashboard_timing_overdue">late %1$s</string>
 </resources>

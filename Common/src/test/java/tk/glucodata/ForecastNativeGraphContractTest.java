@@ -37,14 +37,17 @@ public class ForecastNativeGraphContractTest {
             throws Exception {
         String renderer=cppSource("curve","curve.cpp");
         String helper=cppSource("curve","forecastgraph.hpp");
+        String palette=cppSource("curve","curve.hpp");
 
         assertTrue(renderer.contains("drawforecastactivities(avg"));
         assertTrue(renderer.contains("forecastgraph::ActivityKind::Meal"));
         assertTrue(renderer.contains("forecastgraph::ActivityKind::RapidInsulin"));
-        assertTrue(renderer.contains("hexcolor(0x55C8F2)"));
-        assertTrue(renderer.contains("hexcolor(0xB69AF5)"));
+        assertTrue(renderer.contains("modernGraphRapid:modernGraphLong"));
+        assertTrue(palette.contains("modernGraphRapid=hexcolor(0x68D7F3)"));
+        assertTrue(palette.contains("modernGraphLong=hexcolor(0xC8A2FF)"));
         assertTrue(renderer.contains("const NVGpaint band=nvgLinearGradient"));
         assertTrue(renderer.contains("const float dashLength="));
+        assertTrue(renderer.contains("nvgLineCap(avg,NVG_BUTT)"));
         assertTrue(renderer.contains("forecastActualAnchor"));
         assertTrue(renderer.contains("forecastCalibrator.calibrateNow("));
         assertTrue(renderer.contains("showcalibratedscans&&!showscans"));

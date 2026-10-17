@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:state_enabled="false" android:color="#26302C2E" />
-    <item android:state_checked="true" android:color="#665ACB85" />
-    <item android:color="#4D555B59" />
+    <item android:state_enabled="false" android:color="@color/lifeprompt_surface_dim" />
+    <item android:state_checked="true" android:color="@color/lifeprompt_primary_container" />
+    <item android:color="@color/lifeprompt_surface_variant" />
 </selector>

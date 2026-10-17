@@ -129,7 +129,7 @@ float listitemlen;
 #ifdef JUGGLUCO_APP
 int menufont=-1;
 #endif
-int font=0,monofont=0,whitefont=-1,blackfont=0;
+int font=0,monofont=-1,whitefont=-1,blackfont=0;
 float headheight;
 int width=-1,height=-1;
 
@@ -157,7 +157,7 @@ float pollCurveStrokeWidth;
 float hitStrokeWidth;
  float TrendStrokeWidth;
  float glucoseLinesStrokeWidth;
- float timeLinesStrokeWidth;
+ float timeGridStrokeWidth;
  float dayEndStrokeWidth;
  float nowLineStrokeWidth;
  float pointRadius;
@@ -204,7 +204,7 @@ template <class TX,class TY> void    calihistcurve(NVGcontext* avg,const SensorG
  void       showscanner(NVGcontext* avg,const SensorGlucoseData *hist,int scanident,time_t nu,bool calibrate);
     template <class LT> void    glucoselines(NVGcontext* avg,const float last,const float smallfontlineheight,const int gmax,const LT &transy,bool);
     template <class LT>
-    void    timelines(NVGcontext* avg,const displaytime *disp, const LT &transx ,uint32_t nu);
+    void    drawTimeGrid(NVGcontext* avg,const displaytime *disp, const LT &transx ,uint32_t nu);
     template <class LT> void    epochlines(NVGcontext* avg,uint32_t first,uint32_t last, const LT &transx);
     void    drawarrow(NVGcontext* avg, float rate,float getx,float gety);
 
@@ -293,7 +293,9 @@ void  nextscr() ;
 
 int mouseScale(float dx,float xold,float x);
 int translate(float dx,float dy,float yold,float y) ;
+int translateGraphFraction(float deltaFraction);
 void xscaleGesture(float scalex,float midx) ;
+void xscaleGraphFraction(float scale,float focusFraction);
 std::pair<int,int> getextremes(const std::vector<int> &hists, const std::pair<const ScanData *,const ScanData*> **scanranges, int scannr,const std::pair<int32_t,int32_t> *histpositions) ;
 template <class TX,class TY> bool nearbyhistory( const float tapx,const float tapy,  const TX &transx,  const TY &transy) ;
 template <class TX,class TY> bool nearbycalibratedhistory( const float tapx,const float tapy,  const TX &transx,  const TY &transy);
