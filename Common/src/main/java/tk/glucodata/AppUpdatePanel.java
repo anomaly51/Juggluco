@@ -37,6 +37,7 @@ final class AppUpdatePanel {
             case "permission": return R.string.app_update_permission_title;
             case "confirmation": return R.string.app_update_confirmation_title;
             case "retry": return R.string.app_update_retry_title;
+            case "check_failed": return R.string.app_update_check_failed_title;
             case "current": return R.string.app_update_current_title;
             case "": return R.string.app_update_idle_title;
             default: return AppUpdates.statusText(state);
@@ -71,6 +72,9 @@ final class AppUpdatePanel {
     static String banner(Context context) {
         SharedPreferences p = AppUpdates.prefs(context);
         String state = p.getString("state", "");
+        if (p.getBoolean("update_unseen", false) && p.getLong("target", 0) <= BuildConfig.VERSION_CODE)
+            return context.getString(R.string.app_update_success, BuildConfig.DISPLAY_VERSION)
+                    + "\n" + context.getString(R.string.app_update_open_details);
         if (!state.isEmpty() && !"current".equals(state)) {
             String title = context.getString(headline(state));
             if ("downloading".equals(state) && AppUpdates.totalBytes > 0)
@@ -151,6 +155,11 @@ final class AppUpdatePanel {
             String versionText = activity.getString(R.string.app_update_installed_version,
                     BuildConfig.DISPLAY_VERSION, BuildConfig.VERSION_CODE);
             long target = p.getLong("target", 0);
+            if (p.getBoolean("update_unseen", false)) {
+                receiptSeen[0] = true;
+                if (!"current".equals(state) && !state.isEmpty())
+                    versionText += "\n" + activity.getString(R.string.app_update_success, BuildConfig.DISPLAY_VERSION);
+            }
             if (target > BuildConfig.VERSION_CODE && !"current".equals(state))
                 versionText += "\n" + activity.getString(R.string.app_update_available_version,
                         p.getString("target_name", ""), target);
@@ -160,7 +169,7 @@ final class AppUpdatePanel {
             receiptSeen[0] |= receipt;
             setText(status, receipt ? activity.getString(R.string.app_update_success, BuildConfig.DISPLAY_VERSION)
                     : activity.getString(headline(state)));
-            setText(explanation, activity.getString(receipt ? R.string.app_update_reopen
+            setText(explanation, activity.getString(receipt ? R.string.app_update_success_help
                     : detail(state, enabled, alarm, onHome)));
             boolean downloading = "downloading".equals(state);
             progress.setVisibility(working(state) ? View.VISIBLE : View.GONE);
@@ -172,7 +181,8 @@ final class AppUpdatePanel {
             int button = permission ? R.string.app_update_allow
                     : "confirmation".equals(state) ? R.string.app_update_continue
                     : installStep(state) ? R.string.app_update_install
-                    : "retry".equals(state) ? R.string.app_update_try_again : R.string.app_update_check;
+                    : ("retry".equals(state) || "check_failed".equals(state))
+                        ? R.string.app_update_try_again : R.string.app_update_check;
             setText(action, activity.getString(busy ? R.string.app_update_in_progress : button));
             action.setEnabled(!busy && (!installStep(state) || (!alarm && onHome)));
             action.setAlpha(action.isEnabled() ? 1f : 0.5f);
@@ -204,7 +214,7 @@ final class AppUpdatePanel {
         };
         dialog.setOnDismissListener(d -> {
             content.removeCallbacks(tick);
-            if (receiptSeen[0]) p.edit().putBoolean("update_unseen", false).apply();
+            if (receiptSeen[0]) AppUpdates.acknowledgeReceipt(activity);
             dismissed.run();
         });
         dialog.show();

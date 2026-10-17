@@ -64,7 +64,7 @@ public final class AppUpdates {
                         || "verifying".equals(previous) || "preparing".equals(previous)) {
                     int session = prefs(app).getInt("session", -1);
                     if (session >= 0) abandon(app, session);
-                    state(app, "retry");
+                    state(app, failureState(previous));
                 }
             } catch (Exception ignored) { state(app, "retry"); }
         });
@@ -189,7 +189,7 @@ public final class AppUpdates {
                 next = () -> { if (!cancelled.get()) prepareInstall(app, apk, release); };
             } catch (Exception error) {
                 manualInstall = false;
-                state(app, "retry");
+                state(app, failureState(prefs(app).getString("state", "")));
                 prefs(app).edit().putLong("retry_after",
                         System.currentTimeMillis() + 15L * 60 * 1000).apply();
                 android.util.Log.w("AppUpdates", "Update postponed: " + error.getClass().getSimpleName());
@@ -203,6 +203,10 @@ public final class AppUpdates {
 
     static void state(Context context, String value) {
         prefs(context).edit().putString("state", value).apply();
+    }
+
+    static String failureState(String phase) {
+        return "checking".equals(phase) ? "check_failed" : "retry";
     }
 
     static boolean canInstall(Context context) {
@@ -452,9 +456,11 @@ public final class AppUpdates {
             if (Build.VERSION.SDK_INT >= 26)
                 manager.createNotificationChannel(new NotificationChannel(CHANNEL,
                         context.getString(R.string.app_update_title), NotificationManager.IMPORTANCE_LOW));
-            PendingIntent pending = PendingIntent.getActivity(context, NOTICE, action,
+            // Session cleanup must not erase the successful-update receipt.
+            int notificationId = text == R.string.app_update_reopen ? NOTICE + 1 : NOTICE;
+            PendingIntent pending = PendingIntent.getActivity(context, notificationId, action,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-            manager.notify(NOTICE, new NotificationCompat.Builder(context, CHANNEL)
+            manager.notify(notificationId, new NotificationCompat.Builder(context, CHANNEL)
                     .setSmallIcon(android.R.drawable.stat_sys_download_done)
                     .setContentTitle(context.getString(R.string.app_update_title))
                     .setContentText(context.getString(text)).setContentIntent(pending)
@@ -465,6 +471,12 @@ public final class AppUpdates {
     static void cancelNotice(Context context) {
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) manager.cancel(NOTICE);
+    }
+
+    static void acknowledgeReceipt(Context context) {
+        prefs(context).edit().putBoolean("update_unseen", false).apply();
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) manager.cancel(NOTICE + 1);
     }
 
     public static String versionLabel() {
@@ -483,6 +495,7 @@ public final class AppUpdates {
             case "installing": return R.string.app_update_installing;
             case "current": return R.string.app_update_current;
             case "retry": return R.string.app_update_retry;
+            case "check_failed": return R.string.app_update_check_failed_help;
             default: return R.string.app_update_automatic_description;
         }
     }

@@ -70,6 +70,29 @@ public class AppUpdatePanelTest {
         assertEquals(R.string.app_update_retry_manual, AppUpdatePanel.detail("retry", false, false, true));
     }
 
+    @Test public void serverTimeoutNeverClaimsAnInstalledUpdateFailed() {
+        assertEquals("check_failed", AppUpdates.failureState("checking"));
+        assertEquals("retry", AppUpdates.failureState("downloading"));
+        assertEquals(R.string.app_update_check_failed_title, AppUpdatePanel.headline("check_failed"));
+        assertEquals(R.string.app_update_check_failed_help,
+                AppUpdatePanel.detail("check_failed", true, false, true));
+        AppUpdates.prefs(context).edit().putString("state", "check_failed")
+                .putBoolean("update_unseen", true).putLong("target", BuildConfig.VERSION_CODE).commit();
+        assertTrue(AppUpdatePanel.banner(context).startsWith(
+                context.getString(R.string.app_update_success, BuildConfig.DISPLAY_VERSION)));
+    }
+
+    @Test public void sessionCleanupDoesNotEraseSuccessNotification() {
+        android.app.NotificationManager manager = (android.app.NotificationManager)
+                context.getSystemService(Context.NOTIFICATION_SERVICE);
+        AppUpdates.notice(context, R.string.app_update_reopen,
+                new android.content.Intent(context, MainActivity.class));
+        AppUpdates.cancelNotice(context);
+        assertNotNull(Shadows.shadowOf(manager).getNotification(AppUpdates.NOTICE + 1));
+        AppUpdates.acknowledgeReceipt(context);
+        assertNull(Shadows.shadowOf(manager).getNotification(AppUpdates.NOTICE + 1));
+    }
+
     @Test public void waitingReasonsPrioritizeAlarmsAndEditors() {
         assertEquals(R.string.app_update_wait_alarm, AppUpdatePanel.detail("ready", true, true, true));
         assertEquals(R.string.app_update_wait_home, AppUpdatePanel.detail("ready", true, false, false));

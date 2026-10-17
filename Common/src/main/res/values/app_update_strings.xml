@@ -48,5 +48,8 @@
     <string name="app_update_close">Close</string>
     <string name="app_update_success">Updated to %1$s</string>
     <string name="app_update_open_details">Update details →</string>
+    <string name="app_update_check_failed_title">Could not check for new versions</string>
+    <string name="app_update_check_failed_help">The release server could not be reached. Your current version is installed and ready to use. Check your connection and try again.</string>
+    <string name="app_update_success_help">The new version is running. Please check the sensor connection and alerts after the restart.</string>
 </resources>
 

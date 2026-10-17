@@ -48,4 +48,7 @@
     <string name="app_update_close">Закрыть</string>
     <string name="app_update_success">Обновлено до %1$s</string>
     <string name="app_update_open_details">Подробнее об обновлении →</string>
+    <string name="app_update_check_failed_title">Не удалось проверить новые версии</string>
+    <string name="app_update_check_failed_help">Сервер релизов не ответил. Текущая версия установлена и доступна для использования. Проверьте соединение и повторите проверку.</string>
+    <string name="app_update_success_help">Новая версия уже работает. Проверьте подключение сенсора и оповещения после перезапуска.</string>
 </resources>

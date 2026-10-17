@@ -15,7 +15,8 @@ public final class AppUpdateJobService extends JobService {
         AppUpdates.check(this, false, () -> {
             if (tasks.get(params.getJobId()) == cancelled) {
                 tasks.remove(params.getJobId());
-                jobFinished(params, "retry".equals(AppUpdates.prefs(this).getString("state", "")));
+                String state = AppUpdates.prefs(this).getString("state", "");
+                jobFinished(params, "retry".equals(state) || "check_failed".equals(state));
             }
         }, cancelled);
         return true;
