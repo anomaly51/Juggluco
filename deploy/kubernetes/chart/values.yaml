@@ -1,7 +1,7 @@
 replicas: 1
 image:
   repository: harbor.internal.api-api-api.com/applications/juggluco
-  tag: sha-cd936f888d3a
+  tag: sha-3fda2d38d466
   pullPolicy: IfNotPresent
 registry:
   server: harbor.internal.api-api-api.com
