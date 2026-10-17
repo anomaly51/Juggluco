@@ -72,6 +72,8 @@ CI initializes the pinned libjuice submodule and restores the 11 required arm64
 sensor binaries from the upstream 10.9.8 APK, as documented in the root README.
 Both the upstream APK and each sensor binary are SHA-256 pinned. The final APK
 is checked again for all 11 matching libraries and for absence of `testOnly`.
+The SDK license marker is copied from the already accepted local NDK 30 installation;
+CI does not automatically accept new agreements. The source archive includes libjuice.
 No paid services or cluster changes are required. This repo's latest release
 must remain the Android update channel; publish unrelated releases as non-latest.
 

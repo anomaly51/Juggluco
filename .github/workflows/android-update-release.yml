@@ -58,8 +58,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Transfer the license already accepted for this exact locally used NDK,
+          # as supported by SDK Manager. Do not blanket-accept future agreements.
+          mkdir -p "$ANDROID_HOME/licenses"
+          cp tools/android_updates/sdk-licenses/android-sdk-preview-license "$ANDROID_HOME/licenses/"
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-36" "build-tools;36.0.0" "ndk;30.0.14904198" "cmake;4.1.2"
+          test -f "$ANDROID_HOME/ndk/30.0.14904198/source.properties"
           # The upstream repo tracks a developer-local SDK path. Use the runner SDK.
           rm -f -- local.properties
       - name: Restore pinned upstream sensor libraries

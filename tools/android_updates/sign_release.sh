@@ -25,4 +25,8 @@ python tools/android_updates/release_manifest.py \
   --apksigner "$ANDROID_HOME/build-tools/36.0.0/apksigner" \
   --certificate "$CERT_SHA256" --tag "$RELEASE_TAG" \
   --out release/android-updates.json
-git archive --format=tar.gz --prefix=Juggluco/ HEAD > release/source.tar.gz
+git archive --format=tar --prefix=Juggluco/ HEAD > "$RUNNER_TEMP/juggluco-source.tar"
+git -C Common/src/main/cpp/libjuice archive --format=tar \
+  --prefix=Juggluco/Common/src/main/cpp/libjuice/ HEAD > "$RUNNER_TEMP/juggluco-libjuice.tar"
+tar --concatenate --file="$RUNNER_TEMP/juggluco-source.tar" "$RUNNER_TEMP/juggluco-libjuice.tar"
+gzip -c "$RUNNER_TEMP/juggluco-source.tar" > release/source.tar.gz
