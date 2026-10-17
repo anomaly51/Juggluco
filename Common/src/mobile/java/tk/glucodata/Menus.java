@@ -181,7 +181,10 @@ static public void show(MainActivity act) {
 	version.setText(AppUpdates.versionLabel());
 	version.setContentDescription(act.getString(R.string.app_update_version_accessibility,
 			BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE));
-	view.findViewById(R.id.modern_menu_updates).setOnClickListener(v -> AppUpdates.showSettings(act));
+	view.findViewById(R.id.modern_menu_updates).setOnClickListener(v ->
+			dismissMenu(act, view, view.findViewById(R.id.modern_menu_panel),
+					view.findViewById(R.id.modern_menu_backdrop), true, false,
+					() -> AppUpdates.showSettings(act)));
 	currentView=view;
 	view.setLayoutDirection(View.LAYOUT_DIRECTION_LOCALE);
 

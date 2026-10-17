@@ -19,9 +19,10 @@ public final class AppUpdateReceiver extends BroadcastReceiver {
                     Applic.possiblybluetooth(context);
                     NumAlarm.handlealarm((Applic) context.getApplicationContext());
                 } catch (Throwable error) {
-                    AppUpdates.notice(context, R.string.app_update_reopen,
-                            new Intent(context, MainActivity.class));
+                    // The reopen notification below remains available if service recovery fails.
                 }
+                AppUpdates.notice(context, R.string.app_update_reopen,
+                        new Intent(context, MainActivity.class));
             }
         }
     }

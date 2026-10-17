@@ -17,17 +17,23 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Bounded HTTPS transfers. No API tokens, cookies, redirects to arbitrary hosts or HTTP. */
 final class AppUpdateDownload {
     interface Connections { HttpURLConnection open(URL url) throws IOException; }
+    interface Progress { void onBytes(long downloaded, long total); }
     private final long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(8);
     private final AtomicBoolean cancelled;
     private final Connections connections;
+    private final Progress progress;
 
     AppUpdateDownload() { this(new AtomicBoolean()); }
     AppUpdateDownload(AtomicBoolean cancelled) {
         this(cancelled, url -> (HttpURLConnection) url.openConnection());
     }
     AppUpdateDownload(AtomicBoolean cancelled, Connections connections) {
+        this(cancelled, connections, (downloaded, total) -> {});
+    }
+    AppUpdateDownload(AtomicBoolean cancelled, Connections connections, Progress progress) {
         this.cancelled = cancelled;
         this.connections = connections;
+        this.progress = progress;
     }
 
     private void check() throws IOException {
@@ -88,6 +94,7 @@ final class AppUpdateDownload {
             if (item.isFile() && !item.equals(file)) item.delete();
         if (file.length() > release.size && !file.delete()) throw new IOException("Invalid cached APK");
         long offset = file.length();
+        progress.onBytes(offset, release.size);
         if (offset < release.size) {
             if (directory.getUsableSpace() < (release.size - offset) + release.size + 16L * 1024 * 1024)
                 throw new IOException("Not enough space for update");
@@ -102,6 +109,7 @@ final class AppUpdateDownload {
                 } else if (status == 200) offset = 0;
                 else throw new IOException("APK download unavailable");
                 long total = offset;
+                progress.onBytes(total, release.size);
                 try (InputStream input = connection.getInputStream();
                         FileOutputStream output = new FileOutputStream(file, append)) {
                     byte[] buffer = new byte[65536];
@@ -110,6 +118,7 @@ final class AppUpdateDownload {
                         total += n;
                         if (total > release.size) throw new IOException("APK exceeds declared size");
                         output.write(buffer, 0, n);
+                        progress.onBytes(total, release.size);
                     }
                     output.getFD().sync();
                 }

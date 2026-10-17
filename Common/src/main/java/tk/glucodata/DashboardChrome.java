@@ -112,6 +112,7 @@ final class DashboardChrome {
     private TextView heroFreshness;
     private TextView heroRangeState;
     private TextView targetRange;
+    private Button updateBanner;
 
     private Insets systemInsets = Insets.NONE;
     private boolean attached;
@@ -208,7 +209,12 @@ final class DashboardChrome {
                 .inflate(R.layout.modern_dashboard_chrome, null, false);
         graphHost = root.findViewById(R.id.modern_dashboard_graph_host);
         content = root.findViewById(R.id.modern_dashboard_content);
+        updateBanner = ClinicalUi.button(activity, "", ClinicalUi.ButtonRole.SECONDARY);
+        updateBanner.setTag("app_update_banner");
+        updateBanner.setVisibility(View.GONE);
+        updateBanner.setOnClickListener(v -> AppUpdates.showSettings(activity));
         body = root.findViewById(R.id.modern_dashboard_body);
+        body.addView(updateBanner, 0, new LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT));
         actions = root.findViewById(R.id.modern_dashboard_actions);
         heroCard = root.findViewById(R.id.modern_dashboard_hero);
         heroContent = root.findViewById(R.id.modern_dashboard_hero_content);
@@ -604,6 +610,11 @@ final class DashboardChrome {
     }
 
     private void refreshLivePresentation() {
+        if (updateBanner != null) {
+            String message = AppUpdatePanel.banner(activity);
+            if (!updateBanner.getText().toString().equals(message)) updateBanner.setText(message);
+            updateBanner.setVisibility(message.isEmpty() ? View.GONE : View.VISIBLE);
+        }
         if (root == null || graphPreviewEnabled) return;
         // Real readings already invalidate MainActivity immediately. The one-second
         // clock only advances visible timing; the slower refresh remains a fallback.

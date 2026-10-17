@@ -91,5 +91,24 @@ public class AppUpdateDownloadTest {
         Files.write(new File(directory,r.sha256+".apk").toPath(),content);
         assertArrayEquals(content,Files.readAllBytes(transfer().apk(r,directory).toPath()));
     }
+    @Test public void reportsResumedBytesAndCompletionIncludingCachedFile() throws Exception {
+        byte[] data = "a synthetic progress payload".getBytes(StandardCharsets.UTF_8);
+        AppUpdateRelease r = release(data);
+        File directory = temp.newFolder();
+        Files.write(new File(directory,r.sha256+".apk").toPath(),Arrays.copyOf(data,4));
+        Connection response = new Connection(206,Arrays.copyOfRange(data,4,data.length));
+        response.headers.put("Content-Range","bytes 4-"+(data.length-1)+"/"+data.length);
+        List<Long> progress = new ArrayList<>();
+        new AppUpdateDownload(new AtomicBoolean(), url -> response, (bytes,total) -> {
+            assertEquals(data.length,total);
+            progress.add(bytes);
+        }).apk(r,directory);
+        assertEquals(4L,(long)progress.get(0));
+        assertEquals(data.length,(long)progress.get(progress.size()-1));
+        progress.clear();
+        new AppUpdateDownload(new AtomicBoolean(), url -> { fail("Unexpected request"); return null; },
+                (bytes,total) -> progress.add(bytes)).apk(r,directory);
+        assertEquals(Arrays.asList((long)data.length),progress);
+    }
 }
 

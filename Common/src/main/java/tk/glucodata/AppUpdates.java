@@ -1,7 +1,6 @@
 package tk.glucodata;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.app.Application;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -42,6 +41,11 @@ public final class AppUpdates {
     private static boolean initialized;
     private static long lastForegroundCheck;
     private static boolean dialogShowing;
+    private static volatile boolean manualInstall;
+    private static volatile File preparedApk;
+    private static volatile AppUpdateRelease preparedRelease;
+    static volatile long downloadedBytes, totalBytes;
+    private static Runnable deferredInstall;
 
     private AppUpdates() {}
 
@@ -52,6 +56,18 @@ public final class AppUpdates {
     public static void initialize(Application app) {
         if (initialized || Applic.isWearable || Build.VERSION.SDK_INT < 21) return;
         initialized = true;
+        IO.execute(() -> {
+            try {
+                reconcile(app);
+                String previous = prefs(app).getString("state", "");
+                if ("checking".equals(previous) || "downloading".equals(previous)
+                        || "verifying".equals(previous) || "preparing".equals(previous)) {
+                    int session = prefs(app).getInt("session", -1);
+                    if (session >= 0) abandon(app, session);
+                    state(app, "retry");
+                }
+            } catch (Exception ignored) { state(app, "retry"); }
+        });
         schedule(app);
         app.registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
             @Override public void onActivityResumed(Activity activity) {
@@ -133,20 +149,36 @@ public final class AppUpdates {
                     abandon(app, pending);
                 }
                 if (!manual && System.currentTimeMillis() < prefs(app).getLong("retry_after", 0)) return;
+                preparedRelease = null;
+                preparedApk = null;
                 state(app, "checking");
-                AppUpdateDownload transfer = new AppUpdateDownload(cancelled);
+                downloadedBytes = totalBytes = 0;
+                AppUpdateDownload transfer = new AppUpdateDownload(cancelled,
+                        url -> (java.net.HttpURLConnection) url.openConnection(), (bytes, total) -> {
+                            downloadedBytes = bytes;
+                            totalBytes = total;
+                        });
                 String feed = transfer.manifest();
                 AppUpdateRelease release = feed == null ? null : AppUpdateRelease.select(feed,
                         app.getPackageName(), BuildConfig.FLAVOR, BuildConfig.BUILD_TYPE,
                         Build.SUPPORTED_ABIS, Build.VERSION.SDK_INT,
                         AppUpdateVerifier.version(AppUpdateVerifier.installed(app)));
-                if (release == null) { state(app, "current"); return; }
+                if (release == null) {
+                    preparedApk = null;
+                    preparedRelease = null;
+                    manualInstall = false;
+                    state(app, "current");
+                    return;
+                }
                 prefs(app).edit().putLong("target", release.versionCode)
                         .putString("target_name", release.versionName).apply();
                 state(app, "downloading");
                 File apk = transfer.apk(release, new File(app.getNoBackupFilesDir(), "app-updates"));
-                if (cancelled.get()) return;
+                if (cancelled.get()) { state(app, "retry"); return; }
+                state(app, "verifying");
                 AppUpdateVerifier.verify(app, apk, release);
+                preparedApk = apk;
+                preparedRelease = release;
                 if (!canInstall(app)) {
                     state(app, "permission");
                     permissionNotice(app);
@@ -156,6 +188,7 @@ public final class AppUpdates {
                 state(app, "ready");
                 next = () -> { if (!cancelled.get()) prepareInstall(app, apk, release); };
             } catch (Exception error) {
+                manualInstall = false;
                 state(app, "retry");
                 prefs(app).edit().putLong("retry_after",
                         System.currentTimeMillis() + 15L * 60 * 1000).apply();
@@ -188,24 +221,73 @@ public final class AppUpdates {
     static boolean safeSurface(Context context) {
         Activity activity = foreground.get();
         return activity instanceof MainActivity && !activity.isFinishing()
-                && MainActivity.onbacknr() == 0 && !dialogShowing && !alarmActive(context);
+                && MainActivity.onbacknr() == 0 && !Menus.isShowing() && (!dialogShowing || manualInstall)
+                && !alarmActive(context);
+    }
+
+    static boolean installAllowed(boolean automatic, boolean manual) {
+        return automatic || manual;
+    }
+
+    static boolean busy() { return BUSY.get(); }
+
+    static void setAutomatic(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean("enabled", enabled).apply();
+        schedule(context);
+        if (enabled) check(context, false, null);
+    }
+
+    /** Explicit install also works with automatic updates off; never bypasses an alarm/editor. */
+    static void installNow(Activity activity) {
+        if (busy() || alarmActive(activity) || MainActivity.onbacknr() != 0) return;
+        manualInstall = true;
+        String current = prefs(activity).getString("state", "");
+        if ("confirmation".equals(current)) {
+            // The OS-owned PendingIntent survives a process restart. The receiving
+            // Activity validates its nonce/session again before opening Android UI.
+            PendingIntent pending = PendingIntent.getActivity(activity, NOTICE,
+                    new Intent(activity, AppUpdateConfirmationActivity.class),
+                    PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_IMMUTABLE);
+            if (pending != null) {
+                try { pending.send(); return; }
+                catch (PendingIntent.CanceledException ignored) {}
+            }
+        }
+        if (preparedRelease != null && preparedApk != null
+                && prefs(activity).getInt("session", -1) < 0) {
+            prepareInstall(activity.getApplicationContext(), preparedApk, preparedRelease);
+        } else check(activity, true, null);
+    }
+
+    private static void deferInstall(Context context, File apk, AppUpdateRelease release) {
+        if (deferredInstall != null) MAIN.removeCallbacks(deferredInstall);
+        if (!(foreground.get() instanceof MainActivity)) return;
+        deferredInstall = () -> prepareInstall(context, apk, release);
+        MAIN.postDelayed(deferredInstall, 1000);
     }
 
     private static void prepareInstall(Context context, File apk, AppUpdateRelease release) {
-        if (!prefs(context).getBoolean("enabled", true)
+        if (preparedRelease != release) return; // A newer check superseded this deferred attempt.
+        if (!installAllowed(prefs(context).getBoolean("enabled", true), manualInstall)
                 || prefs(context).getInt("session", -1) >= 0) return;
+        if (!canInstall(context)) {
+            state(context, "permission");
+            permissionNotice(context);
+            return;
+        }
         if (!safeSurface(context)) {
             state(context, "ready");
             // More and the input editor share MainActivity; returning from them
             // does not trigger onResume. Poll only while that Activity is visible.
-            if (foreground.get() instanceof MainActivity)
-                MAIN.postDelayed(() -> prepareInstall(context, apk, release), 10000);
+            deferInstall(context, apk, release);
             return;
         }
         // Stage off the UI thread. Re-check alarm/editor state immediately before commit.
-        if (!BUSY.compareAndSet(false, true)) return;
+        if (!BUSY.compareAndSet(false, true)) { deferInstall(context, apk, release); return; }
+        state(context, "preparing");
         IO.execute(() -> {
             int id = -1;
+            boolean handedToMain = false;
             try {
                 AppUpdateVerifier.verify(context, apk, release);
                 PackageInstaller installer = context.getPackageManager().getPackageInstaller();
@@ -225,9 +307,11 @@ public final class AppUpdates {
                 int sessionId = id;
                 MAIN.post(() -> {
                     try {
-                        if (!prefs(context).getBoolean("enabled", true) || !safeSurface(context)) {
+                        if (!installAllowed(prefs(context).getBoolean("enabled", true), manualInstall)
+                                || !safeSurface(context)) {
                             abandon(context, sessionId);
                             state(context, "ready");
+                            deferInstall(context, apk, release);
                             return;
                         }
                         state(context, "installing");
@@ -241,14 +325,17 @@ public final class AppUpdates {
                             session.commit(callback.getIntentSender());
                         }
                     } catch (Exception error) {
+                        manualInstall = false;
                         abandon(context, sessionId);
                         state(context, "retry");
-                    }
+                    } finally { BUSY.set(false); }
                 });
+                handedToMain = true;
             } catch (Exception error) {
+                manualInstall = false;
                 if (id >= 0) abandon(context, id);
                 state(context, "retry");
-            } finally { BUSY.set(false); }
+            } finally { if (!handedToMain) BUSY.set(false); }
         });
     }
 
@@ -279,6 +366,7 @@ public final class AppUpdates {
     static void reconcile(Context context) throws Exception {
         SharedPreferences prefs = prefs(context);
         long installed = AppUpdateVerifier.version(AppUpdateVerifier.installed(context));
+        recordInstalledVersion(context, installed);
         int session = prefs.getInt("session", -1);
         if (session < 0) return;
         if (installed >= prefs.getLong("target", Long.MAX_VALUE)) {
@@ -294,6 +382,18 @@ public final class AppUpdates {
             abandon(context, session);
             state(context, "retry");
         }
+    }
+
+    /** A receipt means the installed package changed, not merely that an APK downloaded. */
+    static void recordInstalledVersion(Context context, long installed) {
+        SharedPreferences p = prefs(context);
+        long previous = p.getLong("observed_version", installed);
+        boolean legacyPending = !p.contains("observed_version") && p.getInt("session", -1) >= 0
+                && installed >= p.getLong("target", Long.MAX_VALUE);
+        SharedPreferences.Editor edit = p.edit().putLong("observed_version", installed);
+        if (installed > previous || legacyPending)
+            edit.putLong("updated_version", installed).putBoolean("update_unseen", true);
+        edit.apply();
     }
 
     static boolean validCallback(Context context, Intent intent) {
@@ -320,6 +420,12 @@ public final class AppUpdates {
             notice(context, R.string.app_update_confirm, launch);
             if (safeSurface(context)) context.startActivity(launch);
         } else {
+            manualInstall = false;
+            if (status == PackageInstaller.STATUS_SUCCESS) {
+                try { recordInstalledVersion(context,
+                        AppUpdateVerifier.version(AppUpdateVerifier.installed(context))); }
+                catch (Exception ignored) {}
+            }
             abandon(context, session);
             state(context, status == PackageInstaller.STATUS_SUCCESS ? "current" : "retry");
             if (status != PackageInstaller.STATUS_SUCCESS) prefs(context).edit()
@@ -369,6 +475,8 @@ public final class AppUpdates {
         switch (state) {
             case "checking": return R.string.app_update_checking;
             case "downloading": return R.string.app_update_downloading;
+            case "verifying": return R.string.app_update_verifying;
+            case "preparing": return R.string.app_update_preparing;
             case "ready": return R.string.app_update_ready;
             case "permission": return R.string.app_update_permission;
             case "confirmation": return R.string.app_update_confirm;
@@ -381,34 +489,12 @@ public final class AppUpdates {
 
     public static void showSettings(Activity activity) {
         if (activity == null || activity.isFinishing() || dialogShowing) return;
-        boolean enabled = prefs(activity).getBoolean("enabled", true);
-        String text = BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")\n\n"
-                + activity.getString(enabled ? R.string.app_update_automatic_description
-                : R.string.app_update_paused) + "\n\n"
-                + activity.getString(statusText(prefs(activity).getString("state", "")));
-        try {
-            if (!AppUpdateVerifier.privateSigningIdentity(AppUpdateVerifier.installed(activity)))
-                text += "\n\n" + activity.getString(R.string.app_update_test_signing);
-        } catch (Exception ignored) {}
         dialogShowing = true;
-        AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setTitle(R.string.app_update_title).setMessage(text)
-                .setPositiveButton(canInstall(activity) ? R.string.app_update_check : R.string.app_update_allow,
-                        (d, which) -> {
-                            if (!canInstall(activity) && Build.VERSION.SDK_INT >= 26) {
-                                activity.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                        Uri.parse("package:" + activity.getPackageName())));
-                            } else check(activity, true, null);
-                        })
-                .setNeutralButton(enabled ? R.string.app_update_pause : R.string.app_update_enable,
-                        (d, which) -> {
-                            prefs(activity).edit().putBoolean("enabled", !enabled).apply();
-                            schedule(activity);
-                            if (!enabled) check(activity, true, null);
-                        })
-                .setNegativeButton(android.R.string.cancel, null).create();
-        dialog.setOnDismissListener(d -> dialogShowing = false);
-        dialog.show();
+        AppUpdatePanel.show(activity, () -> {
+            dialogShowing = false;
+            if (preparedApk != null && preparedRelease != null)
+                prepareInstall(activity.getApplicationContext(), preparedApk, preparedRelease);
+        });
     }
 
     // Avoid loading a newer API constant from code paths on API 21.
