@@ -247,8 +247,9 @@ private static void setlanguage() {
 
 @Override
 public void onConfigurationChanged(@NonNull Configuration newConfig) {
+   AppLanguage.refreshFromPlatform(this);
    super.onConfigurationChanged(AppLanguage.configuration(newConfig));
-   AppLanguage.install(this);
+   AppLanguage.apply(this);
    if(Nativesloaded)  {
         needsnatives();
 

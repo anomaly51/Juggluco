@@ -491,8 +491,37 @@ private void setBackPress() {
         }
     @Override
     protected void attachBaseContext(android.content.Context base) {
+        android.content.Context localized = AppLanguage.wrap(base);
         AppLanguage.beforeActivityAttach();
-        super.attachBaseContext(AppLanguage.wrap(base));
+        super.attachBaseContext(localized);
+    }
+
+    private String displayedLanguage;
+    private boolean recreatingForLanguage;
+    private boolean reopenSettingsAfterLanguageChange;
+    private static final String RESTORE_LANGUAGE_SETTINGS = "restore_language_settings";
+
+    public void changeAppLanguage(String language) {
+        if (AppLanguage.language().equals(language)) return;
+        recreateForAppLanguage();
+        AppLanguage.select(this, language);
+    }
+
+    private void recreateForAppLanguage() {
+        if (recreatingForLanguage || isFinishing()) return;
+        recreatingForLanguage = true;
+        reopenSettingsAfterLanguageChange = tk.glucodata.settings.Settings.isShowing();
+        // Finish pending settings edits through their normal save callbacks.
+        // Only the activity is recreated: the sensor and alarm services keep running.
+        drainBackStackForConfiguration();
+        Menus.cancelReturnToMenu();
+        getWindow().getDecorView().post(this::recreate);
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle state) {
+        state.putBoolean(RESTORE_LANGUAGE_SETTINGS, reopenSettingsAfterLanguageChange);
+        super.onSaveInstanceState(state);
     }
 
     @Override
@@ -507,6 +536,7 @@ private void setBackPress() {
            Specific.splash(this);
          }
         super.onCreate(savedInstanceState);
+        displayedLanguage = AppLanguage.language();
         setBackPress();
 
 
@@ -554,6 +584,12 @@ private void setBackPress() {
       Natives.onCreate();
       if(Menus.on)
            Menus.show(this);
+      if(savedInstanceState!=null
+              &&savedInstanceState.getBoolean(RESTORE_LANGUAGE_SETTINGS,false)) {
+           getWindow().getDecorView().post(()-> {
+               if(!isFinishing()&&!isDestroyed()) tk.glucodata.settings.Settings.set(this);
+               });
+           }
 
 //        var gestureListener= new Layout.ScrollListener(); mGestureDetector = new GestureDetector(this, gestureListener);
        if(doLog) {Log.i(LOG_ID,"onCreate end");};
@@ -1148,9 +1184,14 @@ void removeconfig() {
     }
 @Override
 public void onConfigurationChanged(Configuration newConfig) {
+    AppLanguage.refreshFromPlatform(this);
     newConfig = AppLanguage.configuration(newConfig);
     super.onConfigurationChanged(newConfig);
     AppLanguage.apply(this);
+    if(displayedLanguage!=null&&!displayedLanguage.equals(AppLanguage.language())) {
+        recreateForAppLanguage();
+        return;
+        }
     if(doLog) {Log.i(LOG_ID,"onConfigurationChanged height=" +newConfig.screenHeightDp+" width=" +newConfig.screenWidthDp + " sw="+newConfig.smallestScreenWidthDp);};
    boolean keepIntake=intakeComposer!=null&&intakeComposer.isShowing();
    boolean keepEventDetails=intakeEventDetailsSheet!=null

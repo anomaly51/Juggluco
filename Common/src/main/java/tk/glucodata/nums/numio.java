@@ -94,7 +94,7 @@ static public boolean setlibrary(Applic con) {
 if(true) {
    var loc=tk.glucodata.AppLanguage.deviceLocale();
    String country=loc.getCountry();
-   var locstr=tk.glucodata.AppLanguage.LOCALE.getLanguage();
+   var locstr=tk.glucodata.AppLanguage.language();
    Applic.curlang=locstr;
    File files=con.getFilesDir();
    String filespath=files.getAbsolutePath();

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_update_title">Обновления приложения</string>
+    <string name="app_update_footer">Обновления</string>
+    <string name="app_update_automatic_description">Обновления загружаются автоматически при подключении к интернету. Установка начинается на главном экране, если нет активных тревог. Android может ненадолго перезапустить приложение или запросить подтверждение.</string>
+    <string name="app_update_check">Проверить</string>
+    <string name="app_update_allow">Разрешить обновления</string>
+    <string name="app_update_pause">Приостановить автообновления</string>
+    <string name="app_update_paused">Автоматическая загрузка и установка приостановлены. Новую версию по-прежнему можно проверить вручную.</string>
+    <string name="app_update_enable">Включить автообновления</string>
+    <string name="app_update_checking">Проверка обновлений…</string>
+    <string name="app_update_downloading">Загрузка обновления…</string>
+    <string name="app_update_ready">Обновление готово. Вернитесь на главный экран, когда завершите текущую задачу или отключите активную тревогу.</string>
+    <string name="app_update_permission">Разрешите этому приложению устанавливать обновления в настройках Android.</string>
+    <string name="app_update_confirm">Android запрашивает подтверждение. Нажмите, чтобы завершить обновление, или повторите через Ещё → Обновления.</string>
+    <string name="app_update_installing">Установка обновления…</string>
+    <string name="app_update_current">Более новой совместимой версии пока нет.</string>
+    <string name="app_update_retry">Обновление не завершено. Установленная версия не изменилась; попытка повторится позже.</string>
+    <string name="app_update_test_signing">Эта сборка подписана общим тестовым ключом. Обновления требуют подтверждения. Установка без участия пользователя доступна только сборкам с личным ключом подписи.</string>
+    <string name="app_update_reopen">Обновление установлено. Откройте приложение, чтобы проверить подключение сенсора и оповещения.</string>
+    <string name="app_update_version_accessibility">Версия приложения %1$s, сборка %2$d</string>
+</resources>

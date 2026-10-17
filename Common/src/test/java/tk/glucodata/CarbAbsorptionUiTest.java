@@ -55,13 +55,13 @@ public class CarbAbsorptionUiTest {
     }
 
     @Test
-    public void formatterStaysEnglishOnRussianDeviceAndNeverInventsMissingEvidence() {
+    public void formatterUsesSelectedLanguageAndNeverInventsMissingEvidence() {
         Context english = localized(Locale.ENGLISH);
         Context russian = localized(Locale.forLanguageTag("ru"));
 
         assertEquals("Fast \u00b7 78/100",
                 CarbAbsorptionUi.compact(english, 0.78f));
-        assertEquals("Fast \u00b7 78/100",
+        assertEquals("Быстро \u00b7 78/100",
                 CarbAbsorptionUi.compact(russian, 0.78f));
         assertEquals("Not estimated",
                 CarbAbsorptionUi.compact(english, null));

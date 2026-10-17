@@ -1319,13 +1319,15 @@ static public Spinner getGenSpin(Activity context) {
      return spin;
      }
 
-/** The interface language is fixed; this value is information, not a picker. */
+/** The same picker is available in the legacy display settings and the phone hub. */
 private static TextView languageDisplay(MainActivity context) {
-    TextView language=ClinicalUi.body(context,"English");
+    Button language=clinicalHeaderButton(context,R.string.app_language_title);
+    language.setText(tk.glucodata.AppLanguagePicker.selectedLabel());
     language.setMinimumHeight(ClinicalUi.dp(context,48));
     language.setGravity(Gravity.CENTER_VERTICAL);
-    language.setClickable(false);
-    language.setFocusable(false);
+    language.setContentDescription(context.getString(R.string.app_language_title)
+            +": "+tk.glucodata.AppLanguagePicker.selectedLabel());
+    language.setOnClickListener(view->tk.glucodata.AppLanguagePicker.show(context));
     return language;
     }
 static void mkrangelabel(TextView view,int res,float low, float high) {
@@ -2548,6 +2550,11 @@ private    void mksettings(MainActivity context) {
         phoneSettingsLayout.addView(ClinicalUi.card(context,glucoseEntry,
                 alertsEntry,connectionsEntry,dataEntry,behaviorEntry,
                 advancedEntry));
+        LinearLayout languageEntry=ClinicalUi.actionRow(context,
+                context.getString(R.string.app_language_title),
+                tk.glucodata.AppLanguagePicker.selectedLabel());
+        languageEntry.setOnClickListener(view->tk.glucodata.AppLanguagePicker.show(context));
+        phoneSettingsLayout.addView(ClinicalUi.card(context,languageEntry));
 
         final LinearLayout settingsHub=phoneSettingsLayout;
         LinearLayout unitRow=phoneSettingsUnitRow(context,unitLabel,mmolL,mgdl);

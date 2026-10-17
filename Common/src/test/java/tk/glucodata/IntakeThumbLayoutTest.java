@@ -270,8 +270,7 @@ public class IntakeThumbLayoutTest {
     }
 
     private static void renderRussianEmpty() throws Exception {
-        // Russian system configuration still renders the app's fixed English UI.
-        Context context = AppLanguage.wrap(context(360, 900, 1f, "ru"));
+        Context context = context(360, 900, 1f, "ru");
         ViewGroup root = (ViewGroup) LayoutInflater.from(context).inflate(
                 R.layout.modern_meal_chat, null, false);
         root.setPadding(0, 24, 0, 20);

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="theme">Тема</string>
+    <string name="alarm">Будильник</string>
+    <string name="media">Медиа</string>
+    <string name="notification">Уведомление</string>
+    <string name="alarmis">Тревога:</string>
+    <string name="deletemeter">Удалить информацию о глюкометре. Измерения сохранятся.</string>
+</resources>

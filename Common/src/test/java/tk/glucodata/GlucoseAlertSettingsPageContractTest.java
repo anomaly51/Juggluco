@@ -161,10 +161,10 @@ public class GlucoseAlertSettingsPageContractTest {
                 context.getResources().getConfiguration());
         russian.setLocale(Locale.forLanguageTag("ru"));
         Context ru = context.createConfigurationContext(russian);
-        // The app deliberately stays English even when the device locale is Russian.
-        assertEquals(context.getString(R.string.critical_alarm_sound_picker_intro),
+        // Both language packs ship; preview behavior remains independent of language.
+        org.junit.Assert.assertNotEquals(context.getString(R.string.critical_alarm_sound_picker_intro),
                 ru.getString(R.string.critical_alarm_sound_picker_intro));
-        assertEquals(context.getString(R.string.critical_alarm_sound_preview_accessibility),
+        org.junit.Assert.assertNotEquals(context.getString(R.string.critical_alarm_sound_preview_accessibility),
                 ru.getString(R.string.critical_alarm_sound_preview_accessibility));
     }
 

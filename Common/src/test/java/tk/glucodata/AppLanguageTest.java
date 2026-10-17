@@ -3,6 +3,8 @@ package tk.glucodata;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import android.app.Application;
 import android.app.LocaleManager;
@@ -33,7 +35,7 @@ import org.robolectric.shadows.ShadowLocaleManager;
 import java.util.Locale;
 import java.util.TimeZone;
 
-/** English-only presentation checks with a synthetic app, never live sensor data. */
+/** Presentation-only checks with a synthetic app, never live sensor data. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, application = Application.class)
 public class AppLanguageTest {
@@ -52,6 +54,7 @@ public class AppLanguageTest {
         if (Build.VERSION.SDK_INT >= 24) previousLocales = LocaleList.getDefault();
         previousTimeZone = TimeZone.getDefault();
         previousSystemConfiguration = new Configuration(Resources.getSystem().getConfiguration());
+        AppLanguage.select(RuntimeEnvironment.getApplication(), "en");
     }
 
     @After
@@ -77,7 +80,7 @@ public class AppLanguageTest {
         assertNotSame(source, english);
         assertEquals(original, source);
         assertEnglish(english);
-        assertEquals(Locale.ENGLISH, AppLanguage.LOCALE);
+        assertEquals("en", AppLanguage.language());
         assertDisplayConfigurationPreserved(source, english);
     }
 
@@ -160,7 +163,7 @@ public class AppLanguageTest {
         Application app = RuntimeEnvironment.getApplication();
         LocaleManager manager = app.getSystemService(LocaleManager.class);
         assertNotNull(manager);
-        manager.setApplicationLocales(LocaleList.forLanguageTags("ru-RU"));
+        manager.setApplicationLocales(LocaleList.getEmptyLocaleList());
 
         AppLanguage.install(app);
 
@@ -180,7 +183,7 @@ public class AppLanguageTest {
                 app.getResources().getDisplayMetrics());
         IndependentSystemLocaleManager.systemLocales = LocaleList.forLanguageTags("uk-UA");
         LocaleManager manager = app.getSystemService(LocaleManager.class);
-        manager.setApplicationLocales(LocaleList.forLanguageTags("ru-RU"));
+        manager.setApplicationLocales(LocaleList.forLanguageTags("en-RU"));
         assertEquals("ru-RU", Resources.getSystem().getConfiguration().getLocales().toLanguageTags());
         assertEquals("uk-UA", manager.getSystemLocales().toLanguageTags());
 
@@ -228,6 +231,138 @@ public class AppLanguageTest {
         assertEquals(original, source);
         assertDisplayConfigurationPreserved(source, english);
         assertLabels(wrapped);
+    }
+
+    @Test
+    public void russianChoiceUpdatesSettingsChatAlarmAndUpdateResources() {
+        setSystemLocale("uk-UA");
+        Application app = RuntimeEnvironment.getApplication();
+        AppLanguage.select(app, "ru");
+        Context russian = AppLanguage.wrap(app);
+        assertEquals("ru-UA", russian.getResources().getConfiguration()
+                .getLocales().get(0).toLanguageTag());
+        assertEquals("ru-UA", app.getSystemService(LocaleManager.class)
+                .getApplicationLocales().toLanguageTags());
+        assertEquals("Настройки", russian.getString(R.string.settings));
+        assertEquals("ДОБАВИТЬ ЗАПИСЬ", russian.getString(R.string.intake_thumb_title));
+        assertEquals("Низкий сахар", app.getString(R.string.critical_alarm_banner_low));
+        assertEquals("Высокий сахар", app.getString(R.string.critical_alarm_banner_high));
+        assertEquals("Обновления", app.getString(R.string.app_update_footer));
+        assertEquals("ru", app.getSharedPreferences(AppLanguage.PREFERENCES, 0)
+                .getString("language", ""));
+        AppLanguage.install(app);
+        assertEquals("ru", AppLanguage.language());
+        AppLanguage.select(app, "en");
+        assertLabels(AppLanguage.wrap(app));
+    }
+
+    @Test
+    public void systemAppLanguageChangeIsRespectedAndResetReturnsEnglish() {
+        Application app = RuntimeEnvironment.getApplication();
+        LocaleManager manager = app.getSystemService(LocaleManager.class);
+        manager.setApplicationLocales(LocaleList.forLanguageTags("ru"));
+        AppLanguage.refreshFromPlatform(app);
+        AppLanguage.apply(app);
+        assertEquals("ru", AppLanguage.language());
+        assertEquals("Настройки", app.getString(R.string.settings));
+        manager.setApplicationLocales(LocaleList.getEmptyLocaleList());
+        AppLanguage.refreshFromPlatform(app);
+        AppLanguage.apply(app);
+        assertLabels(app);
+    }
+
+    @Test
+    @Config(sdk = 28, application = Application.class)
+    public void legacyChoiceIsRestoredFromPreferencesOnAttach() {
+        Context app = RuntimeEnvironment.getApplication();
+        app.getSharedPreferences(AppLanguage.PREFERENCES, 0).edit()
+                .putString("language", "ru").commit();
+        Context localized = AppLanguage.wrap(app);
+        AppLanguage.beforeActivityAttach();
+        assertEquals("ru", AppCompatDelegate.getApplicationLocales().get(0).getLanguage());
+        assertEquals("Настройки", localized.getString(R.string.settings));
+        assertEquals(View.LAYOUT_DIRECTION_LTR,
+                localized.getResources().getConfiguration().getLayoutDirection());
+    }
+
+    @Test
+    @Config(sdk = 23, application = Application.class)
+    public void legacyApiCanSwitchBothWaysWithoutChangingRegionOrTimeZone() {
+        setSystemLocale("uk-UA");
+        TimeZone zone = TimeZone.getTimeZone("Europe/Kiev");
+        TimeZone.setDefault(zone);
+        Context app = RuntimeEnvironment.getApplication();
+        AppLanguage.select(app, "ru");
+        assertEquals("ru-UA", AppLanguage.wrap(app).getResources()
+                .getConfiguration().locale.toLanguageTag());
+        assertEquals(zone, TimeZone.getDefault());
+        assertEquals("UA", AppLanguage.deviceLocale().getCountry());
+        AppLanguage.select(app, "en");
+        assertLabels(AppLanguage.wrap(app));
+    }
+
+    @Test
+    public void unsupportedLanguageCannotChangeStoredChoice() {
+        Context app = RuntimeEnvironment.getApplication();
+        try {
+            AppLanguage.select(app, "de");
+            fail("Only the two published UI languages are selectable");
+        } catch (IllegalArgumentException expected) {
+            assertEquals("en", AppLanguage.language());
+            assertEquals("en", app.getSharedPreferences(AppLanguage.PREFERENCES, 0)
+                    .getString("language", ""));
+        }
+    }
+
+    @Test
+    public void nativePickerKeepsBothSelfNamesAndDoesNotChangeLanguageOnCancel() {
+        Context app = RuntimeEnvironment.getApplication();
+        Context themed = new ContextThemeWrapper(app, R.style.AppTheme_ClinicalDark);
+        java.util.ArrayList<String> selected = new java.util.ArrayList<>();
+        androidx.appcompat.app.AlertDialog dialog = AppLanguagePicker.create(themed, selected::add);
+        dialog.show();
+        android.widget.ListView list = dialog.getListView();
+        assertEquals(2, list.getCount());
+        assertEquals("English", list.getAdapter().getItem(0));
+        assertEquals("Русский", list.getAdapter().getItem(1));
+        assertEquals(0, list.getCheckedItemPosition());
+        list.performItemClick(null, 1, list.getAdapter().getItemId(1));
+        assertEquals(java.util.Collections.singletonList("ru"), selected);
+        assertTrue(!dialog.isShowing());
+        selected.clear();
+        dialog = AppLanguagePicker.create(themed, selected::add);
+        dialog.show();
+        dialog.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick();
+        assertTrue(selected.isEmpty());
+    }
+
+    @Test
+    public void pickerOptionsStayReadableAndTouchSizedOnPhoneFoldAndLargeText() {
+        for (int width : new int[]{320, 375, 800}) {
+            for (float scale : new float[]{1f, 2f}) {
+                Configuration config = new Configuration(RuntimeEnvironment.getApplication()
+                        .getResources().getConfiguration());
+                config.fontScale = scale;
+                config.densityDpi = 160;
+                config.screenWidthDp = width;
+                config.screenHeightDp = width == 800 ? 375 : 812;
+                Context context = new ContextThemeWrapper(RuntimeEnvironment.getApplication()
+                        .createConfigurationContext(config), R.style.AppTheme_ClinicalDark);
+                androidx.appcompat.app.AlertDialog dialog = AppLanguagePicker.create(context, ignored -> {});
+                dialog.show();
+                android.widget.ListView list = dialog.getListView();
+                for (int i = 0; i < 2; i++) {
+                    TextView option = (TextView) list.getAdapter().getView(i, null, list);
+                    option.measure(View.MeasureSpec.makeMeasureSpec(Math.min(width, 560) - 48,
+                                    View.MeasureSpec.EXACTLY),
+                            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+                    option.layout(0, 0, option.getMeasuredWidth(), option.getMeasuredHeight());
+                    assertTrue(option.getMeasuredHeight() >= 48);
+                    assertEquals(0, option.getLayout().getEllipsisCount(0));
+                }
+                dialog.dismiss();
+            }
+        }
     }
 
     private static Context foreignContext(String language) {
