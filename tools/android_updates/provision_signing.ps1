@@ -53,7 +53,7 @@ try {
         & "$BuildTools\apksigner.bat" rotate --out $lineage `
             --old-signer --ks "$repoRoot\Common\everyone.keystore" --ks-key-alias thealias `
             --ks-pass env:JUGGLUCO_LEGACY_PASSWORD --key-pass env:JUGGLUCO_LEGACY_PASSWORD `
-            --set-installed-data true --set-shared-uid false --set-permission false `
+            --set-installed-data true --set-shared-uid false --set-permission true `
             --set-rollback false --set-auth false `
             --new-signer --ks $key --ks-key-alias release `
             --ks-pass env:JUGGLUCO_SIGNING_PASSWORD --key-pass env:JUGGLUCO_SIGNING_PASSWORD

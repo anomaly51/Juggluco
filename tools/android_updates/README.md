@@ -49,8 +49,10 @@ fingerprint, 64 hex characters). CI validates the APK against this expected
 identity before publication and never silently publishes its default build key.
 The current release identity is pinned in AppUpdateVerifier.RELEASE_CERT. Android
 13+ receives that private identity through a v3.1 proof-of-rotation from the old
-Everyone key. Installed-data capability is retained; rollback, shared UID,
-signature permission and authenticator trust for the old key are disabled.
+Everyone key. Installed-data and permission capabilities are retained: Android
+requires the latter to transfer ownership of AndroidX's existing private receiver
+permission during the upgrade. Rollback, shared UID and authenticator trust for
+the old key are disabled. Android 13+ uses native NOT_EXPORTED receiver protection.
 Android 12L and older retain the legacy signer and require OS confirmation.
 The verifier only accepts the explicitly pinned successor, not any new key that
 could have been authorized using the publicly available Everyone key.
