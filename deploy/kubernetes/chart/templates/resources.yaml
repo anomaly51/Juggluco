@@ -111,6 +111,14 @@ spec:
               value: "1"
             - name: JUGGLUCO_DATABASE_PATH
               value: {{ .Values.config.databasePath | quote }}
+            - name: JUGGLUCO_PERSONAL_CONNECTIONS
+              value: {{ .Values.config.personalConnections | quote }}
+            - name: JUGGLUCO_CONNECTION_REGISTRATION_LIMIT
+              value: {{ .Values.config.connectionRegistrationLimit | quote }}
+            - name: JUGGLUCO_CONNECTION_RUNTIME_LIMIT
+              value: {{ .Values.config.connectionRuntimeLimit | quote }}
+            - name: JUGGLUCO_CONNECTION_AI_DAILY_LIMIT
+              value: {{ .Values.config.connectionAiDailyLimit | quote }}
             - name: JUGGLUCO_ALLOWED_HOSTS
               value: {{ .Values.route.hostname | quote }}
             - name: JUGGLUCO_VIEWER_PUBLIC
