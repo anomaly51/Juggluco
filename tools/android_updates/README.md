@@ -68,6 +68,10 @@ Push an immutable tag android-v<versionCode>, e.g. android-v901, from the review
 source commit. Version codes must increase, be >=900 and <=2100000000.
 The workflow tests, builds, signs and publishes APK + metadata + matching source
 archive. A draft release is made public only after all assets are uploaded.
+CI initializes the pinned libjuice submodule and restores the 11 required arm64
+sensor binaries from the upstream 10.9.8 APK, as documented in the root README.
+Both the upstream APK and each sensor binary are SHA-256 pinned. The final APK
+is checked again for all 11 matching libraries and for absence of `testOnly`.
 No paid services or cluster changes are required. This repo's latest release
 must remain the Android update channel; publish unrelated releases as non-latest.
 

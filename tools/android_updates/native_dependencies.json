@@ -1,0 +1,46 @@
+{
+  "libinit.so": {
+    "destination": "Common/src/libre3/jniLibs/arm64-v8a/libinit.so",
+    "sha256": "0d1b9696af9c52781df8f7d7ec16584e74ac3aaf41abcd337b6a606eef2c07d1"
+  },
+  "liblibre3extension.so": {
+    "destination": "Common/src/libre3/jniLibs/arm64-v8a/liblibre3extension.so",
+    "sha256": "1e1c6ef4a723fcde932f2cff36cdc3461cb946b4e0892a075634e0fcd8119dac"
+  },
+  "libcalibrat2.so": {
+    "destination": "Common/src/main/jniLibs/arm64-v8a/libcalibrat2.so",
+    "sha256": "c15a1efa60a7d2b17ac6cab8e3efffbcb5d6d4e5c8085e68d5812c3d4bf49a93"
+  },
+  "libCALCULATION.so": {
+    "destination": "Common/src/mobileSi/jniLibs/arm64-v8a/libCALCULATION.so",
+    "sha256": "0bc4e28b98b8ba4e9ea47db0f4cf413febf596eb94bfe87162432031cd02d4cf"
+  },
+  "libnative-algorithm-jni-v115G.so": {
+    "destination": "Common/src/mobileSi/jniLibs/arm64-v8a/libnative-algorithm-jni-v115G.so",
+    "sha256": "1f0fb8edb963bd5b41bcdd48237930c9c391f9bace36b94a7f35cb81af524986"
+  },
+  "libnative-algorithm-jni-v116A.so": {
+    "destination": "Common/src/mobileSi/jniLibs/arm64-v8a/libnative-algorithm-jni-v116A.so",
+    "sha256": "508af7482efda15d9842d9b193e8eb95f7bee6c967a647a4b6f8b5163271e495"
+  },
+  "libnative-algorithm-v1_1_5G.so": {
+    "destination": "Common/src/mobileSi/jniLibs/arm64-v8a/libnative-algorithm-v1_1_5G.so",
+    "sha256": "3df46f71611b0cb590ca97bdb3424ae9e20a57cad058afa632aec4e1d54cf488"
+  },
+  "libnative-algorithm-v1_1_6A.so": {
+    "destination": "Common/src/mobileSi/jniLibs/arm64-v8a/libnative-algorithm-v1_1_6A.so",
+    "sha256": "3eb160078da015190eaf7e70c775d197082c70c55644b78deb1da2f82d75016b"
+  },
+  "libnative-encrypy-decrypt-v110.so": {
+    "destination": "Common/src/mobileSi/jniLibs/arm64-v8a/libnative-encrypy-decrypt-v110.so",
+    "sha256": "3a35e64dbf78f0bc960d8ed5d984a06be8eecdd187db1b0ca37fd20df4cd0d6b"
+  },
+  "libnative-sensitivity-v110.so": {
+    "destination": "Common/src/mobileSi/jniLibs/arm64-v8a/libnative-sensitivity-v110.so",
+    "sha256": "57b19da9c4fd04373780be22aa11861e7d2d799f17bfca2b6f17c0acb54737b2"
+  },
+  "libnative-struct2json.so": {
+    "destination": "Common/src/mobileSi/jniLibs/arm64-v8a/libnative-struct2json.so",
+    "sha256": "170c23fcc1d2df2b809bf7f685dc0207ca98fb0aea81c3942db1d8ab3f6efccb"
+  }
+}

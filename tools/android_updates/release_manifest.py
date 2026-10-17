@@ -8,6 +8,7 @@ import re
 import subprocess
 import zipfile
 from pathlib import Path
+from native_dependencies import verified_libraries
 
 REPOSITORY = "anomaly51/Juggluco"
 MAX_APK_BYTES = 200 * 1024 * 1024
@@ -93,6 +94,7 @@ def main() -> None:
     manifest_xml = subprocess.check_output(
         [args.aapt, "dump", "xmltree", str(args.apk), "AndroidManifest.xml"], text=True)
     validate_installable(manifest_xml)
+    verified_libraries(args.apk)
     certs = subprocess.check_output([args.apksigner, "verify", "--print-certs", str(args.apk)], text=True)
     result = metadata(badging, certs, args.certificate, args.apk, args.tag)
     args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
