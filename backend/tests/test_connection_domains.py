@@ -5,6 +5,7 @@ import re
 import secrets
 import sqlite3
 import time
+from types import SimpleNamespace
 from uuid import uuid4
 from urllib.parse import urlparse
 
@@ -341,7 +342,14 @@ def test_readiness_probe_requires_matching_host_and_valid_success():
                                   (200, {'ready': True, 'host': 'other.example.com'}, False),
                                   (503, {'ready': True, 'host': host}, False)]:
         with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(status, json=body))) as client:
-            assert public_ready(client, host) is expected
+            assert public_ready(client, host, SimpleNamespace(ready=lambda _: True)) is expected
+
+
+def test_unpublished_name_never_reaches_recursive_https_lookup():
+    def forbidden(request):
+        pytest.fail('HTTPS must wait for authoritative publication')
+    with httpx.Client(transport=httpx.MockTransport(forbidden)) as client:
+        assert not public_ready(client, 'user-abcde.example.com', SimpleNamespace(ready=lambda _: False))
 
 
 def test_personal_dns_chart_limits_token_and_storage_to_sidecar():

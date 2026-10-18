@@ -17,6 +17,7 @@ from pathlib import Path
 import httpx
 
 from .connection_domains import DOMAIN, allowed_viewer_label
+from .connection_dns_publication import DnsPublication
 
 OWNER_KEY = 'juggluco.app/managed-by'
 OWNER_VALUE = 'personal-dns'
@@ -94,7 +95,11 @@ def reconcile(api, desired):
             api.delete(previous)
 
 
-def public_ready(client, hostname):
+def public_ready(client, hostname, publication):
+    # ExternalDNS reconciles asynchronously. Do not ask recursive DNS about a
+    # new name until its authoritative records exist (NXDOMAIN can last 30m).
+    if not publication.ready(hostname):
+        return False
     try:
         response = client.get('https://' + hostname + '/v1/viewer/ready')
         body = response.json()
@@ -125,6 +130,7 @@ def main():
     status = Path(os.environ['DNS_STATUS_PATH'])
     api = KubernetesRoutes(namespace, '/var/run/secrets/juggluco-controller')
     probes = httpx.Client(timeout=5, follow_redirects=False, trust_env=False)
+    publication = DnsPublication(domain)
     verified = {}
     previous_summary = None
     while True:
@@ -141,7 +147,7 @@ def main():
             verified = {host: checked for host, checked in verified.items() if host in hosts and now - checked < 60}
             pending = sorted(hosts - verified.keys())
             with ThreadPoolExecutor(max_workers=8) as workers:
-                for host, ok in zip(pending, workers.map(lambda host: public_ready(probes, host), pending)):
+                for host, ok in zip(pending, workers.map(lambda host: public_ready(probes, host, publication), pending)):
                     if ok:
                         verified[host] = time.time()
             publish_status(status, verified)

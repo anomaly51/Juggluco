@@ -190,6 +190,15 @@ on the phone. Existing provider credentials remain server-side.
 
 Configuration (also in the Helm chart):
 
+DNS publication is checked directly against every authoritative nameserver
+before the controller performs recursive HTTPS probes. This avoids populating
+shared resolvers with NXDOMAIN while ExternalDNS is still creating a record.
+The controller needs outbound UDP/TCP 53 as well as HTTPS. It uses no provider
+credential and never changes the phone's DNS, VPN, or security settings.
+Previously cached negative answers can remain until their resolver TTL expires;
+the phone still requires successful public HTTPS, page/assets, and data checks
+on its current network before showing 100%.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `JUGGLUCO_PERSONAL_CONNECTIONS` | `true` | Enable new personal routes |
