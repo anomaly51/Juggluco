@@ -24,11 +24,10 @@ from fastapi import HTTPException, Request
 from starlette.responses import JSONResponse, Response
 from starlette.middleware import Middleware
 from starlette.responses import FileResponse
-from .connection_domains import DNS_LABEL, domain_label, domain_ready, is_personal_hostname
+from .connection_domains import DNS_LABEL, domain_label, domain_ready, is_personal_hostname, valid_custom_name
 
 HANDLE = re.compile(r"^(?:[a-z0-9][a-z0-9-]{0,23}-)?[A-Za-z0-9_-]{22}$")
 SECRET = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
-LABEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
 READ_ROUTES = {"snapshot", "glucose", "stream", "session"}
 
 
@@ -57,20 +56,31 @@ class ConnectionRegistry:
             if 'dns_label' not in {row[1] for row in connection.execute('PRAGMA table_info(installations)')}:
                 connection.execute('ALTER TABLE installations ADD COLUMN dns_label TEXT')
             connection.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_viewer_dns ON installations(dns_label)')
+            # Reservations are not routing aliases: only installations.dns_label
+            # is active. A name must never be reassigned to a different person,
+            # whose browser could otherwise inherit the previous owner's cache.
+            connection.execute('CREATE TABLE IF NOT EXISTS viewer_names (label TEXT PRIMARY KEY, installation_id TEXT NOT NULL)')
+            connection.execute('INSERT OR IGNORE INTO viewer_names SELECT dns_label, id FROM installations WHERE dns_label IS NOT NULL')
             # One current address, no compatibility alias. Old DNS links are
             # intentionally revoked; ownership, storage and history stay intact.
-            for row in connection.execute("SELECT id, handle FROM installations WHERE dns_label IS NULL OR dns_label LIKE 'gluco-%'").fetchall():
+            migrating = connection.execute('PRAGMA user_version').fetchone()[0] < 1
+            for row in connection.execute('SELECT id FROM installations' if migrating else
+                                          'SELECT id FROM installations WHERE dns_label IS NULL').fetchall():
+                label = self._new_dns_label(connection)
                 connection.execute('UPDATE installations SET dns_label = ? WHERE id = ?',
-                                   (self._new_dns_label(connection, row['handle']), row['id']))
+                                   (label, row['id']))
+                connection.execute('INSERT INTO viewer_names VALUES (?, ?)', (label, row['id']))
+            if migrating:
+                connection.execute('PRAGMA user_version = 1')
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_legacy_owner "
                            "ON installations(legacy) WHERE legacy = 1")
         return connection
 
     @staticmethod
-    def _new_dns_label(connection, handle):
+    def _new_dns_label(connection):
         for _ in range(16):
-            label = domain_label(handle)
-            if not connection.execute('SELECT 1 FROM installations WHERE dns_label = ?', (label,)).fetchone():
+            label = domain_label()
+            if not connection.execute('SELECT 1 FROM viewer_names WHERE label = ?', (label,)).fetchone():
                 return label
         raise HTTPException(503, 'viewer address allocation busy; retry shortly')
 
@@ -111,10 +121,12 @@ class ConnectionRegistry:
             if count >= self.daily_limit:
                 raise HTTPException(429, "registration capacity reached; try later")
             handle = secrets.token_urlsafe(16)
+            dns_label = self._new_dns_label(connection)
             connection.execute(
                 "INSERT INTO installations(id, owner_hash, handle, dns_label, created_at, legacy) VALUES (?, ?, ?, ?, ?, ?)",
-                (identifier, digest(secret), handle, self._new_dns_label(connection, handle), int(time.time()), int(legacy)),
+                (identifier, digest(secret), handle, dns_label, int(time.time()), int(legacy)),
             )
+            connection.execute('INSERT INTO viewer_names VALUES (?, ?)', (dns_label, identifier))
             return connection.execute("SELECT * FROM installations WHERE id = ?", (identifier,)).fetchone()
 
     def rotate(self, identifier: str, secret: str, operation: str, label: str):
@@ -124,9 +136,21 @@ class ConnectionRegistry:
             if not row or not secrets.compare_digest(row["owner_hash"], digest(secret)):
                 raise HTTPException(401, "invalid installation credential")
             if row["rotation_id"] != operation:
-                handle = (label + "-" if label else "") + secrets.token_urlsafe(16)
+                if label and not valid_custom_name(label):
+                    raise HTTPException(422, 'viewer name invalid or reserved')
+                dns_label = label or self._new_dns_label(connection)
+                owner = connection.execute('SELECT installation_id FROM viewer_names WHERE label = ?', (dns_label,)).fetchone()
+                if owner and owner['installation_id'] != identifier:
+                    raise HTTPException(409, 'viewer name unavailable')
+                if dns_label == row['dns_label']:
+                    connection.execute('UPDATE installations SET rotation_id = ? WHERE id = ?', (operation, identifier))
+                    return connection.execute('SELECT * FROM installations WHERE id = ?', (identifier,)).fetchone()
+                # The query-link capability remains independent of the readable
+                # DNS name and is revoked along with the previous address.
+                handle = secrets.token_urlsafe(16)
                 connection.execute("UPDATE installations SET handle = ?, dns_label = ?, rotation_id = ? WHERE id = ?",
-                                   (handle, self._new_dns_label(connection, handle), operation, identifier))
+                                   (handle, dns_label, operation, identifier))
+                connection.execute('INSERT OR IGNORE INTO viewer_names VALUES (?, ?)', (dns_label, identifier))
             return connection.execute("SELECT * FROM installations WHERE id = ?", (identifier,)).fetchone()
 
     def allow_ai(self, identifier: str, limit: int):
@@ -385,10 +409,16 @@ class ConnectionMiddleware:
                     try:
                         operation = str(UUID(body["operation_id"]))
                         label = body.get("label", "")
-                        if not isinstance(label, str) or (label and not LABEL.fullmatch(label)):
+                        if not isinstance(label, str):
+                            raise ValueError()
+                        label = label.strip().lower()
+                        if label and not valid_custom_name(label):
+                            raise ValueError()
+                        hostname = label + '.' + (self.manager.settings.connection_viewer_domain or '')
+                        if label and hostname in self.manager.settings.allowed_hosts:
                             raise ValueError()
                     except (ValueError, KeyError, TypeError, AttributeError):
-                        raise HTTPException(422, "use a short lowercase URL label") from None
+                        raise HTTPException(422, "viewer name invalid or reserved") from None
                     row = registry.rotate(row["id"], secret, operation, label)
                 elif request.method != "GET":
                     raise HTTPException(405, "GET or POST required")

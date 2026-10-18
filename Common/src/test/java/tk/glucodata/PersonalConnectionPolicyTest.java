@@ -10,10 +10,14 @@ public class PersonalConnectionPolicyTest {
         assertTrue(PersonalConnectionPolicy.validViewerUrl("https://"+host+"/",base));
         assertTrue(PersonalConnectionPolicy.validViewerUrl("https://g-abcdefghijkl.api-api-api.com/",base));
         assertTrue(PersonalConnectionPolicy.validViewerUrl("https://g-my-sugar-abcdefghijkl.api-api-api.com/",base));
+        assertTrue(PersonalConnectionPolicy.validViewerUrl("https://user-abcdefghijkl.api-api-api.com/",base));
+        assertTrue(PersonalConnectionPolicy.validViewerUrl("https://vlad.api-api-api.com/",base));
         for(String bad:new String[]{null,"http://"+host+"/","https://"+host+":8443/",
                 "https://owner@"+host+"/","https://"+host+"/?profile=x","https://"+host+"/#token",
-                "https://"+host+"/viewer/","https://gluco-short.api-api-api.com/","https://"+host+".evil.invalid/",
-                "https://g-abcdef.api-api-api.com/","https://g-abcdefghijkl.evil.invalid/",
+                "https://"+host+"/viewer/","https://-name.api-api-api.com/","https://"+host+".evil.invalid/",
+                "https://name-.api-api-api.com/","https://g-abcdefghijkl.evil.invalid/",
+                "https://internal.api-api-api.com/","https://api.api-api-api.com/",
+                "https://job-crm-general1.api-api-api.com/","https://foo.bar.api-api-api.com/",
                 "https://g-abcdefghijkl.api-api-api.com/?token=bad","http://g-abcdefghijkl.api-api-api.com/"})
             assertFalse(String.valueOf(bad),PersonalConnectionPolicy.validViewerUrl(bad,base));
         assertFalse(PersonalConnectionPolicy.validViewerUrl("https://"+host+"/","https://other.example.com"));
@@ -21,7 +25,10 @@ public class PersonalConnectionPolicyTest {
     @Test public void labelsAreOptionalAndCannotInjectUrlComponents() {
         assertTrue(PersonalConnectionPolicy.validLabel(""));
         assertTrue(PersonalConnectionPolicy.validLabel("my-sugar"));
-        for(String bad:new String[]{null,"../other","a?profile=x","a/b","-hello","Сахар","a b","abcdefghijklmnopqrstuvwxyz"})
+        assertTrue(PersonalConnectionPolicy.validLabel("a".repeat(63)));
+        assertTrue(PersonalConnectionPolicy.validLabel("vlad"));
+        for(String bad:new String[]{null,"../other","a?profile=x","a/b","-hello","hello-","Сахар","a b","a".repeat(64),
+                "user-abcdefghijkl","api","internal","juggluco-general1","online-shop-general2"})
             assertFalse(PersonalConnectionPolicy.validLabel(bad));
     }
     @Test public void viewerResponseCannotRedirectToAnotherHostOrUseShortGuessableIds() {

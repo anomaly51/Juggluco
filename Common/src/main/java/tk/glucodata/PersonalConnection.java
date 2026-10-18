@@ -95,6 +95,7 @@ public final class PersonalConnection {
     private void run(boolean claim,String rotationLabel) {
         boolean retry=false;
         boolean verifying=false;
+        boolean requestingRotation=false;
         main.removeCallbacks(retryTask);
         nextRetry=0;
         lastAttempt=android.os.SystemClock.elapsedRealtime();
@@ -160,6 +161,7 @@ public final class PersonalConnection {
                         new JSONObject().put("installation_id",id),
                         identity.optBoolean("claim")?before.token:null);
             } else if(identity.has("rotation_id")) {
+                requestingRotation=true;
                 response=client.connectionRequest("POST","/devices/"+id+"/connection",
                         new JSONObject().put("operation_id",identity.getString("rotation_id"))
                                 .put("label",identity.optString("rotation_label")),null);
@@ -209,6 +211,22 @@ public final class PersonalConnection {
             publish(100,R.string.personal_connection_ready);
         } catch(IntakeApiClient.ApiException error) {
             retry=error.statusCode>=500||error.statusCode==429;
+            if(requestingRotation&&(error.statusCode==409||error.statusCode==422)) {
+                // Definitive rejection: retain the working link and let the user
+                // choose another name. Only uncertain network errors replay it.
+                try {
+                    JSONObject identity=load();
+                    identity.remove("rotation_id");
+                    identity.remove("rotation_label");
+                    save(identity);
+                } catch(Exception persistenceError) {
+                    publish(progress,R.string.personal_connection_retry);
+                    return;
+                }
+                publish(progress,error.statusCode==409?R.string.personal_connection_name_taken:
+                        R.string.personal_connection_label_invalid);
+                return;
+            }
             publish(progress,error.statusCode==409?R.string.personal_connection_conflict:
                     error.statusCode==401?R.string.personal_connection_auth_error:
                     error.statusCode==429?R.string.personal_connection_capacity:

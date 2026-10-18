@@ -16,7 +16,7 @@ from pathlib import Path
 
 import httpx
 
-from .connection_domains import DNS_LABEL, DOMAIN
+from .connection_domains import DOMAIN, allowed_viewer_label
 
 OWNER_KEY = 'juggluco.app/managed-by'
 OWNER_VALUE = 'personal-dns'
@@ -26,7 +26,7 @@ ROUTE_PREFIX = 'juggluco-personal-'
 def desired_routes(labels, domain, namespace, gateway_namespace, gateway, section):
     if not DOMAIN.fullmatch(domain) or len(domain) > 190:
         raise ValueError('invalid viewer domain')
-    if not isinstance(labels, list) or any(not isinstance(label, str) or not DNS_LABEL.fullmatch(label) for label in labels):
+    if not isinstance(labels, list) or any(not isinstance(label, str) or not allowed_viewer_label(label) for label in labels):
         raise ValueError('invalid public DNS label snapshot')
     hosts = sorted({label + '.' + domain for label in labels})
     result = []

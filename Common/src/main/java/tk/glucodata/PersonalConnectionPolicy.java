@@ -3,7 +3,12 @@ package tk.glucodata;
 /** Pure validation shared by connection setup and its settings form. */
 final class PersonalConnectionPolicy {
     static boolean validLabel(String value) {
-        return value!=null&&(value.isEmpty()||value.matches("[a-z0-9][a-z0-9-]{0,23}"));
+        return value!=null&&(value.isEmpty()||(validHostLabel(value)&&!value.startsWith("user-")));
+    }
+    private static boolean validHostLabel(String value) {
+        return value.matches("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+                && !value.matches("(?:www|api|admin|auth|login|internal|argocd|harbor|vault|keycloak|grafana|logs|s3|mail|smtp|imap|ns1|ns2|status|assets|cdn|juggluco|localhost)")
+                && !value.matches("(?:.*-)?general[0-9]+");
     }
     static boolean validViewerPath(String path) {
         return path!=null&&path.matches("/viewer/\\?profile=(?:[a-z0-9][a-z0-9-]{0,23}-)?[A-Za-z0-9_-]{22}");
@@ -19,7 +24,8 @@ final class PersonalConnectionPolicy {
             // redirects returned in a server response. Local/custom servers can
             // still return the legacy relative viewer_path.
             return "https".equals(url.getScheme()) && host!=null
-                    && host.matches("(?:gluco-(?:[a-z0-9][a-z0-9-]{0,23}-)?[a-z2-7]{26}|g-(?:[a-z0-9][a-z0-9-]{0,23}-)?[a-z2-7]{12})\\.api-api-api\\.com")
+                    && host.endsWith(".api-api-api.com")
+                    && validHostLabel(host.substring(0,host.length()-".api-api-api.com".length()))
                     && "https".equals(api.getScheme())
                     && "juggluco-general1.api-api-api.com".equals(api.getHost())
                     && url.getPort()==-1 && url.getUserInfo()==null

@@ -41,7 +41,10 @@
     <string name="personal_connection_try">Connect / retry</string>
     <string name="personal_connection_claim">Connect existing history</string>
     <string name="personal_connection_claim_help">Connect this server’s existing history and forecast model to this phone. Nothing is deleted. This one-time action requires the current backend credential and is only for the owner of that history.</string>
-    <string name="personal_connection_label">Optional URL label</string>
-    <string name="personal_connection_label_invalid">Use up to 24 lowercase English letters, digits or hyphens; start with a letter or digit. Or leave empty.</string>
-    <string name="personal_connection_rotate_help">A random suffix keeps your link hard to guess. The old link stops receiving data. Already downloaded copies cannot be erased remotely. History and forecast stay unchanged.</string>
+    <string name="personal_connection_label">Link name</string>
+    <string name="personal_connection_label_invalid">Use 1–63 English letters, digits or hyphens. No hyphen at either end. Service names and user- are reserved.</string>
+    <string name="personal_connection_name_taken">This name is unavailable. Choose another; your current link is unchanged.</string>
+    <string name="personal_connection_renaming">Saving name…</string>
+    <string name="personal_connection_random_preview">Empty = new user-&lt;random code&gt;.api-api-api.com</string>
+    <string name="personal_connection_rotate_help">Your name replaces the entire random address. Anyone who guesses it can view your glucose. The old link stops working; saved copies remain. History and forecast are kept.</string>
 </resources>

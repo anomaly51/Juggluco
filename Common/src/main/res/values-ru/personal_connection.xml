@@ -41,7 +41,10 @@
     <string name="personal_connection_try">Подключить / повторить</string>
     <string name="personal_connection_claim">Подключить текущую историю</string>
     <string name="personal_connection_claim_help">Привязать текущую историю и модель этого сервера к телефону. Данные не удаляются. Это однократное действие с текущим ключом Backend; его должен выполнять только владелец этой истории.</string>
-    <string name="personal_connection_label">Название в URL — необязательно</string>
-    <string name="personal_connection_label_invalid">До 24 строчных латинских букв, цифр или дефисов. Начните с буквы или цифры. Можно оставить пустым.</string>
-    <string name="personal_connection_rotate_help">Случайный суффикс защищает ссылку от угадывания. Старая ссылка перестанет получать данные. Уже скачанные копии нельзя удалить удалённо. История и прогноз сохранятся.</string>
+    <string name="personal_connection_label">Имя ссылки</string>
+    <string name="personal_connection_label_invalid">1–63 латинские буквы, цифры или дефисы. Дефис не по краям. Служебные имена и user- зарезервированы.</string>
+    <string name="personal_connection_name_taken">Это имя недоступно. Выберите другое; текущая ссылка не изменилась.</string>
+    <string name="personal_connection_renaming">Сохраняем имя…</string>
+    <string name="personal_connection_random_preview">Пусто = новый user-&lt;случайный код&gt;.api-api-api.com</string>
+    <string name="personal_connection_rotate_help">Имя заменит весь случайный адрес. Угадавший его сможет видеть сахар. Старая ссылка отключится; скачанные копии останутся. История и прогноз сохранятся.</string>
 </resources>

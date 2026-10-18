@@ -6,13 +6,8 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
-import android.text.InputFilter;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.LinearLayout;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.core.view.ViewCompat;
@@ -77,34 +72,49 @@ public final class PersonalConnectionSettings {
     }
 
     private static void showChange(MainActivity activity,PersonalConnection connection) {
-        LinearLayout fields=ClinicalUi.verticalContent(activity);
-        TextView label=ClinicalUi.body(activity,activity.getString(R.string.personal_connection_label));
-        EditText input=new EditText(activity);
-        input.setId(View.generateViewId());
-        label.setLabelFor(input.getId());
-        input.setSingleLine(true);
-        input.setMinHeight(ClinicalUi.dp(activity,56));
-        input.setTextSize(16);
-        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(24)});
-        input.setHint("my-sugar");
-        input.setTextColor(ClinicalUi.primaryText(activity));
-        fields.addView(label);
-        fields.addView(input);
-        fields.addView(ClinicalUi.body(activity,activity.getString(R.string.personal_connection_rotate_help)));
+        PersonalConnectionNameView fields=new PersonalConnectionNameView(activity);
+        String original=connection.viewerUrl();
+        boolean[] submitted={false};
         AlertDialog dialog=new AlertDialog.Builder(activity).setTitle(R.string.personal_connection_change)
-                .setView(fields).setNegativeButton(android.R.string.cancel,null)
+                .setView(ClinicalUi.scrollScreen(activity,fields)).setNegativeButton(android.R.string.cancel,null)
                 .setPositiveButton(R.string.personal_connection_change,null).create();
-        dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view-> {
-            String value=input.getText().toString().trim();
-            if(!PersonalConnectionPolicy.validLabel(value)) {
-                input.setError(activity.getString(R.string.personal_connection_label_invalid));
-                input.requestFocus();
+        Runnable observer=()-> {
+            if(!submitted[0]) return;
+            if(!original.equals(connection.viewerUrl())||(!connection.busy()&&connection.progress()==100)) {
+                dialog.dismiss();
                 return;
             }
-            connection.rotate(value);
-            dialog.dismiss();
-        }));
+            if(!connection.busy()) {
+                if(connection.status()!=R.string.personal_connection_name_taken
+                        &&connection.status()!=R.string.personal_connection_label_invalid) {
+                    // Uncertain requests are retried durably by the connection
+                    // screen. Do not accept a new name while the old one is pending.
+                    dialog.dismiss();
+                    return;
+                }
+                submitted[0]=false;
+                fields.input.setEnabled(true);
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setText(R.string.personal_connection_change);
+                fields.showError(connection.status());
+            }
+        };
+        dialog.setOnDismissListener(ignored->connection.removeObserver(observer));
+        dialog.setOnShowListener(ignored-> {
+            connection.observe(observer);
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view-> {
+                String value=fields.name();
+                if(!PersonalConnectionPolicy.validLabel(value)) {
+                    fields.showError(R.string.personal_connection_label_invalid);
+                    return;
+                }
+                submitted[0]=true;
+                fields.input.setEnabled(false);
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setText(R.string.personal_connection_renaming);
+                connection.rotate(value);
+            });
+        });
         dialog.show();
     }
 }

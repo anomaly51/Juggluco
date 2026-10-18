@@ -100,7 +100,7 @@ def test_rotation_revokes_old_link_preserves_owner_and_history(tmp_path):
         changed = client.post(url, headers=headers, json=operation).json()
         assert changed == client.post(url, headers=headers, json=operation).json()
         assert changed["api_path"] == a["api_path"]
-        assert "my-sugar-" in changed["viewer_path"]
+        assert len(changed["viewer_path"].split("profile=")[1]) == 22
         assert client.get(viewer(a)).status_code == 401
         assert client.get(viewer(a, "session")).status_code == 401
         assert client.get(viewer(changed)).json()["current_glucose"] is not None

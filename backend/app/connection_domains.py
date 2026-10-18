@@ -5,16 +5,30 @@ import re
 import secrets
 import time
 
-DNS_LABEL = re.compile(r"^g-(?:[a-z0-9][a-z0-9-]{0,23}-)?[a-z2-7]{12}$")
+DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 DOMAIN = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+# This zone is shared with infrastructure. Never publish viewer routes over its
+# service names, including the cluster's *-generalN naming convention.
+RESERVED_NAMES = frozenset({'www', 'api', 'admin', 'auth', 'login', 'internal', 'argocd',
+    'harbor', 'vault', 'keycloak', 'grafana', 'logs', 's3', 'mail', 'smtp', 'imap',
+    'ns1', 'ns2', 'status', 'assets', 'cdn', 'juggluco', 'localhost'})
 
 
-def domain_label(handle: str) -> str:
+def allowed_viewer_label(label: str) -> bool:
+    return bool(DNS_LABEL.fullmatch(label) and label not in RESERVED_NAMES
+                and not re.search(r'(?:^|-)general[0-9]+$', label))
+
+
+def valid_custom_name(label: str) -> bool:
+    # Reserve generated names so people cannot impersonate a fresh installation.
+    return allowed_viewer_label(label) and not label.startswith('user-')
+
+
+def domain_label() -> str:
     # 60 random bits, independent of the write credential. The registry checks
     # collisions under its writer lock and stores the result durably.
     suffix = base64.b32encode(secrets.token_bytes(8)).decode('ascii').lower()[:12]
-    prefix = handle[:-23] + '-' if len(handle) > 22 else ''
-    return 'g-' + prefix + suffix
+    return 'user-' + suffix
 
 
 def is_personal_hostname(host: str | None, settings) -> bool:

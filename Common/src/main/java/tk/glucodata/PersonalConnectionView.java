@@ -63,7 +63,8 @@ final class PersonalConnectionView extends LinearLayout {
         boolean ready=!url.isEmpty()&&percent==100;
         link.setText(!url.isEmpty()?url:getContext().getString(R.string.personal_connection_link_pending));
         open.setEnabled(ready&&!busy);
-        change.setEnabled(ready&&!busy);
+        boolean rejectedName=message==R.string.personal_connection_name_taken||message==R.string.personal_connection_label_invalid;
+        change.setEnabled(!busy&&!url.isEmpty()&&(ready||rejectedName));
         recheck.setEnabled(!busy);
         recheck.setVisibility(ready?View.VISIBLE:View.GONE);
         primary.setEnabled(!busy);

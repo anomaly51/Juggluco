@@ -2,7 +2,9 @@
 export function profileContext(search = window.location.search, hostname = window.location.hostname) {
   // DNS names are separate browser origins. Even malformed personal names must
   // never use a legacy/another-profile cache or let ?profile override its host.
-  if (/^(?:gluco-|g-)/.test(hostname.toLowerCase())) {
+  const host = hostname.toLowerCase()
+  if ((host.endsWith('.api-api-api.com') && host !== 'juggluco-general1.api-api-api.com')
+      || /^(?:gluco-|g-|user-)/.test(host)) {
     return { key: `host:${hostname.toLowerCase()}`, prefix: '/v1/viewer', handle: null }
   }
   const query = new URLSearchParams(search)

@@ -37,6 +37,7 @@ public class PersonalConnectionStateTest {
     private String base,id,owner;
     private volatile boolean failNext;
     private volatile boolean failViewer;
+    private volatile int rejectRotation;
     private final List<String> registrations=new ArrayList<>();
     private final List<String> rotations=new ArrayList<>();
     private String handle="abcdefghijklmnopqrstuv";
@@ -73,11 +74,12 @@ public class PersonalConnectionStateTest {
                     registrations.add(id+owner);
                 } else if(request[0].equals("POST")) {
                     rotations.add(body.getString("operation_id"));
-                    handle="changed-abcdefghijklmnopqrstuv";
+                    if(rejectRotation==0) handle="changed-abcdefghijklmnopqrstuv";
                 }
                 boolean publicRequest=path.startsWith("/viewer/")||path.startsWith("/v1/shares/");
                 if(publicRequest&&!authorization.isEmpty()) throw new IllegalStateException("Owner credential leaked to viewer");
                 int status=publicRequest?(failViewer?503:200):(failNext?503:200);
+                if(request[0].equals("POST")&&!path.equals("/v1/installations")&&rejectRotation!=0) status=rejectRotation;
                 if(!publicRequest) failNext=false;
                 String payloadText;
                 if(path.startsWith("/viewer/?")) payloadText="<div id=\"root\"></div><script src=\"/viewer/assets/main.js\"></script>";
@@ -169,6 +171,28 @@ public class PersonalConnectionStateTest {
         assertTrue(connection.needsClaim());
         assertEquals("existing-owner-secret",IntakeRepository.get(context).backendToken());
         assertEquals(0,registrations.size());
+    }
+
+    @Test public void rejectedNameClearsOnlyPendingRotationAndCanBeCorrected() throws Exception {
+        for(int status:new int[]{409,422}) {
+            PersonalConnection connection=freshController();
+            run(connection,null);
+            String previous=connection.viewerUrl();
+            String token=IntakeRepository.get(context).backendToken();
+            rejectRotation=status;
+            run(connection,"taken");
+            assertEquals(status==409?R.string.personal_connection_name_taken:R.string.personal_connection_label_invalid,connection.status());
+            assertEquals(previous,connection.viewerUrl());
+            assertEquals(0,connection.nextRetry());
+            assertFalse(new PersonalConnectionStore(context).load().has("rotation_id"));
+            String rejected=rotations.get(rotations.size()-1);
+            rejectRotation=0;
+            PersonalConnection restarted=freshController();
+            run(restarted,"available");
+            assertEquals(100,restarted.progress());
+            assertNotEquals(rejected,rotations.get(rotations.size()-1));
+            assertEquals(token,IntakeRepository.get(context).backendToken());
+        }
     }
 
     @Test public void serverReadyDoesNotMeanPhoneReadyAndRetryPreservesIdentity() throws Exception {
