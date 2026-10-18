@@ -150,11 +150,15 @@ public final class PersonalConnection {
             }
             publish(65,R.string.personal_connection_created);
             String path=response.getString("viewer_path");
+            String publicUrl=response.isNull("viewer_url")?"":response.optString("viewer_url","");
             if(!id.equals(response.getString("installation_id"))
                     ||!response.getString("api_path").equals("/devices/"+id)
                     ||!PersonalConnectionPolicy.validViewerPath(path))
                 throw new IllegalArgumentException("Invalid connection response");
-            identity.put("viewer",base+path);
+            if(!publicUrl.isEmpty()&&!PersonalConnectionPolicy.validViewerUrl(publicUrl,base))
+                throw new IllegalArgumentException("Invalid viewer domain");
+            String nextViewer=publicUrl.isEmpty()?base+path:publicUrl;
+            identity.put("viewer",nextViewer);
             identity.remove("rotation_id");
             identity.remove("rotation_label");
             save(identity);
@@ -166,7 +170,12 @@ public final class PersonalConnection {
                     return;
                 }
             }
-            viewerUrl=base+path;
+            viewerUrl=nextViewer;
+            if(!publicUrl.isEmpty()&&!response.optBoolean("viewer_ready",false)) {
+                retry=true;
+                publish(90,R.string.personal_connection_dns_pending);
+                return;
+            }
             publish(100,R.string.personal_connection_ready);
         } catch(IntakeApiClient.ApiException error) {
             retry=error.statusCode>=500||error.statusCode==429;

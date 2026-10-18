@@ -8,6 +8,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'prompt',
+      scope: '/',
       manifest: {
         id: '/viewer/',
         name: 'Juggluco — сахар',
@@ -50,6 +51,7 @@ export default defineConfig({
         clientsClaim: true,
         skipWaiting: false,
         navigateFallback: '/viewer/index.html',
+        navigateFallbackAllowlist: [/^\/$/, /^\/viewer(?:\/|$)/],
         navigateFallbackDenylist: [/^\/v1\//],
         // The plugin adds its generated webmanifest automatically; the glob
         // covers every other production app-shell asset exactly once.

@@ -18,13 +18,51 @@ These percentages represent steps, not estimated elapsed time. Network failures
 retry after a minute while the application process is alive and on later launches.
 The local glucose/alert system does not wait for provisioning.
 
-The viewer URL is `/viewer/?profile=<128-bit-random-handle>`. Changing it can add
-an optional lowercase label, e.g. `my-sugar-<random-handle>`. The random suffix is
+The production viewer URL is `https://gluco-<128-bit-random-dns-label>.api-api-api.com/`.
+It opens the application at the domain root: no `/viewer/` or `?profile=` is
+needed in the shared address. Changing it can add an optional lowercase label,
+e.g. `https://gluco-my-sugar-<random-dns-label>.api-api-api.com/`. The random suffix is
 mandatory; a short, guessable alias alone must not protect medical records.
 Changing the URL does not change the installation UUID, backend credential,
 database or model. The old handle stops working, including existing SSE streams
 (at the next update/heartbeat, at most 15 seconds). Already downloaded copies on
 other devices cannot be remotely erased.
+
+The server returns `viewer_url` and `viewer_ready` alongside the legacy
+`viewer_path`. Android shows 90% / waiting for DNS and HTTPS until the public
+address passes an HTTPS check. Sync is already connected during this wait;
+automatic retries reuse the same identity. Old APKs continue using their
+previous query links. New APKs adopt the domain without re-registering or
+claiming history again. Local backends without a configured DNS zone retain
+query links. Android currently accepts generated HTTPS viewer URLs only in the
+explicit production `api-api-api.com` zone.
+
+### Automatic DNS, without DNS credentials in the app
+
+`personalDns.enabled` adds a restricted sidecar to the existing pod. The backend
+atomically publishes **public DNS labels only** under
+`/data/juggluco-installations/public-routing/viewer-domains.json`. The sidecar
+mounts only that subdirectory, read-only: no health database, owner tokens,
+provider credentials or Kubernetes token is exposed to the backend container.
+A namespaced Role permits the sidecar to reconcile HTTPRoutes in `juggluco`.
+Routes have exact hostnames (16 per route), not a wildcard that could capture
+other applications. Only controller-labelled routes with its own name prefix
+are updated/removed; the existing main API route is untouched.
+
+The cluster's existing ExternalDNS (`gateway-httproute` source) creates real
+per-profile Cloudflare DNS records. The existing `*.api-api-api.com` Gateway
+certificate and tunnel serve HTTPS; no per-profile certificates or new DNS
+provider keys are required. A probe verifies the **public HTTPS endpoint and
+matching host identity** before reporting ready. Missing controller state is
+pending, not success. DNS propagation may take several minutes. Rotated names
+are rejected immediately at the backend even while a cached DNS record remains.
+
+Deployment requirements: ExternalDNS must watch the configured public Gateway,
+the namespace must be permitted by that Gateway, and the configured zone must
+have wildcard HTTPS coverage. These prerequisites already exist in General-1.
+The controller has no cluster-wide Role and cannot read Secrets; its projected
+short-lived Kubernetes token is mounted only in the sidecar. Existing data
+directories and database schemas remain compatible with earlier releases.
 
 ## Isolation
 
@@ -59,6 +97,11 @@ dispatch. HTTPS, trusted-host checks and no-store/no-referrer headers still appl
 Personal PWA manifests preserve the profile URL when installed; IndexedDB and
 logout state are partitioned by that explicit URL. No ambient last-user shortcut
 is used, including when offline.
+Domain viewers are additionally isolated by browser origin. The server resolves
+the profile from the validated Host header and ignores `?profile` overrides.
+All write/admin routes are blocked on viewer hosts, even with an owner token.
+The root-scoped service worker caches only `/` and `/viewer/` navigation; API
+requests remain NetworkOnly. Unknown or revoked hosts never show legacy data.
 
 ## Existing phone/history
 

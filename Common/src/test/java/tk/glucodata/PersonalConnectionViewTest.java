@@ -25,7 +25,7 @@ public class PersonalConnectionViewTest {
             config.setLocale(Locale.forLanguageTag("ru"));
             Context context=new ContextThemeWrapper(RuntimeEnvironment.getApplication().createConfigurationContext(config),R.style.AppTheme_ClinicalDark);
             PersonalConnectionView view=new PersonalConnectionView(context);
-            view.render(100,R.string.personal_connection_ready,"https://example.com/viewer/?profile=my-sugar-abcdefghijklmnopqrstuv",false,false);
+            view.render(100,R.string.personal_connection_ready,"https://gluco-my-long-personal-address-abcdefghijklmnopqrstuvwxyz.api-api-api.com/",false,false);
             int width=ClinicalUi.dp(context,size[0]),height=ClinicalUi.dp(context,size[1]);
             int gutter=ClinicalUi.readableHorizontalGutter(context,width,16);
             view.setPadding(gutter,0,gutter,ClinicalUi.dp(context,16));
@@ -50,6 +50,11 @@ public class PersonalConnectionViewTest {
         view.render(25,R.string.personal_connection_retry,"",false,false);
         assertTrue(view.primary.isEnabled());
         assertEquals(context.getString(R.string.personal_connection_try),view.primary.getText().toString());
+        view.render(90,R.string.personal_connection_dns_pending,"https://gluco-abcdefghijklmnopqrstuvwxyz.api-api-api.com/",false,false);
+        assertFalse(view.open.isEnabled());
+        assertFalse(view.change.isEnabled());
+        assertTrue(view.primary.isEnabled());
+        assertTrue(view.status.getText().toString().contains("90%"));
         view.render(100,R.string.personal_connection_ready,"https://example.com",false,false);
         assertTrue(view.change.isEnabled());
         assertEquals(context.getString(R.string.personal_connection_copy),view.primary.getText().toString());

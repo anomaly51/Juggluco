@@ -98,6 +98,23 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
+      {{- if .Values.personalDns.enabled }}
+      initContainers:
+        - name: prepare-personal-dns-directory
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command: [python, -c, "import os; from pathlib import Path; p=Path(os.environ['DATABASE_PATH']); (p.parent / (p.stem + '-installations') / 'public-routing').mkdir(parents=True, exist_ok=True)"]
+          env:
+            - name: DATABASE_PATH
+              value: {{ .Values.config.databasePath | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- end }}
       containers:
         - name: backend
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -113,6 +130,12 @@ spec:
               value: {{ .Values.config.databasePath | quote }}
             - name: JUGGLUCO_PERSONAL_CONNECTIONS
               value: {{ .Values.config.personalConnections | quote }}
+            {{- if .Values.personalDns.enabled }}
+            - name: JUGGLUCO_CONNECTION_VIEWER_DOMAIN
+              value: {{ required "personal DNS requires a viewer domain" .Values.config.connectionViewerDomain | quote }}
+            - name: JUGGLUCO_CONNECTION_DNS_STATUS_PATH
+              value: /run/juggluco-dns/status.json
+            {{- end }}
             - name: JUGGLUCO_CONNECTION_REGISTRATION_LIMIT
               value: {{ .Values.config.connectionRegistrationLimit | quote }}
             - name: JUGGLUCO_CONNECTION_RUNTIME_LIMIT
@@ -120,7 +143,7 @@ spec:
             - name: JUGGLUCO_CONNECTION_AI_DAILY_LIMIT
               value: {{ .Values.config.connectionAiDailyLimit | quote }}
             - name: JUGGLUCO_ALLOWED_HOSTS
-              value: {{ .Values.route.hostname | quote }}
+              value: {{ if .Values.personalDns.enabled }}{{ printf "%s,*.%s" .Values.route.hostname .Values.config.connectionViewerDomain | quote }}{{ else }}{{ .Values.route.hostname | quote }}{{ end }}
             - name: JUGGLUCO_VIEWER_PUBLIC
               value: {{ .Values.config.viewerPublic | quote }}
             - name: JUGGLUCO_VIEWER_TRUSTED_PROXY_CIDRS
@@ -191,6 +214,60 @@ spec:
               mountPath: /data
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.personalDns.enabled }}
+            - name: dns-status
+              mountPath: /run/juggluco-dns
+              readOnly: true
+            {{- end }}
+        {{- if .Values.personalDns.enabled }}
+        - name: personal-dns
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [python, -m, app.connection_dns_controller]
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: VIEWER_DOMAIN
+              value: {{ .Values.config.connectionViewerDomain | quote }}
+            - name: DOMAIN_SNAPSHOT_PATH
+              value: /run/juggluco-domains/viewer-domains.json
+            - name: DNS_STATUS_PATH
+              value: /run/juggluco-dns/status.json
+            - name: GATEWAY_NAMESPACE
+              value: {{ .Values.route.gatewayNamespace | quote }}
+            - name: GATEWAY_NAME
+              value: {{ .Values.route.gatewayName | quote }}
+            - name: GATEWAY_SECTION
+              value: {{ .Values.route.gatewaySectionName | quote }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /run/juggluco-domains
+              subPath: {{ printf "%s-installations/public-routing" (trimSuffix (ext .Values.config.databasePath) (base .Values.config.databasePath)) | quote }}
+              readOnly: true
+            - name: dns-status
+              mountPath: /run/juggluco-dns
+            - name: dns-controller-token
+              mountPath: /var/run/secrets/juggluco-controller
+              readOnly: true
+        {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -198,3 +275,20 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 512Mi
+        {{- if .Values.personalDns.enabled }}
+        - name: dns-status
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: dns-controller-token
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+        {{- end }}

@@ -16,6 +16,26 @@ afterEach(() => {
 })
 
 describe('personal viewer isolation', () => {
+  it('binds a DNS viewer to its origin, ignores profile overrides and launches at root', async () => {
+    const hostA = `gluco-${'a'.repeat(26)}.api-api-api.com`
+    const hostB = `gluco-${'b'.repeat(26)}.api-api-api.com`
+    expect(profileContext(`?profile=${b}`, hostA)).toEqual({ key: `host:${hostA}`, prefix: '/v1/viewer', handle: null })
+    expect(profileContext('', 'gluco-invalid.api-api-api.com').key).not.toBe('legacy')
+    vi.stubGlobal('window', { location: { hostname: hostA, search: `?profile=${b}` } })
+    await clearSnapshot()
+    await saveSnapshot(normalizeSnapshot(rawSnapshot), 321, 'public')
+    const markerA = profileStorageKey('logout')
+    configurePersonalManifest()
+    expect(document.querySelector<HTMLLinkElement>('link[rel="manifest"]')?.getAttribute('href'))
+      .toBe('/viewer/personal.webmanifest')
+    expect(viewerEndpoint('snapshot')).toBe('/v1/viewer/snapshot')
+    vi.stubGlobal('window', { location: { hostname: hostB, search: '' } })
+    expect(profileStorageKey('logout')).not.toBe(markerA)
+    expect(await loadSnapshot()).toBeNull()
+    vi.stubGlobal('window', { location: { hostname: hostA, search: '' } })
+    expect((await loadSnapshot())?.savedAt).toBe(321)
+    await clearSnapshot()
+  })
   it('never falls back to legacy for malformed or duplicate personal links', () => {
     expect(profileContext('').prefix).toBe('/v1/viewer')
     for (const search of ['?profile=', '?profile=../../secret', `?profile=${a}&profile=${b}`]) {

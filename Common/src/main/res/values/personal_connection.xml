@@ -15,7 +15,8 @@
     <string name="personal_connection_conflict">This history already belongs to another installation. Nothing was replaced.</string>
     <string name="personal_connection_capacity">Server is busy or has reached its limit. Try again later.</string>
     <string name="personal_connection_progress">%1$d%% · %2$s</string>
-    <string name="personal_connection_stages">Phone ID → personal storage → link → connected
+    <string name="personal_connection_dns_pending">Address created. Waiting for DNS and HTTPS. Your data is already connected; this continues automatically.</string>
+    <string name="personal_connection_stages">Phone ID → personal storage → DNS + HTTPS → connected
 Progress reflects completed setup steps, not time remaining.</string>
     <string name="personal_connection_link_pending">Your personal link will appear here.</string>
     <string name="personal_connection_privacy">Anyone with this link can view your glucose and forecast. They cannot edit your records. Share it only with people you trust.</string>

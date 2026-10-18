@@ -112,8 +112,16 @@ class Settings:
     connection_registration_limit: int = 100
     connection_runtime_limit: int = 32
     connection_ai_daily_limit: int = 100
+    connection_viewer_domain: str | None = None
+    connection_dns_status_path: Path | None = None
 
     def __post_init__(self) -> None:
+        from .connection_domains import DOMAIN
+        if self.connection_viewer_domain and (
+            len(self.connection_viewer_domain) > 190
+            or not DOMAIN.fullmatch(self.connection_viewer_domain)
+        ):
+            raise ValueError("connection viewer domain must be a lowercase DNS zone")
         if min(self.connection_registration_limit, self.connection_runtime_limit,
                self.connection_ai_daily_limit) < 1:
             raise ValueError("personal connection limits must be positive")
@@ -216,6 +224,8 @@ class Settings:
             connection_registration_limit=_positive_int("JUGGLUCO_CONNECTION_REGISTRATION_LIMIT", 100),
             connection_runtime_limit=_positive_int("JUGGLUCO_CONNECTION_RUNTIME_LIMIT", 32),
             connection_ai_daily_limit=_positive_int("JUGGLUCO_CONNECTION_AI_DAILY_LIMIT", 100),
+            connection_viewer_domain=os.getenv("JUGGLUCO_CONNECTION_VIEWER_DOMAIN") or None,
+            connection_dns_status_path=Path(os.environ["JUGGLUCO_CONNECTION_DNS_STATUS_PATH"]) if os.getenv("JUGGLUCO_CONNECTION_DNS_STATUS_PATH") else None,
             openrouter_audio_language=os.getenv(
                 "OPENROUTER_AUDIO_LANGUAGE"
             ),

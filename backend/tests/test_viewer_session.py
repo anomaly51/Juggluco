@@ -480,7 +480,7 @@ def test_pwa_static_files_use_safe_cache_and_security_headers(
 
         worker = client.get("/viewer/sw.js")
         assert worker.status_code == 200
-        assert worker.headers["service-worker-allowed"] == "/viewer/"
+        assert worker.headers["service-worker-allowed"] == "/"
 
         fallback = client.get("/viewer/settings")
         assert fallback.status_code == 200

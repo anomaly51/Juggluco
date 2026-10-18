@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="personal_connection_dns_pending">Адрес создан. Ожидаем DNS и HTTPS. Данные уже подключены; проверка продолжится автоматически.</string>
     <string name="personal_connection_title">Персональная ссылка</string>
     <string name="personal_connection_waiting">Ожидание подключения</string>
     <string name="personal_connection_identity">Создаём ID телефона</string>
@@ -15,7 +16,7 @@
     <string name="personal_connection_conflict">Эта история уже принадлежит другой установке. Ничего не заменено.</string>
     <string name="personal_connection_capacity">Сервер занят или достиг лимита. Повторите позже.</string>
     <string name="personal_connection_progress">%1$d%% · %2$s</string>
-    <string name="personal_connection_stages">ID телефона → хранилище → ссылка → подключение
+    <string name="personal_connection_stages">ID телефона → хранилище → DNS + HTTPS → подключение
 Процент показывает завершённые этапы, а не оставшееся время.</string>
     <string name="personal_connection_link_pending">Здесь появится ваша персональная ссылка.</string>
     <string name="personal_connection_privacy">Любой, у кого есть ссылка, видит сахар и прогноз, но не может менять записи. Делитесь только с теми, кому доверяете.</string>

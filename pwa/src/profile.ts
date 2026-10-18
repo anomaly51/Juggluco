@@ -1,5 +1,10 @@
 /** A viewer capability is explicit in the URL; never infer it from a prior tab. */
-export function profileContext(search = window.location.search) {
+export function profileContext(search = window.location.search, hostname = window.location.hostname) {
+  // DNS names are separate browser origins. Even a malformed gluco-* name must
+  // never use a legacy/another-profile cache or let ?profile override its host.
+  if (hostname.toLowerCase().startsWith('gluco-')) {
+    return { key: `host:${hostname.toLowerCase()}`, prefix: '/v1/viewer', handle: null }
+  }
   const query = new URLSearchParams(search)
   const values = query.getAll('profile')
   if (!values.length) return { key: 'legacy', prefix: '/v1/viewer', handle: null }
@@ -21,13 +26,14 @@ export function profileStorageKey(key: string) {
 }
 
 export function configurePersonalManifest() {
-  const { handle } = profileContext()
-  if (!handle) return
+  const { handle, key } = profileContext()
+  if (!handle && !key.startsWith('host:')) return
   let manifest = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
   if (!manifest) {
     manifest = document.createElement('link')
     manifest.rel = 'manifest'
     document.head.appendChild(manifest)
   }
-  manifest.href = `/viewer/personal.webmanifest?profile=${encodeURIComponent(handle)}`
+  manifest.href = handle ? `/viewer/personal.webmanifest?profile=${encodeURIComponent(handle)}`
+    : '/viewer/personal.webmanifest'
 }

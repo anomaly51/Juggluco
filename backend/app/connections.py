@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import os
 import re
 import secrets
 import sqlite3
 import time
+import tempfile
 from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -20,6 +23,8 @@ from uuid import UUID
 from fastapi import HTTPException, Request
 from starlette.responses import JSONResponse, Response
 from starlette.middleware import Middleware
+from starlette.responses import FileResponse
+from .connection_domains import DNS_LABEL, domain_label, domain_ready, is_personal_hostname
 
 HANDLE = re.compile(r"^(?:[a-z0-9][a-z0-9-]{0,23}-)?[A-Za-z0-9_-]{22}$")
 SECRET = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
@@ -44,8 +49,16 @@ class ConnectionRegistry:
         connection.execute("""CREATE TABLE IF NOT EXISTS installations (
             id TEXT PRIMARY KEY, owner_hash TEXT NOT NULL, handle TEXT UNIQUE NOT NULL,
             created_at INTEGER NOT NULL, legacy INTEGER NOT NULL DEFAULT 0,
-            rotation_id TEXT, ai_day INTEGER NOT NULL DEFAULT 0,
+            rotation_id TEXT, dns_label TEXT, ai_day INTEGER NOT NULL DEFAULT 0,
             ai_requests INTEGER NOT NULL DEFAULT 0)""")
+        # Transactional migration keeps old identities, handles and databases.
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if 'dns_label' not in {row[1] for row in connection.execute('PRAGMA table_info(installations)')}:
+                connection.execute('ALTER TABLE installations ADD COLUMN dns_label TEXT')
+            for row in connection.execute('SELECT id, handle FROM installations WHERE dns_label IS NULL').fetchall():
+                connection.execute('UPDATE installations SET dns_label = ? WHERE id = ?', (domain_label(row['handle']), row['id']))
+            connection.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_viewer_dns ON installations(dns_label)')
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_legacy_owner "
                            "ON installations(legacy) WHERE legacy = 1")
         return connection
@@ -62,6 +75,12 @@ class ConnectionRegistry:
         if not row or not secrets.compare_digest(row["owner_hash"], digest(secret)):
             raise HTTPException(401, "invalid installation credential")
         return row
+
+    def get_domain(self, label: str):
+        if not DNS_LABEL.fullmatch(label):
+            return None
+        with closing(self.connect()) as connection:
+            return connection.execute('SELECT * FROM installations WHERE dns_label = ?', (label,)).fetchone()
 
     def register(self, identifier: str, secret: str, *, legacy=False):
         with closing(self.connect()) as connection, connection:
@@ -80,9 +99,10 @@ class ConnectionRegistry:
             count = connection.execute("SELECT COUNT(*) FROM installations WHERE created_at >= ?", (since,)).fetchone()[0]
             if count >= self.daily_limit:
                 raise HTTPException(429, "registration capacity reached; try later")
+            handle = secrets.token_urlsafe(16)
             connection.execute(
-                "INSERT INTO installations(id, owner_hash, handle, created_at, legacy) VALUES (?, ?, ?, ?, ?)",
-                (identifier, digest(secret), secrets.token_urlsafe(16), int(time.time()), int(legacy)),
+                "INSERT INTO installations(id, owner_hash, handle, dns_label, created_at, legacy) VALUES (?, ?, ?, ?, ?, ?)",
+                (identifier, digest(secret), handle, domain_label(handle), int(time.time()), int(legacy)),
             )
             return connection.execute("SELECT * FROM installations WHERE id = ?", (identifier,)).fetchone()
 
@@ -94,8 +114,8 @@ class ConnectionRegistry:
                 raise HTTPException(401, "invalid installation credential")
             if row["rotation_id"] != operation:
                 handle = (label + "-" if label else "") + secrets.token_urlsafe(16)
-                connection.execute("UPDATE installations SET handle = ?, rotation_id = ? WHERE id = ?",
-                                   (handle, operation, identifier))
+                connection.execute("UPDATE installations SET handle = ?, dns_label = ?, rotation_id = ? WHERE id = ?",
+                                   (handle, domain_label(handle), operation, identifier))
             return connection.execute("SELECT * FROM installations WHERE id = ?", (identifier,)).fetchone()
 
     def allow_ai(self, identifier: str, limit: int):
@@ -124,6 +144,30 @@ class Connections:
         self.registry = ConnectionRegistry(self.directory / "registry.sqlite3", settings.connection_registration_limit)
         self.runtimes: dict[str, Runtime] = {}
         self.lock = asyncio.Lock()
+        self.publish_domains()
+
+    def publish_domains(self):
+        if not self.settings.connection_viewer_domain:
+            return
+        # Controller mounts only this public subdirectory, not the health DB.
+        # Keep the SQLite snapshot and atomic file replacement under the same
+        # writer lock, so simultaneous rotations cannot publish an older list.
+        with closing(self.registry.connect()) as connection, connection:
+            connection.execute('BEGIN IMMEDIATE')
+            labels = [row[0] for row in connection.execute('SELECT dns_label FROM installations ORDER BY dns_label')]
+            public_directory = self.directory / 'public-routing'
+            public_directory.mkdir(exist_ok=True)
+            name = None
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=public_directory, delete=False) as output:
+                    name = output.name
+                    json.dump({'schema': 1, 'labels': labels}, output)
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(name, public_directory / 'viewer-domains.json')
+            finally:
+                if name and os.path.exists(name):
+                    os.unlink(name)
 
     @asynccontextmanager
     async def lease(self, row):
@@ -162,11 +206,15 @@ class Connections:
             await runtime.lifespan.__aexit__(None, None, None)
         self.runtimes.clear()
 
-    @staticmethod
-    def describe(row):
+    def describe(self, row):
         # Return relative paths, not Host/X-Forwarded-Host-derived credentials.
-        return {"installation_id": row["id"], "viewer_path": "/viewer/?profile=" + row["handle"],
-                "api_path": "/devices/" + row["id"], "legacy": bool(row["legacy"])}
+        result = {"installation_id": row["id"], "viewer_path": "/viewer/?profile=" + row["handle"],
+                  "api_path": "/devices/" + row["id"], "legacy": bool(row["legacy"])}
+        if self.settings.connection_viewer_domain:
+            hostname = row['dns_label'] + '.' + self.settings.connection_viewer_domain
+            status_path = self.settings.connection_dns_status_path or self.directory / 'dns-status.json'
+            result.update(viewer_url='https://' + hostname + '/', viewer_ready=domain_ready(status_path, hostname))
+        return result
 
 
 class ConnectionMiddleware:
@@ -177,14 +225,59 @@ class ConnectionMiddleware:
         if scope["type"] != "http" or scope.get("connection_dispatched"):
             return await self.app(scope, receive, send)
         path = scope["path"]
-        if not (path.startswith("/devices/") or path.startswith("/v1/shares/")
+        personal_host = is_personal_hostname(Request(scope).url.hostname, self.manager.settings)
+        if not (personal_host or path.startswith("/devices/") or path.startswith("/v1/shares/")
                 or path.startswith("/v1/installations") or path == "/viewer/personal.webmanifest"):
             return await self.app(scope, receive, send)
         try:
-            await self.dispatch(scope, receive, send)
+            if personal_host:
+                await self.dispatch_host(scope, receive, send)
+            else:
+                await self.dispatch(scope, receive, send)
         except HTTPException as error:
             await JSONResponse({"detail": error.detail}, status_code=error.status_code,
                                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})(scope, receive, send)
+
+    async def dispatch_host(self, scope, receive, send):
+        from .main import _is_secure_browser_request
+        request = Request(scope, receive)
+        if not _is_secure_browser_request(request):
+            raise HTTPException(426, 'personal connections require HTTPS')
+        hostname = request.url.hostname.lower()
+        domain = self.manager.settings.connection_viewer_domain
+        row = self.manager.registry.get_domain(hostname[:-(len(domain) + 1)])
+        if row is None:
+            raise HTTPException(401, 'viewer address expired or unavailable')
+        path = scope['path']
+        if request.method not in {'GET', 'HEAD'} and not (request.method == 'DELETE' and path == '/v1/viewer/session'):
+            raise HTTPException(405, 'read-only viewer')
+        if path == '/v1/viewer/ready':
+            return await JSONResponse({'ready': True, 'host': hostname}, headers={'Cache-Control': 'no-store'})(scope, receive, send)
+        if path == '/viewer/personal.webmanifest':
+            return await self.manifest('/', '/', scope, receive, send)
+        if path == '/':
+            index = self.manager.settings.pwa_dist_path / 'index.html'
+            if not index.is_file():
+                raise HTTPException(503, 'viewer PWA is not built')
+            return await FileResponse(index, media_type='text/html', headers={'Cache-Control': 'no-cache'})(scope, receive, send)
+        if path == '/viewer' or path.startswith('/viewer/'):
+            return await self.app(scope, receive, send)
+        endpoint = path.removeprefix('/v1/viewer/')
+        if not path.startswith('/v1/viewer/') or endpoint not in READ_ROUTES:
+            raise HTTPException(404, 'viewer route unavailable')
+        # The host, not a query parameter, selects the installation.
+        target = '/v1/shares/' + row['handle'] + '/' + endpoint
+        return await self.dispatch(dict(scope, path=target, raw_path=target.encode()), receive, send)
+
+    @staticmethod
+    async def manifest(start, scope_path, scope, receive, send):
+        response = JSONResponse({'id': start, 'start_url': start, 'scope': scope_path,
+            'name': 'Juggluco', 'short_name': 'Juggluco', 'display': 'standalone',
+            'background_color': '#060301', 'theme_color': '#060301',
+            'icons': [{'src': '/viewer/icons/icon-192.png', 'sizes': '192x192', 'type': 'image/png'},
+                      {'src': '/viewer/icons/icon-512.png', 'sizes': '512x512', 'type': 'image/png'}]},
+            media_type='application/manifest+json', headers={'Cache-Control': 'no-store'})
+        return await response(scope, receive, send)
 
     @staticmethod
     def secret(request):
@@ -247,6 +340,7 @@ class ConnectionMiddleware:
                 if not expected or not secrets.compare_digest(supplied.encode(), expected.encode()):
                     raise HTTPException(401, "existing connection credential required")
             row = registry.register(identifier, secret, legacy=legacy)
+            self.manager.publish_domains()
             # Only report ready once schema and independent forecast runtime exist.
             async with self.manager.lease(row):
                 pass
@@ -287,6 +381,7 @@ class ConnectionMiddleware:
                     row = registry.rotate(row["id"], secret, operation, label)
                 elif request.method != "GET":
                     raise HTTPException(405, "GET or POST required")
+                self.manager.publish_domains()
                 return await JSONResponse(self.manager.describe(row), headers={"Cache-Control": "no-store"})(scope, receive, send)
             if not target.startswith("/v1/") or target.startswith("/v1/installations"):
                 raise HTTPException(404, "connection route unavailable")

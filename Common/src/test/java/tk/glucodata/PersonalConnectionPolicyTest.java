@@ -4,6 +4,16 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class PersonalConnectionPolicyTest {
+    @Test public void personalDnsUrlIsHttpsAndBoundToTheConfiguredProductionZone() {
+        String base="https://juggluco-general1.api-api-api.com";
+        String host="gluco-my-sugar-abcdefghijklmnopqrstuvwxyz.api-api-api.com";
+        assertTrue(PersonalConnectionPolicy.validViewerUrl("https://"+host+"/",base));
+        for(String bad:new String[]{null,"http://"+host+"/","https://"+host+":8443/",
+                "https://owner@"+host+"/","https://"+host+"/?profile=x","https://"+host+"/#token",
+                "https://"+host+"/viewer/","https://gluco-short.api-api-api.com/","https://"+host+".evil.invalid/"})
+            assertFalse(String.valueOf(bad),PersonalConnectionPolicy.validViewerUrl(bad,base));
+        assertFalse(PersonalConnectionPolicy.validViewerUrl("https://"+host+"/","https://other.example.com"));
+    }
     @Test public void labelsAreOptionalAndCannotInjectUrlComponents() {
         assertTrue(PersonalConnectionPolicy.validLabel(""));
         assertTrue(PersonalConnectionPolicy.validLabel("my-sugar"));

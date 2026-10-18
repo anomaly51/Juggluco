@@ -2566,11 +2566,14 @@ def create_app(
 
     @application.middleware("http")
     async def security_headers(request: Request, call_next):
+        from .connection_domains import is_personal_hostname
+        personal_browser = is_personal_hostname(request.url.hostname, settings)
         viewer_browser_path = (
             request.url.path == "/viewer"
             or request.url.path.startswith("/viewer/")
             or request.url.path.startswith("/v1/viewer/")
             or request.url.path.startswith("/v1/shares/")
+            or personal_browser
         )
         secure_browser_request = _is_secure_browser_request(request)
         if viewer_browser_path and not secure_browser_request:
@@ -2606,7 +2609,7 @@ def create_app(
             # the manifest, and the worker themselves must always revalidate.
             response.headers["Cache-Control"] = "no-cache"
             if request.url.path == "/viewer/sw.js":
-                response.headers["Service-Worker-Allowed"] = "/viewer/"
+                response.headers["Service-Worker-Allowed"] = "/"
         else:
             response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -2617,7 +2620,7 @@ def create_app(
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
         )
-        if request.url.path == "/viewer" or request.url.path.startswith("/viewer/"):
+        if personal_browser or request.url.path == "/viewer" or request.url.path.startswith("/viewer/"):
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; base-uri 'none'; connect-src 'self'; "
                 "font-src 'self'; form-action 'self'; frame-ancestors 'none'; "
