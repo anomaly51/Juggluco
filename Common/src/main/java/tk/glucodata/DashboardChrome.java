@@ -261,6 +261,7 @@ final class DashboardChrome {
         installAccessibilityDelegates();
 
         refreshTheme();
+        refreshFeatureControls();
         updateDestinationSelection();
         updateRangeSelection();
         refreshTargetRange();
@@ -411,6 +412,10 @@ final class DashboardChrome {
             ViewCompat.setTooltipText(range,
                     activity.getString(R.string.dashboard_show_hours, hours));
         }
+    }
+
+    void refreshFeatureControls() {
+        if (root != null) FeatureControls.applyToDashboard(root);
     }
 
     private void configureAction(int viewId, int descriptionId,
@@ -1325,6 +1330,7 @@ final class DashboardChrome {
                 ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                 : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
         if (obscuredChanged && !obscured) {
+            refreshFeatureControls();
             setSelectedDestination(DESTINATION_HOME);
             activity.syncDashboardSystemBars();
         }
@@ -1356,6 +1362,7 @@ final class DashboardChrome {
             return;
         }
         foreground = true;
+        refreshFeatureControls();
         updateGraphInteraction();
         forecastRepository.onForeground();
         root.removeCallbacks(refreshClock);

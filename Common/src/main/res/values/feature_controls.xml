@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="feature_controls_title">Feature controls</string>
+    <string name="feature_controls_summary">Show or hide the Add button</string>
+    <string name="feature_controls_intro">Choose which controls appear on Home. Your history, glucose readings and alerts stay unchanged.</string>
+    <string name="feature_controls_add_button">Add button</string>
+    <string name="feature_controls_add_hint">Turn on to log food and insulin from Home. Off by default.</string>
+</resources>

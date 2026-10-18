@@ -66,16 +66,16 @@ public class SettingsLegacyNavigationContractTest {
     }
 
     @Test
-    public void rootIsASixCategoryTaskMapWithoutTimelineOrInsights()
+    public void rootIsASevenCategoryTaskMapWithoutTimelineOrInsights()
             throws Exception {
         String settings=source("src/main/java/tk/glucodata/settings/Settings.java");
         int start=settings.indexOf("Button mirror=getbutton(context,R.string.mirror)");
         int end=settings.indexOf("views=null;",start);
         String phoneRoot=settings.substring(start,end);
-        assertTrue(settings.contains("PHONE_SETTINGS_CATEGORY_COUNT=6"));
+        assertTrue(settings.contains("PHONE_SETTINGS_CATEGORY_COUNT=7"));
         for(String category:new String[]{
                 "glucoseEntry","alertsEntry","connectionsEntry",
-                "dataEntry","behaviorEntry","advancedEntry"}) {
+                "dataEntry","behaviorEntry","featureEntry","advancedEntry"}) {
             assertTrue(phoneRoot.contains(category+".setOnClickListener"));
         }
         assertTrue(phoneRoot.contains("PhoneSettingsPage glucosePage"));
@@ -84,6 +84,7 @@ public class SettingsLegacyNavigationContractTest {
         assertTrue(phoneRoot.contains("PhoneSettingsPage dataPage"));
         assertTrue(phoneRoot.contains("PhoneSettingsPage behaviorPage"));
         assertTrue(phoneRoot.contains("PhoneSettingsPage advancedPage"));
+        assertTrue(phoneRoot.contains("PhoneSettingsPage featurePage"));
         assertTrue(phoneRoot.contains("phoneSettingsGroup(context,personalConnection,intakeBackend,exchanges,mirror)"));
         assertTrue(phoneRoot.contains("PersonalConnectionSettings.show(context)"));
         assertTrue(phoneRoot.contains("IntakeBackendSettings.show(context)"));

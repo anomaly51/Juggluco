@@ -1770,7 +1770,7 @@ private static int settingsDp(float value) {
 static final int PHONE_SETTINGS_MIN_TOUCH_DP=48;
 static final int PHONE_GRAPH_DISPLAY_TOGGLE_COUNT=11;
 static final int PHONE_LEGACY_ACTION_COUNT=7;
-static final int PHONE_SETTINGS_CATEGORY_COUNT=6;
+static final int PHONE_SETTINGS_CATEGORY_COUNT=7;
 
 static boolean useClinicalPhoneChild(boolean wearable) {
     return !wearable;
@@ -2549,9 +2549,12 @@ private    void mksettings(MainActivity context) {
         LinearLayout advancedEntry=phoneSettingsHubRow(context,
                 R.string.settings_category_advanced,
                 R.string.settings_category_advanced_summary);
+        LinearLayout featureEntry=phoneSettingsHubRow(context,
+                R.string.feature_controls_title,
+                R.string.feature_controls_summary);
         phoneSettingsLayout.addView(ClinicalUi.card(context,glucoseEntry,
                 alertsEntry,connectionsEntry,dataEntry,behaviorEntry,
-                advancedEntry));
+                featureEntry,advancedEntry));
         LinearLayout languageEntry=ClinicalUi.actionRow(context,
                 context.getString(R.string.app_language_title),
                 tk.glucodata.AppLanguagePicker.selectedLabel());
@@ -2559,6 +2562,10 @@ private    void mksettings(MainActivity context) {
         phoneSettingsLayout.addView(ClinicalUi.card(context,languageEntry));
 
         final LinearLayout settingsHub=phoneSettingsLayout;
+        PhoneSettingsPage featurePage=new PhoneSettingsPage(context,settingsHub,
+                R.string.feature_controls_title,R.string.feature_controls_intro,
+                phoneSettingsGroup(context,tk.glucodata.FeatureControls.addButtonSetting(
+                        context,context::refreshFeatureControls)));
         LinearLayout unitRow=phoneSettingsUnitRow(context,unitLabel,mmolL,mgdl);
         LinearLayout forecastAction=ClinicalUi.actionRow(context,
                 context.getString(R.string.settings_forecast_title),
@@ -2663,6 +2670,7 @@ private    void mksettings(MainActivity context) {
         connectionsEntry.setOnClickListener(view->connectionsPage.show(connectionsEntry));
         dataEntry.setOnClickListener(view->dataPage.show(dataEntry));
         behaviorEntry.setOnClickListener(view->behaviorPage.show(behaviorEntry));
+        featureEntry.setOnClickListener(view->featurePage.show(featureEntry));
         advancedEntry.setOnClickListener(view->advancedPage.show(advancedEntry));
 
         calibration.setOnClickListener(view->Calibration.show(context,

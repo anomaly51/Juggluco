@@ -1265,10 +1265,15 @@ void onDashboardGraphViewportMoved() {
 
 void showIntakeComposer() {
     if(isWearable) return;
+    if(!FeatureControls.isAddEnabled(this)) return;
     if(AppUpdates.interceptNavigation(this)) return;
     if(intakeComposer!=null&&intakeComposer.isShowing()) return;
     intakeComposer=new IntakeComposer(this);
     intakeComposer.show();
+    }
+
+public void refreshFeatureControls() {
+    if(dashboardChrome!=null) dashboardChrome.refreshFeatureControls();
     }
 
 void onIntakeComposerClosed(IntakeComposer composer) {

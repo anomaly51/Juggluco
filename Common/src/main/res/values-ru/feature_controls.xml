@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="feature_controls_title">Отключение функционала</string>
+    <string name="feature_controls_summary">Показать или скрыть кнопку «Добавить»</string>
+    <string name="feature_controls_intro">Выберите, какие элементы показывать на главном экране. История, показания сахара и сигналы не изменятся.</string>
+    <string name="feature_controls_add_button">Кнопка «Добавить»</string>
+    <string name="feature_controls_add_hint">Включите, чтобы записывать еду и инсулин с главного экрана. По умолчанию выключено.</string>
+</resources>
