@@ -23,10 +23,21 @@ public final class PersonalConnectionSettings {
     public static void show(MainActivity activity) {
         PersonalConnection connection=PersonalConnection.get(activity);
         PersonalConnectionView root=new PersonalConnectionView(activity);
-        Runnable render=()->root.render(connection.progress(),connection.status(),connection.viewerUrl(),
-                connection.busy(),connection.needsClaim());
+        Runnable render=()-> {
+            root.render(connection.progress(),connection.status(),connection.viewerUrl(),connection.busy(),connection.needsClaim());
+            root.renderTiming(connection.startedAt(),connection.nextRetry(),connection.attempts(),
+                    connection.verifiedAt(),connection.readingAt(),connection.progress());
+        };
+        Runnable clock=new Runnable() {
+            public void run() {
+                root.renderTiming(connection.startedAt(),connection.nextRetry(),connection.attempts(),
+                        connection.verifiedAt(),connection.readingAt(),connection.progress());
+                root.postDelayed(this,1000);
+            }
+        };
         Runnable close=()-> {
             connection.removeObserver(render);
+            root.removeCallbacks(clock);
             ViewCompat.setOnApplyWindowInsetsListener(root,null);
             if(root.getParent() instanceof ViewGroup) ((ViewGroup)root.getParent()).removeView(root);
             activity.themeLightBars();
@@ -46,6 +57,7 @@ public final class PersonalConnectionSettings {
         });
         root.open.setOnClickListener(view->activity.startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(connection.viewerUrl()))));
         root.change.setOnClickListener(view->showChange(activity,connection));
+        root.recheck.setOnClickListener(view->connection.ensure(true));
         ViewCompat.setAccessibilityPaneTitle(root,activity.getString(R.string.personal_connection_title));
         ViewCompat.setOnApplyWindowInsetsListener(root,(view,insets)-> {
             androidx.core.graphics.Insets bars=insets.getInsets(WindowInsetsCompat.Type.systemBars()|
@@ -59,6 +71,7 @@ public final class PersonalConnectionSettings {
         MainActivity.setonback(close);
         connection.observe(render);
         connection.ensure(true);
+        root.post(clock);
         ViewCompat.requestApplyInsets(root);
         activity.themeLightBars();
     }

@@ -26,6 +26,7 @@ public class PersonalConnectionViewTest {
             Context context=new ContextThemeWrapper(RuntimeEnvironment.getApplication().createConfigurationContext(config),R.style.AppTheme_ClinicalDark);
             PersonalConnectionView view=new PersonalConnectionView(context);
             view.render(100,R.string.personal_connection_ready,"https://gluco-my-long-personal-address-abcdefghijklmnopqrstuvwxyz.api-api-api.com/",false,false);
+            view.renderTiming(1,0,2,System.currentTimeMillis(),System.currentTimeMillis()-86_400_000,100);
             int width=ClinicalUi.dp(context,size[0]),height=ClinicalUi.dp(context,size[1]);
             int gutter=ClinicalUi.readableHorizontalGutter(context,width,16);
             view.setPadding(gutter,0,gutter,ClinicalUi.dp(context,16));
@@ -58,5 +59,25 @@ public class PersonalConnectionViewTest {
         view.render(100,R.string.personal_connection_ready,"https://example.com",false,false);
         assertTrue(view.change.isEnabled());
         assertEquals(context.getString(R.string.personal_connection_copy),view.primary.getText().toString());
+    }
+
+    @Test public void checklistShowsExactBlockedStepAndRetryCountdownWithoutFalseSuccess() {
+        Context context=new ContextThemeWrapper(RuntimeEnvironment.getApplication(),R.style.AppTheme_ClinicalDark);
+        PersonalConnectionView view=new PersonalConnectionView(context);
+        view.render(40,R.string.personal_connection_dns_phone_wait,"https://example.com/",false,false);
+        long now=android.os.SystemClock.elapsedRealtime();
+        view.renderTiming(now-5000,now+15_000,2,0,0,40);
+        assertEquals(8,view.steps.length);
+        assertTrue(view.steps[2].getText().toString().contains(context.getString(R.string.personal_connection_step_done)));
+        assertTrue(view.steps[3].getText().toString().contains(context.getString(R.string.personal_connection_step_retry)));
+        assertTrue(view.steps[4].getText().toString().contains(context.getString(R.string.personal_connection_step_waiting)));
+        assertTrue(view.timing.getText().toString().contains("15"));
+        assertEquals(View.GONE,view.reading.getVisibility());
+        assertFalse(view.open.isEnabled());
+        view.render(100,R.string.personal_connection_ready,"https://example.com/",false,false);
+        view.renderTiming(now,0,2,System.currentTimeMillis(),0,100);
+        assertEquals(context.getString(R.string.personal_connection_no_readings),view.reading.getText().toString());
+        assertEquals(View.VISIBLE,view.recheck.getVisibility());
+        assertTrue(view.recheck.isEnabled());
     }
 }

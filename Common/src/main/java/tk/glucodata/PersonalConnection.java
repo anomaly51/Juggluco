@@ -28,6 +28,9 @@ public final class PersonalConnection {
     private volatile String viewerUrl="";
     private volatile boolean legacy;
     private long lastAttempt;
+    private volatile long startedAt, nextRetry, verifiedAt, readingAt;
+    private volatile int attempts;
+    private final Runnable retryTask=()->ensure(false);
 
     private PersonalConnection(Context context) {
         this.context=context.getApplicationContext();
@@ -46,6 +49,11 @@ public final class PersonalConnection {
     public int status() { return status; }
     public String viewerUrl() { return viewerUrl; }
     public boolean needsClaim() { return legacy; }
+    public long startedAt() { return startedAt; }
+    public long nextRetry() { return nextRetry; }
+    public long verifiedAt() { return verifiedAt; }
+    public long readingAt() { return readingAt; }
+    public int attempts() { return attempts; }
     public void observe(Runnable listener) { listeners.addIfAbsent(listener); listener.run(); }
     public void removeObserver(Runnable listener) { listeners.remove(listener); }
 
@@ -57,9 +65,10 @@ public final class PersonalConnection {
 
     /** Foreground retries are throttled; opening Settings can explicitly retry. */
     public synchronized void ensure(boolean explicit) {
-        if(busy || (!explicit && (progress==100 || (lastAttempt>0&&android.os.SystemClock.elapsedRealtime()-lastAttempt<30_000)))) return;
+        long now=android.os.SystemClock.elapsedRealtime();
+        if(busy || (!explicit && ((progress==100&&now-lastAttempt<120_000)
+                ||(lastAttempt>0&&now-lastAttempt<10_000)))) return;
         busy=true;
-        lastAttempt=android.os.SystemClock.elapsedRealtime();
         worker.execute(()->run(false,null));
     }
 
@@ -85,6 +94,15 @@ public final class PersonalConnection {
 
     private void run(boolean claim,String rotationLabel) {
         boolean retry=false;
+        boolean verifying=false;
+        main.removeCallbacks(retryTask);
+        nextRetry=0;
+        lastAttempt=android.os.SystemClock.elapsedRealtime();
+        if(startedAt==0||progress==100||rotationLabel!=null) {
+            startedAt=lastAttempt;
+            attempts=0;
+        }
+        attempts++;
         try {
             publish(1,R.string.personal_connection_identity);
             JSONObject identity=load();
@@ -108,6 +126,7 @@ public final class PersonalConnection {
                 // Persist before the first request: a lost response cannot create a second account.
                 save(identity);
             }
+            publish(10,R.string.personal_connection_connecting);
             String base=identity.getString("base");
             String id=identity.getString("id");
             String secret=identity.getString("secret");
@@ -135,7 +154,6 @@ public final class PersonalConnection {
                     save(identity);
                 }
             }
-            publish(25,R.string.personal_connection_connecting);
             if(viewer.isEmpty()) {
                 response=client.connectionRequest("POST",identity.optBoolean("claim")?
                         "/v1/installations/claim":"/v1/installations",
@@ -148,7 +166,6 @@ public final class PersonalConnection {
             } else {
                 response=client.connectionRequest("GET","/devices/"+id+"/connection",null,null);
             }
-            publish(65,R.string.personal_connection_created);
             String path=response.getString("viewer_path");
             String publicUrl=response.isNull("viewer_url")?"":response.optString("viewer_url","");
             if(!id.equals(response.getString("installation_id"))
@@ -157,25 +174,38 @@ public final class PersonalConnection {
                 throw new IllegalArgumentException("Invalid connection response");
             if(!publicUrl.isEmpty()&&!PersonalConnectionPolicy.validViewerUrl(publicUrl,base))
                 throw new IllegalArgumentException("Invalid viewer domain");
+            publish(25,R.string.personal_connection_created);
             String nextViewer=publicUrl.isEmpty()?base+path:publicUrl;
             identity.put("viewer",nextViewer);
             identity.remove("rotation_id");
             identity.remove("rotation_label");
             save(identity);
-            publish(85,R.string.personal_connection_saving);
+            publish(25,R.string.personal_connection_saving);
             synchronized(repository) {
                 if(!repository.backendIdentity().sameAs(before)
                         ||!repository.configure(api,secret)) {
-                    publish(85,R.string.personal_connection_pending);
+                    retry=true;
+                    publish(25,R.string.personal_connection_pending);
                     return;
                 }
             }
             viewerUrl=nextViewer;
-            if(!publicUrl.isEmpty()&&!response.optBoolean("viewer_ready",false)) {
-                retry=true;
-                publish(90,R.string.personal_connection_dns_pending);
-                return;
+            verifying=true;
+            // Server readiness cannot prove DNS/HTTPS on the phone's Wi-Fi,
+            // mobile carrier or VPN. Always run the public path locally.
+            long latest=PersonalLinkVerifier.verify(nextViewer,base,path,this::publish,new PersonalLinkVerifier.Network());
+            JSONObject finalState=client.connectionRequest("GET","/devices/"+id+"/connection",null,null);
+            String finalUrl=finalState.optString("viewer_url","");
+            if(finalUrl.isEmpty()) finalUrl=base+finalState.getString("viewer_path");
+            if(!nextViewer.equals(finalUrl)||!id.equals(finalState.getString("installation_id")))
+                throw new java.io.IOException("Connection changed while verifying");
+            synchronized(repository) {
+                IntakeRepository.BackendIdentity current=repository.backendIdentity();
+                if(!current.url.equals(api)||!current.token.equals(secret))
+                    throw new java.io.IOException("Phone connection changed while verifying");
             }
+            readingAt=latest;
+            verifiedAt=System.currentTimeMillis();
             publish(100,R.string.personal_connection_ready);
         } catch(IntakeApiClient.ApiException error) {
             retry=error.statusCode>=500||error.statusCode==429;
@@ -184,13 +214,19 @@ public final class PersonalConnection {
                     error.statusCode==429?R.string.personal_connection_capacity:
                     R.string.personal_connection_retry);
         } catch(Exception error) {
-            retry=error instanceof java.io.IOException;
+            retry=verifying||error instanceof java.io.IOException;
             // Never log credential-bearing JSON, URL, response bodies or provider secrets.
-            publish(progress,R.string.personal_connection_retry);
+            publish(progress,error instanceof java.net.UnknownHostException?R.string.personal_connection_dns_phone_wait:
+                    error instanceof javax.net.ssl.SSLException?R.string.personal_connection_tls_failed:
+                    verifying?R.string.personal_connection_verification_retry:R.string.personal_connection_retry);
         } finally {
             busy=false;
+            if(retry) {
+                long delay=listeners.isEmpty()?60_000L:Math.min(30_000L,10_000L*attempts);
+                nextRetry=android.os.SystemClock.elapsedRealtime()+delay;
+                main.postDelayed(retryTask,delay);
+            }
             main.post(()-> { for(Runnable listener:listeners) listener.run(); });
-            if(retry) main.postDelayed(()->ensure(false),60_000L);
         }
     }
 }

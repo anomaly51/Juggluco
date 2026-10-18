@@ -12,10 +12,12 @@ Android 12+ extraction rules also exclude the backend credential preferences and
 forecast cursors from device transfers. This follows Android's guidance on
 [device-specific identifiers and backup exclusions](https://developer.android.com/identity/data/autobackup).
 
-Settings → Connections → Personal link shows completed setup milestones
-(1 / 25 / 65 / 85 / 100%), a retry action, the read-only URL and Copy/Open/Change.
-These percentages represent steps, not estimated elapsed time. Network failures
-retry after a minute while the application process is alive and on later launches.
+Settings → Connections → Personal link shows eight completed setup milestones
+(10 / 25 / 40 / 55 / 70 / 85 / 95 / 100%), an individual status for each check,
+elapsed time, attempt count and a countdown to the next retry. These percentages
+represent checks, not estimated time. Failures retry after 10–30 seconds while
+the screen is observed, or a minute in the background while the process is alive.
+Opening the screen or a later launch resumes with the same durable identity.
 The local glucose/alert system does not wait for provisioning.
 
 The production viewer URL is `https://gluco-<128-bit-random-dns-label>.api-api-api.com/`.
@@ -29,9 +31,20 @@ database or model. The old handle stops working, including existing SSE streams
 other devices cannot be remotely erased.
 
 The server returns `viewer_url` and `viewer_ready` alongside the legacy
-`viewer_path`. Android shows 90% / waiting for DNS and HTTPS until the public
-address passes an HTTPS check. Sync is already connected during this wait;
-automatic retries reuse the same identity. Old APKs continue using their
+`viewer_path`. Starting with Android 909, the server's readiness hint is **not**
+enough for 100%: the phone resolves DNS on its own network, validates the public
+TLS endpoint and matching host, fetches the root PWA, its same-origin JS/CSS and
+install manifest, then validates the read-only snapshot API. The owner endpoint
+is queried again to confirm the URL did not change during those checks. Redirects
+are rejected; TLS verification stays enabled; owner credentials are never sent
+to public viewer requests. Network failures remain below 100% with a retry.
+Copy/Open/Change only become available after this cycle succeeds. A new explicit
+check never retains a stale 100%. Browser-specific negative DNS caches can still
+lag behind the phone resolver: the screen explains reloading an old browser tab.
+Link readiness and measurement freshness are separate: show the last sensor
+timestamp (or no readings), never invent a reading or mark stale data as live.
+Sync is already connected during this wait; automatic retries reuse the same
+identity. Old APKs continue using their
 previous query links. New APKs adopt the domain without re-registering or
 claiming history again. Local backends without a configured DNS zone retain
 query links. Android currently accepts generated HTTPS viewer URLs only in the

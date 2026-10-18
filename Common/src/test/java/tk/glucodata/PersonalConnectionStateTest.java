@@ -36,6 +36,7 @@ public class PersonalConnectionStateTest {
     private volatile Throwable serverError;
     private String base,id,owner;
     private volatile boolean failNext;
+    private volatile boolean failViewer;
     private final List<String> registrations=new ArrayList<>();
     private final List<String> rotations=new ArrayList<>();
     private String handle="abcdefghijklmnopqrstuv";
@@ -74,11 +75,19 @@ public class PersonalConnectionStateTest {
                     rotations.add(body.getString("operation_id"));
                     handle="changed-abcdefghijklmnopqrstuv";
                 }
-                int status=failNext?503:200;
-                failNext=false;
-                byte[] response=(status==503?new JSONObject().put("detail","temporary"):
-                        new JSONObject().put("installation_id",id).put("api_path","/devices/"+id)
-                                .put("viewer_path","/viewer/?profile="+handle)).toString().getBytes(StandardCharsets.UTF_8);
+                boolean publicRequest=path.startsWith("/viewer/")||path.startsWith("/v1/shares/");
+                if(publicRequest&&!authorization.isEmpty()) throw new IllegalStateException("Owner credential leaked to viewer");
+                int status=publicRequest?(failViewer?503:200):(failNext?503:200);
+                if(!publicRequest) failNext=false;
+                String payloadText;
+                if(path.startsWith("/viewer/?")) payloadText="<div id=\"root\"></div><script src=\"/viewer/assets/main.js\"></script>";
+                else if(path.startsWith("/viewer/assets/")) payloadText="// viewer app";
+                else if(path.startsWith("/viewer/personal.webmanifest")) payloadText=new JSONObject().put("start_url","/viewer/?profile="+handle).toString();
+                else if(path.endsWith("/session")) payloadText="{\"access_mode\":\"public\"}";
+                else if(path.endsWith("/snapshot")) payloadText="{\"api_version\":\"v1\",\"current_glucose\":null,\"glucose_history\":[],\"intake_events\":[]}";
+                else payloadText=new JSONObject().put("installation_id",id).put("api_path","/devices/"+id)
+                        .put("viewer_path","/viewer/?profile="+handle).put("viewer_ready",true).toString();
+                byte[] response=payloadText.getBytes(StandardCharsets.UTF_8);
                 String header="HTTP/1.1 "+status+" Result\r\nContent-Type: application/json\r\nContent-Length: "+response.length+"\r\nConnection: close\r\n\r\n";
                 socket.getOutputStream().write(header.getBytes(StandardCharsets.US_ASCII));
                 socket.getOutputStream().write(response);
@@ -118,7 +127,7 @@ public class PersonalConnectionStateTest {
         failNext=true;
         PersonalConnection first=freshController();
         run(first,null);
-        assertEquals(25,first.progress());
+        assertEquals(10,first.progress());
         assertEquals("",IntakeRepository.get(context).backendToken());
         PersonalConnection restarted=freshController();
         run(restarted,null);
@@ -143,7 +152,7 @@ public class PersonalConnectionStateTest {
         String token=IntakeRepository.get(context).backendToken();
         failNext=true;
         run(connection,"changed");
-        assertEquals(25,connection.progress());
+        assertEquals(10,connection.progress());
         PersonalConnection restarted=freshController();
         run(restarted,null);
         assertEquals(100,restarted.progress());
@@ -160,5 +169,25 @@ public class PersonalConnectionStateTest {
         assertTrue(connection.needsClaim());
         assertEquals("existing-owner-secret",IntakeRepository.get(context).backendToken());
         assertEquals(0,registrations.size());
+    }
+
+    @Test public void serverReadyDoesNotMeanPhoneReadyAndRetryPreservesIdentity() throws Exception {
+        failViewer=true;
+        PersonalConnection connection=freshController();
+        run(connection,null);
+        assertEquals(55,connection.progress());
+        assertTrue(connection.nextRetry()>0);
+        assertEquals(0,connection.verifiedAt());
+        String owner=IntakeRepository.get(context).backendToken();
+        failViewer=false;
+        run(connection,null);
+        assertEquals(100,connection.progress());
+        assertEquals(0,connection.nextRetry());
+        assertTrue(connection.verifiedAt()>0);
+        assertEquals(owner,IntakeRepository.get(context).backendToken());
+        assertEquals(1,registrations.size());
+        failViewer=true;
+        run(connection,null);
+        assertNotEquals("A later failure must not retain 100%",100,connection.progress());
     }
 }
