@@ -167,7 +167,7 @@ public final class PersonalConnection {
                 response=client.connectionRequest("GET","/devices/"+id+"/connection",null,null);
             }
             String path=response.getString("viewer_path");
-            String publicUrl=PersonalConnectionPolicy.preferredViewerUrl(response);
+            String publicUrl=response.isNull("viewer_url")?"":response.optString("viewer_url","");
             if(!id.equals(response.getString("installation_id"))
                     ||!response.getString("api_path").equals("/devices/"+id)
                     ||!PersonalConnectionPolicy.validViewerPath(path))
@@ -195,7 +195,7 @@ public final class PersonalConnection {
             // mobile carrier or VPN. Always run the public path locally.
             long latest=PersonalLinkVerifier.verify(nextViewer,base,path,this::publish,new PersonalLinkVerifier.Network());
             JSONObject finalState=client.connectionRequest("GET","/devices/"+id+"/connection",null,null);
-            String finalUrl=PersonalConnectionPolicy.preferredViewerUrl(finalState);
+            String finalUrl=finalState.optString("viewer_url","");
             if(finalUrl.isEmpty()) finalUrl=base+finalState.getString("viewer_path");
             if(!nextViewer.equals(finalUrl)||!id.equals(finalState.getString("installation_id")))
                 throw new java.io.IOException("Connection changed while verifying");

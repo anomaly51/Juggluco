@@ -27,10 +27,4 @@ final class PersonalConnectionPolicy {
         } catch(java.net.URISyntaxException error) { return false; }
     }
 
-    static String preferredViewerUrl(org.json.JSONObject response) {
-        String compact=response.optString("compact_viewer_url","");
-        if(response.isNull("compact_viewer_url")||compact.isEmpty())
-            return response.isNull("viewer_url")?"":response.optString("viewer_url","");
-        return compact;
-    }
 }

@@ -24,7 +24,7 @@ from fastapi import HTTPException, Request
 from starlette.responses import JSONResponse, Response
 from starlette.middleware import Middleware
 from starlette.responses import FileResponse
-from .connection_domains import DNS_LABEL, domain_label, compact_domain_label, domain_ready, is_personal_hostname
+from .connection_domains import DNS_LABEL, domain_label, domain_ready, is_personal_hostname
 
 HANDLE = re.compile(r"^(?:[a-z0-9][a-z0-9-]{0,23}-)?[A-Za-z0-9_-]{22}$")
 SECRET = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
@@ -49,31 +49,28 @@ class ConnectionRegistry:
         connection.execute("""CREATE TABLE IF NOT EXISTS installations (
             id TEXT PRIMARY KEY, owner_hash TEXT NOT NULL, handle TEXT UNIQUE NOT NULL,
             created_at INTEGER NOT NULL, legacy INTEGER NOT NULL DEFAULT 0,
-            rotation_id TEXT, dns_label TEXT, compact_dns_label TEXT, ai_day INTEGER NOT NULL DEFAULT 0,
+            rotation_id TEXT, dns_label TEXT, ai_day INTEGER NOT NULL DEFAULT 0,
             ai_requests INTEGER NOT NULL DEFAULT 0)""")
         # Transactional migration keeps old identities, handles and databases.
         with connection:
             connection.execute("BEGIN IMMEDIATE")
             if 'dns_label' not in {row[1] for row in connection.execute('PRAGMA table_info(installations)')}:
                 connection.execute('ALTER TABLE installations ADD COLUMN dns_label TEXT')
-            if 'compact_dns_label' not in {row[1] for row in connection.execute('PRAGMA table_info(installations)')}:
-                connection.execute('ALTER TABLE installations ADD COLUMN compact_dns_label TEXT')
-            for row in connection.execute('SELECT id, handle FROM installations WHERE dns_label IS NULL').fetchall():
-                connection.execute('UPDATE installations SET dns_label = ? WHERE id = ?', (domain_label(row['handle']), row['id']))
             connection.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_viewer_dns ON installations(dns_label)')
-            connection.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_compact_viewer_dns ON installations(compact_dns_label)')
-            for row in connection.execute('SELECT id, handle FROM installations WHERE compact_dns_label IS NULL').fetchall():
-                connection.execute('UPDATE installations SET compact_dns_label = ? WHERE id = ?',
-                                   (self._new_compact_label(connection, row['handle']), row['id']))
+            # One current address, no compatibility alias. Old DNS links are
+            # intentionally revoked; ownership, storage and history stay intact.
+            for row in connection.execute("SELECT id, handle FROM installations WHERE dns_label IS NULL OR dns_label LIKE 'gluco-%'").fetchall():
+                connection.execute('UPDATE installations SET dns_label = ? WHERE id = ?',
+                                   (self._new_dns_label(connection, row['handle']), row['id']))
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_legacy_owner "
                            "ON installations(legacy) WHERE legacy = 1")
         return connection
 
     @staticmethod
-    def _new_compact_label(connection, handle):
+    def _new_dns_label(connection, handle):
         for _ in range(16):
-            label = compact_domain_label(handle)
-            if not connection.execute('SELECT 1 FROM installations WHERE compact_dns_label = ?', (label,)).fetchone():
+            label = domain_label(handle)
+            if not connection.execute('SELECT 1 FROM installations WHERE dns_label = ?', (label,)).fetchone():
                 return label
         raise HTTPException(503, 'viewer address allocation busy; retry shortly')
 
@@ -94,8 +91,7 @@ class ConnectionRegistry:
         if not DNS_LABEL.fullmatch(label):
             return None
         with closing(self.connect()) as connection:
-            return connection.execute('SELECT * FROM installations WHERE dns_label = ? OR compact_dns_label = ?',
-                                      (label, label)).fetchone()
+            return connection.execute('SELECT * FROM installations WHERE dns_label = ?', (label,)).fetchone()
 
     def register(self, identifier: str, secret: str, *, legacy=False):
         with closing(self.connect()) as connection, connection:
@@ -116,8 +112,8 @@ class ConnectionRegistry:
                 raise HTTPException(429, "registration capacity reached; try later")
             handle = secrets.token_urlsafe(16)
             connection.execute(
-                "INSERT INTO installations(id, owner_hash, handle, dns_label, compact_dns_label, created_at, legacy) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (identifier, digest(secret), handle, domain_label(handle), self._new_compact_label(connection, handle), int(time.time()), int(legacy)),
+                "INSERT INTO installations(id, owner_hash, handle, dns_label, created_at, legacy) VALUES (?, ?, ?, ?, ?, ?)",
+                (identifier, digest(secret), handle, self._new_dns_label(connection, handle), int(time.time()), int(legacy)),
             )
             return connection.execute("SELECT * FROM installations WHERE id = ?", (identifier,)).fetchone()
 
@@ -129,8 +125,8 @@ class ConnectionRegistry:
                 raise HTTPException(401, "invalid installation credential")
             if row["rotation_id"] != operation:
                 handle = (label + "-" if label else "") + secrets.token_urlsafe(16)
-                connection.execute("UPDATE installations SET handle = ?, dns_label = ?, compact_dns_label = ?, rotation_id = ? WHERE id = ?",
-                                   (handle, domain_label(handle), self._new_compact_label(connection, handle), operation, identifier))
+                connection.execute("UPDATE installations SET handle = ?, dns_label = ?, rotation_id = ? WHERE id = ?",
+                                   (handle, self._new_dns_label(connection, handle), operation, identifier))
             return connection.execute("SELECT * FROM installations WHERE id = ?", (identifier,)).fetchone()
 
     def allow_ai(self, identifier: str, limit: int):
@@ -169,8 +165,7 @@ class Connections:
         # writer lock, so simultaneous rotations cannot publish an older list.
         with closing(self.registry.connect()) as connection, connection:
             connection.execute('BEGIN IMMEDIATE')
-            labels = [row[0] for row in connection.execute(
-                'SELECT dns_label AS label FROM installations UNION SELECT compact_dns_label AS label FROM installations ORDER BY label')]
+            labels = [row[0] for row in connection.execute('SELECT dns_label FROM installations ORDER BY dns_label')]
             public_directory = self.directory / 'public-routing'
             public_directory.mkdir(exist_ok=True)
             name = None
@@ -230,11 +225,6 @@ class Connections:
             hostname = row['dns_label'] + '.' + self.settings.connection_viewer_domain
             status_path = self.settings.connection_dns_status_path or self.directory / 'dns-status.json'
             result.update(viewer_url='https://' + hostname + '/', viewer_ready=domain_ready(status_path, hostname))
-            # Additive capability: old APKs retain their accepted long URL.
-            # Both hosts map to the same profile; explicit rotation revokes both.
-            compact_host = row['compact_dns_label'] + '.' + self.settings.connection_viewer_domain
-            result.update(compact_viewer_url='https://' + compact_host + '/',
-                          compact_viewer_ready=domain_ready(status_path, compact_host))
         return result
 
 

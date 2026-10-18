@@ -21,13 +21,13 @@ the screen is observed, or a minute in the background while the process is alive
 Opening the screen or a later launch resumes with the same durable identity.
 The local glucose/alert system does not wait for provisioning.
 
-Android 910 prefers `https://g-<12-random-base32-characters>.api-api-api.com/`.
+Android 910 uses `https://g-<12-random-base32-characters>.api-api-api.com/`.
 The suffix has 60 random bits (not a sequential ID); a unique SQLite index and
 collision retries under the writer lock guarantee that one live address never
 selects two profiles. Owner credentials remain 256-bit and UUIDs do not change.
 This is a deliberate URL-length/privacy trade-off for the small deployment:
 it is harder to guess than a 4–6 character code, but has less entropy than the
-old 128-bit viewer address. Possession of either URL grants read-only access.
+old 128-bit viewer address. Possession of the URL grants read-only access.
 It opens the application at the domain root: no `/viewer/` or `?profile=` is
 needed in the shared address. Changing it can add an optional lowercase label,
 e.g. `https://g-my-sugar-<12-random-characters>.api-api-api.com/`. The random suffix is
@@ -37,17 +37,17 @@ database or model. The old handle stops working, including existing SSE streams
 (at the next update/heartbeat, at most 15 seconds). Already downloaded copies on
 other devices cannot be remotely erased.
 
-The migration adds a stable `compact_dns_label` per existing profile without
-changing the old DNS label, owner, handle, database or model. Existing long links
-continue to work. Both aliases are revoked on an explicit "Change link" action;
-that action remains idempotent. Both are provisioned through the same controller.
+The migration replaces the existing long `gluco-*` DNS label once with a durable
+short `g-*` label, as explicitly requested by the owner. There is exactly one DNS
+address per profile: no alias table, redirect or fallback DNS name. Old DNS links
+are rejected immediately and removed from the routing snapshot. UUID, owner
+credential, handle, database and model stay unchanged. Explicit "Change link"
+remains idempotent and revokes the prior address and query handle.
 
-The server returns `compact_viewer_url` / `compact_viewer_ready` alongside
-`viewer_url` / `viewer_ready` and the legacy `viewer_path`. Older APKs ignore the
-new fields and keep their compatible long URL. Android 910 prefers the short URL,
-falls back for older servers, and validates either format against the same
-explicit HTTPS domain allowlist. PWA cache/session/manifest isolation recognizes
-both prefixes, including malformed names, and never falls back to legacy data.
+The server still returns `viewer_url`, `viewer_ready` and the legacy `viewer_path`.
+Android 910 is required for short DNS addresses; older APKs must be updated.
+PWA cache/session/manifest isolation recognizes both host prefixes so cached old
+pages fail closed, never falling back to legacy data.
 Starting with Android 909, the server's readiness hint is **not**
 enough for 100%: the phone resolves DNS on its own network, validates the public
 TLS endpoint and matching host, fetches the root PWA, its same-origin JS/CSS and
@@ -61,8 +61,7 @@ lag behind the phone resolver: an old browser tab may need reloading later.
 Link readiness and measurement freshness are separate: show the last sensor
 timestamp (or no readings), never invent a reading or mark stale data as live.
 Sync is already connected during this wait; automatic retries reuse the same
-identity. Old APKs continue using their
-previous query links. New APKs adopt the domain without re-registering or
+identity. New APKs adopt the domain without re-registering or
 claiming history again. Local backends without a configured DNS zone retain
 query links. Android currently accepts generated HTTPS viewer URLs only in the
 explicit production `api-api-api.com` zone.
