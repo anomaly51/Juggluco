@@ -61,16 +61,16 @@ public class PersonalConnectionViewTest {
         assertEquals(context.getString(R.string.personal_connection_copy),view.primary.getText().toString());
     }
 
-    @Test public void checklistShowsExactBlockedStepAndRetryCountdownWithoutFalseSuccess() {
+    @Test public void singleStatusShowsBlockedStepAndRetryCountdownWithoutChecklist() {
         Context context=new ContextThemeWrapper(RuntimeEnvironment.getApplication(),R.style.AppTheme_ClinicalDark);
         PersonalConnectionView view=new PersonalConnectionView(context);
         view.render(40,R.string.personal_connection_dns_phone_wait,"https://example.com/",false,false);
         long now=android.os.SystemClock.elapsedRealtime();
         view.renderTiming(now-5000,now+15_000,2,0,0,40);
-        assertEquals(8,view.steps.length);
-        assertTrue(view.steps[2].getText().toString().contains(context.getString(R.string.personal_connection_step_done)));
-        assertTrue(view.steps[3].getText().toString().contains(context.getString(R.string.personal_connection_step_retry)));
-        assertTrue(view.steps[4].getText().toString().contains(context.getString(R.string.personal_connection_step_waiting)));
+        assertEquals("40% · "+context.getString(R.string.personal_connection_dns_phone_wait),view.status.getText().toString());
+        assertEquals(40,view.progress.getProgress());
+        assertFalse(allText(view).contains("01 ·"));
+        assertFalse(allText(view).contains("08 ·"));
         assertTrue(view.timing.getText().toString().contains("15"));
         assertEquals(View.GONE,view.reading.getVisibility());
         assertFalse(view.open.isEnabled());
@@ -79,5 +79,15 @@ public class PersonalConnectionViewTest {
         assertEquals(context.getString(R.string.personal_connection_no_readings),view.reading.getText().toString());
         assertEquals(View.VISIBLE,view.recheck.getVisibility());
         assertTrue(view.recheck.isEnabled());
+    }
+
+    private static String allText(View view) {
+        StringBuilder text=new StringBuilder();
+        if(view instanceof android.widget.TextView) text.append(((android.widget.TextView)view).getText());
+        if(view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group=(android.view.ViewGroup)view;
+            for(int i=0;i<group.getChildCount();i++) text.append(allText(group.getChildAt(i)));
+        }
+        return text.toString();
     }
 }

@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.connections import ConnectionRegistry, digest
-from app.connection_domains import DNS_LABEL, domain_label, domain_ready
+from app.connection_domains import DNS_LABEL, domain_label, compact_domain_label, domain_ready
 from app.connection_dns_controller import desired_routes, reconcile, public_ready, publish_status, OWNER_KEY, OWNER_VALUE
 from conftest import make_settings, TEST_TOKEN
 from test_connections import register, viewer
@@ -49,6 +49,12 @@ def test_dns_labels_are_stable_unpredictable_and_migrate_without_changing_owners
     assert migrated['handle'] == handle and migrated['legacy'] == 1
     assert migrated['dns_label'] == label
     assert registry.get_domain(label)['id'] == identifier
+    compact = migrated['compact_dns_label']
+    assert compact.startswith('g-my-sugar-') and len(compact.rsplit('-', 1)[1]) == 12
+    assert DNS_LABEL.fullmatch(compact)
+    assert registry.get_domain(compact)['id'] == identifier
+    assert registry.authenticate(identifier, secret)['compact_dns_label'] == compact
+    assert migrated['created_at'] == 123
 
 
 def test_host_selects_only_its_data_root_pwa_and_manifest_and_blocks_write_routes(tmp_path):
@@ -87,7 +93,76 @@ def test_host_selects_only_its_data_root_pwa_and_manifest_and_blocks_write_route
         described = client.get(a['api_path'] + '/connection', headers={**ah, 'X-Forwarded-Host': 'evil.invalid'}).json()
         assert described['viewer_url'] == a['viewer_url']
         snapshot = json.loads((app.state.connections.directory / 'public-routing/viewer-domains.json').read_text())
-        assert len(snapshot['labels']) == 2 and 'owner_hash' not in str(snapshot)
+        assert len(snapshot['labels']) == 4 and 'owner_hash' not in str(snapshot)
+
+
+def test_compact_alias_preserves_legacy_owner_history_and_revokes_both_on_rotation(tmp_path):
+    app = create_app(settings(tmp_path))
+    with TestClient(app, base_url='https://testserver') as client:
+        profile, headers = register(client, claim=True)
+        client.post('/v1/glucose/readings', headers={'Authorization': 'Bearer ' + TEST_TOKEN},
+                    json=reading_batch(int(time.time() * 1000))).raise_for_status()
+        short, old = profile['compact_viewer_url'], profile['viewer_url']
+        assert short.startswith('https://g-') and len(short) < len(old)
+        assert len(urlparse(short).hostname.split('.')[0]) == 14
+        assert profile['compact_viewer_ready'] is False
+        for url in (short, old):
+            snapshot = client.get(url + 'v1/viewer/snapshot').json()
+            assert snapshot['current_glucose'] is not None
+            assert client.get(url).status_code == 200
+            assert client.get(url + 'viewer/personal.webmanifest').json()['start_url'] == '/'
+            assert client.post(url + 'v1/glucose/readings', headers=headers, json={}).status_code == 405
+        described = client.get(profile['api_path'] + '/connection', headers=headers).json()
+        assert described == profile  # Stable aliases; never re-register or re-claim.
+        publish_status(app.state.connections.directory / 'dns-status.json', [urlparse(short).hostname])
+        described = client.get(profile['api_path'] + '/connection', headers=headers).json()
+        assert described['compact_viewer_ready'] is True and described['viewer_ready'] is False
+        other, _ = register(client)
+        assert client.get(other['compact_viewer_url'] + 'v1/viewer/snapshot').json()['current_glucose'] is None
+        operation = {'operation_id': str(uuid4()), 'label': 'vlad'}
+        rotated = client.post(profile['api_path'] + '/connection', headers=headers, json=operation).json()
+        assert rotated['compact_viewer_url'].startswith('https://g-vlad-')
+        assert rotated['api_path'] == profile['api_path'] and rotated['installation_id'] == profile['installation_id']
+        assert rotated == client.post(profile['api_path'] + '/connection', headers=headers, json=operation).json()
+        for url in (short, old):
+            assert client.get(url + 'v1/viewer/snapshot').status_code == 401
+        assert client.get(rotated['compact_viewer_url'] + 'v1/viewer/snapshot').json()['current_glucose'] is not None
+        assert client.get(profile['api_path'] + '/v1/intakes', headers=headers).status_code == 200
+
+
+def test_compact_collisions_retry_and_never_replace_an_existing_profile(tmp_path, monkeypatch):
+    registry = ConnectionRegistry(tmp_path / 'registry.sqlite3')
+    first = registry.register(str(uuid4()), secrets.token_urlsafe(32))
+    candidate = compact_domain_label('a' * 22)
+    labels = iter([first['compact_dns_label'], first['compact_dns_label'], candidate])
+    monkeypatch.setattr('app.connections.compact_domain_label', lambda handle: next(labels))
+    identifier, secret = str(uuid4()), secrets.token_urlsafe(32)
+    second = registry.register(identifier, secret)
+    assert second['compact_dns_label'] == candidate
+    assert registry.get_domain(first['compact_dns_label'])['id'] == first['id']
+    assert registry.register(identifier, secret)['compact_dns_label'] == candidate
+    monkeypatch.setattr('app.connections.compact_domain_label', lambda handle: candidate)
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as error:
+        registry.register(str(uuid4()), secrets.token_urlsafe(32))
+    assert error.value.status_code == 503
+    with registry.connect() as connection:
+        assert connection.execute('SELECT COUNT(*) FROM installations').fetchone()[0] == 2
+
+
+def test_thousand_compact_profiles_have_unique_durable_isolated_addresses(tmp_path):
+    registry = ConnectionRegistry(tmp_path / 'registry.sqlite3', daily_limit=1100)
+    owners = {}
+    for _ in range(1000):
+        identifier = str(uuid4())
+        row = registry.register(identifier, secrets.token_urlsafe(32))
+        label = row['compact_dns_label']
+        assert DNS_LABEL.fullmatch(label) and len(label) == 14
+        assert label not in owners
+        owners[label] = identifier
+    reopened = ConnectionRegistry(registry.path)
+    for label, identifier in owners.items():
+        assert reopened.get_domain(label)['id'] == identifier
 
 
 def test_dns_waits_for_https_probe_and_rotation_revokes_old_host_but_not_history(tmp_path):
@@ -112,14 +187,15 @@ def test_dns_waits_for_https_probe_and_rotation_revokes_old_host_but_not_history
         assert not domain_ready(status_path, host)
 
 
-def test_live_host_stream_is_revoked_even_before_dns_removal(tmp_path):
+@pytest.mark.parametrize('label_field', ['dns_label', 'compact_dns_label'])
+def test_live_host_stream_is_revoked_even_before_dns_removal(tmp_path, label_field):
     async def exercise():
         app = create_app(settings(tmp_path))
         manager = app.state.connections
         identifier, secret = str(uuid4()), secrets.token_urlsafe(32)
         row = manager.registry.register(identifier, secret)
         scope = _stream_scope([])
-        scope['headers'] = [(b'host', (row['dns_label'] + '.example.com').encode())]
+        scope['headers'] = [(b'host', (row[label_field] + '.example.com').encode())]
         sent = []
         delivered = False
         never = asyncio.Event()
@@ -143,7 +219,8 @@ def test_live_host_stream_is_revoked_even_before_dns_removal(tmp_path):
 
 
 def test_controller_batches_exact_routes_and_never_touches_unowned_routes():
-    labels = [domain_label(secrets.token_urlsafe(16)) for _ in range(33)]
+    labels = [domain_label(secrets.token_urlsafe(16)) for _ in range(17)]
+    labels += [compact_domain_label(secrets.token_urlsafe(16)) for _ in range(16)]
     routes = desired_routes(labels, 'example.com', 'juggluco', 'networking', 'public', 'https')
     assert [len(route['spec']['hostnames']) for route in routes] == [16, 16, 1]
     assert not any('*' in host for route in routes for host in route['spec']['hostnames'])

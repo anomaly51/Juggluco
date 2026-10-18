@@ -123,6 +123,17 @@ public class PersonalConnectionStateTest {
         } finally { executor.shutdownNow(); }
     }
 
+    @Test public void compactResponseIsPreferredWithoutBreakingOlderServers() throws Exception {
+        JSONObject response=new JSONObject().put("viewer_url","https://old.example/")
+                .put("compact_viewer_url","https://g-abcdefghijkl.api-api-api.com/");
+        assertEquals("https://g-abcdefghijkl.api-api-api.com/",PersonalConnectionPolicy.preferredViewerUrl(response));
+        response.put("compact_viewer_url",JSONObject.NULL);
+        assertEquals("https://old.example/",PersonalConnectionPolicy.preferredViewerUrl(response));
+        response.remove("compact_viewer_url");
+        assertEquals("https://old.example/",PersonalConnectionPolicy.preferredViewerUrl(response));
+        assertEquals("",PersonalConnectionPolicy.preferredViewerUrl(new JSONObject()));
+    }
+
     @Test public void lostRegistrationResponseAndProcessRestartKeepOneIdentity() throws Exception {
         failNext=true;
         PersonalConnection first=freshController();

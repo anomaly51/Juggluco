@@ -3,9 +3,10 @@ import base64
 import hashlib
 import json
 import re
+import secrets
 import time
 
-DNS_LABEL = re.compile(r"^gluco-(?:[a-z0-9][a-z0-9-]{0,23}-)?[a-z2-7]{26}$")
+DNS_LABEL = re.compile(r"^(?:gluco-(?:[a-z0-9][a-z0-9-]{0,23}-)?[a-z2-7]{26}|g-(?:[a-z0-9][a-z0-9-]{0,23}-)?[a-z2-7]{12})$")
 DOMAIN = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
 
@@ -14,6 +15,14 @@ def domain_label(handle: str) -> str:
     suffix = base64.b32encode(hashlib.sha256(handle.encode('ascii')).digest()[:16]).decode('ascii').lower().rstrip('=')
     prefix = handle[:-23] + '-' if len(handle) > 22 else ''
     return 'gluco-' + prefix + suffix
+
+
+def compact_domain_label(handle: str) -> str:
+    # 60 random bits, independent of the write credential. The registry checks
+    # collisions under its writer lock; the short code never identifies a DB.
+    suffix = base64.b32encode(secrets.token_bytes(8)).decode('ascii').lower()[:12]
+    prefix = handle[:-23] + '-' if len(handle) > 22 else ''
+    return 'g-' + prefix + suffix
 
 
 def is_personal_hostname(host: str | None, settings) -> bool:

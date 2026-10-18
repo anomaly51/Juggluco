@@ -16,11 +16,13 @@ afterEach(() => {
 })
 
 describe('personal viewer isolation', () => {
-  it('binds a DNS viewer to its origin, ignores profile overrides and launches at root', async () => {
-    const hostA = `gluco-${'a'.repeat(26)}.api-api-api.com`
-    const hostB = `gluco-${'b'.repeat(26)}.api-api-api.com`
+  it.each(['gluco-', 'g-'])('binds a %s DNS viewer to its origin, ignores profile overrides and launches at root', async (prefix) => {
+    const length = prefix === 'g-' ? 12 : 26
+    const hostA = `${prefix}${'a'.repeat(length)}.api-api-api.com`
+    const hostB = `${prefix}${'b'.repeat(length)}.api-api-api.com`
     expect(profileContext(`?profile=${b}`, hostA)).toEqual({ key: `host:${hostA}`, prefix: '/v1/viewer', handle: null })
     expect(profileContext('', 'gluco-invalid.api-api-api.com').key).not.toBe('legacy')
+    expect(profileContext('', 'g-invalid.api-api-api.com').key).not.toBe('legacy')
     vi.stubGlobal('window', { location: { hostname: hostA, search: `?profile=${b}` } })
     await clearSnapshot()
     await saveSnapshot(normalizeSnapshot(rawSnapshot), 321, 'public')

@@ -13,11 +13,6 @@ import android.widget.TextView;
 final class PersonalConnectionView extends LinearLayout {
     final Button back, open, change, primary, recheck;
     final TextView status, link, timing, reading;
-    final TextView[] steps=new TextView[8];
-    static final int[] MILESTONES={10,25,40,55,70,85,95,100};
-    static final int[] STEP_TITLES={R.string.personal_connection_step_identity,R.string.personal_connection_step_server,
-            R.string.personal_connection_step_saved,R.string.personal_connection_step_dns,R.string.personal_connection_step_https,
-            R.string.personal_connection_step_page,R.string.personal_connection_step_data,R.string.personal_connection_step_final};
     final ProgressBar progress;
     final ScrollView scroll;
 
@@ -42,16 +37,6 @@ final class PersonalConnectionView extends LinearLayout {
         timing=ClinicalUi.body(context,"");
         timing.setTextSize(14);
         addSpaced(content,timing,context,-2);
-        LinearLayout checklist=new LinearLayout(context);
-        checklist.setOrientation(VERTICAL);
-        for(int i=0;i<steps.length;i++) {
-            steps[i]=ClinicalUi.body(context,"");
-            steps[i].setTextSize(16);
-            steps[i].setPadding(0,ClinicalUi.dp(context,8),0,ClinicalUi.dp(context,8));
-            checklist.addView(steps[i]);
-        }
-        addSpaced(content,ClinicalUi.card(context,checklist),context,-2);
-        addSpaced(content,ClinicalUi.body(context,context.getString(R.string.personal_connection_stages)),context,-2);
         link=ClinicalUi.body(context,"");
         link.setTextIsSelectable(true);
         link.setTextColor(ClinicalUi.accent(context));
@@ -64,7 +49,6 @@ final class PersonalConnectionView extends LinearLayout {
         addSpaced(content,change,context,-2);
         recheck=ClinicalUi.button(context,context.getString(R.string.personal_connection_recheck),ClinicalUi.ButtonRole.SECONDARY);
         addSpaced(content,recheck,context,-2);
-        addSpaced(content,ClinicalUi.body(context,context.getString(R.string.personal_connection_browser_help)),context,-2);
         addSpaced(content,ClinicalUi.body(context,context.getString(R.string.personal_connection_privacy)),context,-2);
         scroll=ClinicalUi.scrollScreen(context,content);
         addView(scroll,new LayoutParams(-1,0,1));
@@ -76,17 +60,6 @@ final class PersonalConnectionView extends LinearLayout {
         String title=getContext().getString(R.string.personal_connection_progress,percent,getContext().getString(message));
         if(!title.contentEquals(status.getText())) status.setText(title);
         progress.setProgress(percent);
-        boolean current=false;
-        for(int i=0;i<steps.length;i++) {
-            boolean done=percent>=MILESTONES[i];
-            boolean active=!done&&!current;
-            if(active) current=true;
-            int state=done?R.string.personal_connection_step_done:active?
-                    (busy?R.string.personal_connection_step_active:R.string.personal_connection_step_retry):R.string.personal_connection_step_waiting;
-            steps[i].setText(getContext().getString(R.string.personal_connection_step_format,i+1,
-                    getContext().getString(STEP_TITLES[i]),getContext().getString(state),MILESTONES[i]));
-            steps[i].setTextColor(active?ClinicalUi.accent(getContext()):ClinicalUi.primaryText(getContext()));
-        }
         boolean ready=!url.isEmpty()&&percent==100;
         link.setText(!url.isEmpty()?url:getContext().getString(R.string.personal_connection_link_pending));
         open.setEnabled(ready&&!busy);

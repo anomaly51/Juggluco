@@ -19,11 +19,18 @@ final class PersonalConnectionPolicy {
             // redirects returned in a server response. Local/custom servers can
             // still return the legacy relative viewer_path.
             return "https".equals(url.getScheme()) && host!=null
-                    && host.matches("gluco-(?:[a-z0-9][a-z0-9-]{0,23}-)?[a-z2-7]{26}\\.api-api-api\\.com")
+                    && host.matches("(?:gluco-(?:[a-z0-9][a-z0-9-]{0,23}-)?[a-z2-7]{26}|g-(?:[a-z0-9][a-z0-9-]{0,23}-)?[a-z2-7]{12})\\.api-api-api\\.com")
                     && "https".equals(api.getScheme())
                     && "juggluco-general1.api-api-api.com".equals(api.getHost())
                     && url.getPort()==-1 && url.getUserInfo()==null
                     && "/".equals(url.getPath()) && url.getQuery()==null && url.getFragment()==null;
         } catch(java.net.URISyntaxException error) { return false; }
+    }
+
+    static String preferredViewerUrl(org.json.JSONObject response) {
+        String compact=response.optString("compact_viewer_url","");
+        if(response.isNull("compact_viewer_url")||compact.isEmpty())
+            return response.isNull("viewer_url")?"":response.optString("viewer_url","");
+        return compact;
     }
 }

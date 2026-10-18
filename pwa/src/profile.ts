@@ -1,8 +1,8 @@
 /** A viewer capability is explicit in the URL; never infer it from a prior tab. */
 export function profileContext(search = window.location.search, hostname = window.location.hostname) {
-  // DNS names are separate browser origins. Even a malformed gluco-* name must
+  // DNS names are separate browser origins. Even malformed personal names must
   // never use a legacy/another-profile cache or let ?profile override its host.
-  if (hostname.toLowerCase().startsWith('gluco-')) {
+  if (/^(?:gluco-|g-)/.test(hostname.toLowerCase())) {
     return { key: `host:${hostname.toLowerCase()}`, prefix: '/v1/viewer', handle: null }
   }
   const query = new URLSearchParams(search)

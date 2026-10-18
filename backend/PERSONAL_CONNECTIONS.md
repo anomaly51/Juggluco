@@ -12,26 +12,43 @@ Android 12+ extraction rules also exclude the backend credential preferences and
 forecast cursors from device transfers. This follows Android's guidance on
 [device-specific identifiers and backup exclusions](https://developer.android.com/identity/data/autobackup).
 
-Settings → Connections → Personal link shows eight completed setup milestones
-(10 / 25 / 40 / 55 / 70 / 85 / 95 / 100%), an individual status for each check,
-elapsed time, attempt count and a countdown to the next retry. These percentages
+Settings → Connections → Personal link shows the percentage and current status
+in one compact line, without a checklist. All eight setup checks remain
+(10 / 25 / 40 / 55 / 70 / 85 / 95 / 100%), with elapsed time, attempt count
+and a countdown to the next retry. These percentages
 represent checks, not estimated time. Failures retry after 10–30 seconds while
 the screen is observed, or a minute in the background while the process is alive.
 Opening the screen or a later launch resumes with the same durable identity.
 The local glucose/alert system does not wait for provisioning.
 
-The production viewer URL is `https://gluco-<128-bit-random-dns-label>.api-api-api.com/`.
+Android 910 prefers `https://g-<12-random-base32-characters>.api-api-api.com/`.
+The suffix has 60 random bits (not a sequential ID); a unique SQLite index and
+collision retries under the writer lock guarantee that one live address never
+selects two profiles. Owner credentials remain 256-bit and UUIDs do not change.
+This is a deliberate URL-length/privacy trade-off for the small deployment:
+it is harder to guess than a 4–6 character code, but has less entropy than the
+old 128-bit viewer address. Possession of either URL grants read-only access.
 It opens the application at the domain root: no `/viewer/` or `?profile=` is
 needed in the shared address. Changing it can add an optional lowercase label,
-e.g. `https://gluco-my-sugar-<random-dns-label>.api-api-api.com/`. The random suffix is
+e.g. `https://g-my-sugar-<12-random-characters>.api-api-api.com/`. The random suffix is
 mandatory; a short, guessable alias alone must not protect medical records.
 Changing the URL does not change the installation UUID, backend credential,
 database or model. The old handle stops working, including existing SSE streams
 (at the next update/heartbeat, at most 15 seconds). Already downloaded copies on
 other devices cannot be remotely erased.
 
-The server returns `viewer_url` and `viewer_ready` alongside the legacy
-`viewer_path`. Starting with Android 909, the server's readiness hint is **not**
+The migration adds a stable `compact_dns_label` per existing profile without
+changing the old DNS label, owner, handle, database or model. Existing long links
+continue to work. Both aliases are revoked on an explicit "Change link" action;
+that action remains idempotent. Both are provisioned through the same controller.
+
+The server returns `compact_viewer_url` / `compact_viewer_ready` alongside
+`viewer_url` / `viewer_ready` and the legacy `viewer_path`. Older APKs ignore the
+new fields and keep their compatible long URL. Android 910 prefers the short URL,
+falls back for older servers, and validates either format against the same
+explicit HTTPS domain allowlist. PWA cache/session/manifest isolation recognizes
+both prefixes, including malformed names, and never falls back to legacy data.
+Starting with Android 909, the server's readiness hint is **not**
 enough for 100%: the phone resolves DNS on its own network, validates the public
 TLS endpoint and matching host, fetches the root PWA, its same-origin JS/CSS and
 install manifest, then validates the read-only snapshot API. The owner endpoint
@@ -40,7 +57,7 @@ are rejected; TLS verification stays enabled; owner credentials are never sent
 to public viewer requests. Network failures remain below 100% with a retry.
 Copy/Open/Change only become available after this cycle succeeds. A new explicit
 check never retains a stale 100%. Browser-specific negative DNS caches can still
-lag behind the phone resolver: the screen explains reloading an old browser tab.
+lag behind the phone resolver: an old browser tab may need reloading later.
 Link readiness and measurement freshness are separate: show the last sensor
 timestamp (or no readings), never invent a reading or mark stale data as live.
 Sync is already connected during this wait; automatic retries reuse the same

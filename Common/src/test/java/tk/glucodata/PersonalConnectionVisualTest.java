@@ -20,7 +20,7 @@ import static org.junit.Assert.*;
 @Config(sdk=35,application=Application.class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 public class PersonalConnectionVisualTest {
-    @Test public void realStepsWrapOnFoldLandscapeLargeTextAndBothSystemThemes() throws Exception {
+    @Test public void compactStatusWrapsOnFoldLandscapeLargeTextAndBothSystemThemes() throws Exception {
         try {
             for(String theme:new String[]{"notnight","night"}) for(String language:new String[]{"ru","en"})
                 for(float scale:new float[]{1f,1.8f}) for(int[] size:new int[][]{{375,812},{800,375},{800,1000}}) {
@@ -29,7 +29,7 @@ public class PersonalConnectionVisualTest {
                     Context context=new ContextThemeWrapper(RuntimeEnvironment.getApplication(),R.style.AppTheme_ClinicalDark);
                     PersonalConnectionView view=new PersonalConnectionView(context);
                     view.setPadding(16,12,16,16);
-                    view.render(40,R.string.personal_connection_dns_phone_wait,"https://gluco-my-sugar-abcdefghijklmnopqrstuvwxyz.api-api-api.com/",false,false);
+                    view.render(40,R.string.personal_connection_dns_phone_wait,"https://g-vlad-abcdefghijkl.api-api-api.com/",false,false);
                     long now=android.os.SystemClock.elapsedRealtime();
                     view.renderTiming(now-30_000,now+10_000,2,0,0,40);
                     view.measure(View.MeasureSpec.makeMeasureSpec(size[0],View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(size[1],View.MeasureSpec.EXACTLY));
@@ -37,7 +37,9 @@ public class PersonalConnectionVisualTest {
                     assertTrue(view.scroll.getHeight()>0);
                     assertTrue(view.primary.getBottom()<=size[1]-16);
                     assertTrue(view.primary.getHeight()>=48);
-                    for(android.widget.TextView step:view.steps) assertTrue(step.getLayout().getHeight()<=step.getHeight());
+                    for(android.widget.TextView text:new android.widget.TextView[]{view.status,view.timing,view.link})
+                        assertTrue(text.getLayout().getHeight()<=text.getHeight());
+                    if(size[0]==375&&scale==1f) assertTrue("Actions visible without the old checklist",view.change.getBottom()<view.scroll.getHeight());
                     assertTrue(androidx.core.graphics.ColorUtils.calculateContrast(ClinicalUi.primaryText(context),ClinicalUi.window(context))>=4.5);
                     assertTrue(androidx.core.graphics.ColorUtils.calculateContrast(ClinicalUi.accent(context),ClinicalUi.window(context))>=4.5);
                     File output=new File("build/reports/personal-connection/"+language+"-"+theme+"-"+size[0]+"x"+size[1]+"-"+scale+".png");
