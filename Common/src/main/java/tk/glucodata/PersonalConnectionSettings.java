@@ -16,6 +16,10 @@ import androidx.core.view.WindowInsetsCompat;
 /** A single, thumb-friendly place for provisioning, sharing and revoking a link. */
 public final class PersonalConnectionSettings {
     public static void show(MainActivity activity) {
+        show(activity,null);
+    }
+
+    public static void show(MainActivity activity,Runnable dismissed) {
         PersonalConnection connection=PersonalConnection.get(activity);
         PersonalConnectionView root=new PersonalConnectionView(activity);
         Runnable render=()-> {
@@ -36,6 +40,7 @@ public final class PersonalConnectionSettings {
             ViewCompat.setOnApplyWindowInsetsListener(root,null);
             if(root.getParent() instanceof ViewGroup) ((ViewGroup)root.getParent()).removeView(root);
             activity.themeLightBars();
+            if(dismissed!=null) dismissed.run();
         };
         root.back.setOnClickListener(view-> { MainActivity.poponback(); close.run(); });
         root.primary.setOnClickListener(view-> {

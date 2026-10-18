@@ -129,6 +129,16 @@
                     <Button android:id="@+id/sensor" style="@style/ModernMenuTileAction" android:layout_width="match_parent" android:layout_height="56dp" android:drawableStart="@drawable/modern_dashboard_sensor" android:text="@string/sensor" />
                     <Button android:id="@+id/alerts" style="@style/ModernMenuTileAction" android:layout_width="match_parent" android:layout_height="56dp" android:layout_marginTop="2dp" android:drawableStart="@drawable/modern_secondary_alert" android:text="@string/settings_category_alerts" />
                     <Button android:id="@+id/settings" style="@style/ModernMenuTileAction" android:layout_width="match_parent" android:layout_height="56dp" android:layout_marginTop="2dp" android:drawableStart="@drawable/modern_secondary_settings" android:text="@string/settings" />
+                    <Button
+                        android:id="@+id/menu_personal_link"
+                        style="@style/ModernMenuPersonalLinkAction"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:drawableStart="@drawable/modern_menu_link"
+                        android:paddingTop="12dp"
+                        android:paddingBottom="12dp"
+                        android:text="@string/personal_connection_title" />
                     <Button android:id="@+id/lastscan" style="@style/ModernMenuTileAction" android:layout_width="match_parent" android:layout_height="56dp" android:layout_marginTop="2dp" android:drawableStart="@drawable/modern_secondary_scan" android:text="@string/last_scan" android:visibility="gone" />
                 </LinearLayout>
 
@@ -154,7 +164,7 @@
                     <Button android:id="@+id/talk" style="@style/ModernMenuListAction" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="2dp" android:text="@string/talk" android:visibility="gone" />
                     <Button android:id="@+id/mirror" style="@style/ModernMenuListAction" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="2dp" android:text="@string/mirror" android:visibility="gone" />
                     <Button android:id="@+id/export" style="@style/ModernMenuListAction" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="2dp" android:text="@string/export" android:visibility="gone" />
-                    <Button android:id="@+id/about" style="@style/ModernMenuListAction" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="2dp" android:text="@string/aboutname" />
+                    <Button android:id="@+id/about" style="@style/ModernMenuListAction" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:paddingTop="12dp" android:paddingBottom="12dp" android:text="@string/menu_add_sensor" />
                     <Button android:id="@+id/close" style="@style/ModernMenuCloseListAction" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="4dp" android:text="@string/menu_screen_close_app" android:visibility="gone" />
                 </LinearLayout>
             </LinearLayout>

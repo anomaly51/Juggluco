@@ -3,5 +3,6 @@
     <string name="menu_screen_subtitle">Инструменты и настройки</string>
     <string name="menu_screen_quick">Управление</string>
     <string name="menu_screen_app">Приложение</string>
+    <string name="menu_add_sensor">Добавить сенсор</string>
     <string name="menu_screen_close_app">Свернуть приложение</string>
 </resources>

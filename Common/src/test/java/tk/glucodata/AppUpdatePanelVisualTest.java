@@ -26,6 +26,7 @@ import static org.junit.Assert.*;
 public class AppUpdatePanelVisualTest {
     @Test public void narrowFoldLandscapeAndLargeTextRemainReadable() throws Exception {
         for (String language : new String[]{"en", "ru"}) {
+          for (boolean required : new boolean[]{false, true}) {
             for (int[] size : new int[][]{{360,800},{800,360},{700,800},{320,640}}) {
                 RuntimeEnvironment.setQualifiers(language+"-w"+size[0]+"dp-h"+size[1]+"dp-mdpi");
                 RuntimeEnvironment.setFontScale(size[0] == 320 ? 1.8f : 1f);
@@ -37,7 +38,8 @@ public class AppUpdatePanelVisualTest {
                             .putString("target_name", "10.9.8.next").commit();
                     AppUpdates.downloadedBytes=10*1048576;
                     AppUpdates.totalBytes=28*1048576;
-                    AlertDialog dialog=AppUpdatePanel.show(activity, () -> {});
+                    AlertDialog dialog=required ? AppUpdatePanel.showRequired(activity, () -> {})
+                            : AppUpdatePanel.show(activity, () -> {});
                     View root=dialog.getWindow().getDecorView();
                     int width=Math.min(480,size[0]-32), height=size[1]-48;
                     root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),
@@ -50,7 +52,8 @@ public class AppUpdatePanelVisualTest {
                     assertTrue(text.getWidth()<width);
                     ScrollView scroll=(ScrollView)action.getParent().getParent();
                     assertTrue(scroll.getChildAt(0).getHeight()>=scroll.getHeight());
-                    File output=new File("build/reports/android-updates/panel-"+language+"-"+size[0]+"x"+size[1]+".png");
+                    File output=new File("build/reports/android-updates/"+(required ? "required-" : "panel-")
+                            +language+"-"+size[0]+"x"+size[1]+".png");
                     output.getParentFile().mkdirs();
                     Bitmap bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);
                     root.draw(new Canvas(bitmap));
@@ -61,6 +64,7 @@ public class AppUpdatePanelVisualTest {
                     dialog.dismiss();
                 }
             }
+          }
         }
         RuntimeEnvironment.setFontScale(1f);
     }

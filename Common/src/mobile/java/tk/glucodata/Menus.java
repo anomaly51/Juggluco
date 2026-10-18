@@ -171,6 +171,8 @@ static private void dismissMenu(MainActivity act,View root,View panel,
 	}
 
 static public void show(MainActivity act) {
+	if(AppUpdates.interceptNavigation(act))
+		return;
 	if(isShowing())
 		return;
 	on=true;
@@ -256,9 +258,15 @@ static public void show(MainActivity act) {
 				dismissMenu(act,view,panel,backdrop,true,true,
 						() -> Settings.set(act));
 	}); 
+        Button personalLink=view.findViewById(R.id.menu_personal_link);
+        personalLink.setOnClickListener(v -> dismissMenu(act,view,panel,backdrop,true,true,
+                () -> PersonalConnectionSettings.show(act,() -> {
+                    if(MainActivity.isConfigurationBackDrain()) cancelReturnToMenu();
+                    else if(on) show(act);
+                })));
         Button aboutview=view.findViewById(R.id.about);
         if(tk.glucodata.BuildConfig.SiBionics==1) {
-		aboutview.setText(R.string.photo);
+		aboutview.setText(R.string.menu_add_sensor);
 		aboutview.setOnClickListener(v -> dismissMenu(act,view,panel,backdrop,
 				true,true,() -> PhotoScan.scan(act,REQUEST_BARCODE)));
             }
@@ -272,6 +280,7 @@ static public void show(MainActivity act) {
 	configureDirectionalChevron(sensorview);
 	configureDirectionalChevron(alertsview);
 	configureDirectionalChevron(settingsview);
+	configureDirectionalChevron(personalLink);
 	configureDirectionalChevron(aboutview);
         var closeview=view.findViewById(R.id.close);closeview.setOnClickListener(v ->{
 		dismissMenu(act,view,panel,backdrop,true,false,

@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Navigation accent only: this is not a connection-readiness indicator. -->
+    <color name="menu_personal_link_accent">#FF55E39A</color>
+    <style name="ModernMenuPersonalLinkAction" parent="ModernMenuTileAction">
+        <item name="android:textColor">@color/menu_personal_link_accent</item>
+        <item name="android:drawableTint">@color/menu_personal_link_accent</item>
+    </style>
     <style name="ModernMenuTitle" parent="android:style/Widget.TextView">
         <item name="android:textColor">@color/modern_secondary_accent</item>
         <item name="android:textSize">22sp</item>

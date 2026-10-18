@@ -10,7 +10,9 @@ import android.net.Uri;
 import android.provider.Settings;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Gravity;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -39,6 +41,7 @@ final class AppUpdatePanel {
             case "retry": return R.string.app_update_retry_title;
             case "check_failed": return R.string.app_update_check_failed_title;
             case "current": return R.string.app_update_current_title;
+            case "available": return R.string.app_update_available_title;
             case "": return R.string.app_update_idle_title;
             default: return AppUpdates.statusText(state);
         }
@@ -87,17 +90,44 @@ final class AppUpdatePanel {
     }
 
     static AlertDialog show(Activity activity, Runnable dismissed) {
+        return show(activity, dismissed, false);
+    }
+
+    static AlertDialog showRequired(Activity activity, Runnable dismissed) {
+        return show(activity, dismissed, true);
+    }
+
+    static int requiredDetail(String state, boolean automatic) {
+        switch (state) {
+            case "permission": return R.string.app_update_permission;
+            case "confirmation": return R.string.app_update_confirmation_help;
+            case "preparing": case "installing": return R.string.app_update_install_help;
+            case "retry": case "check_failed": return R.string.app_update_required_retry;
+            case "ready": return automatic ? R.string.app_update_required_auto : R.string.app_update_ready_manual;
+            case "downloading": case "verifying": return R.string.app_update_required_download;
+            case "checking": return R.string.app_update_check_help;
+            default: return R.string.app_update_required_manual;
+        }
+    }
+
+    private static AlertDialog show(Activity activity, Runnable dismissed, boolean required) {
         SharedPreferences p = AppUpdates.prefs(activity);
         LinearLayout content = new LinearLayout(activity);
         content.setOrientation(LinearLayout.VERTICAL);
         int padding = ClinicalUi.dp(activity, 20);
         content.setPadding(padding, padding, padding, padding);
         content.setBackgroundColor(ClinicalUi.window(activity));
-        TextView title = ClinicalUi.body(activity, activity.getString(R.string.app_update_title));
+        TextView title = ClinicalUi.body(activity, activity.getString(required
+                ? R.string.app_update_required_title : R.string.app_update_title));
+        title.setTag("update_title");
         title.setTextSize(22);
         title.setTextColor(ClinicalUi.primaryText(activity));
         androidx.core.view.ViewCompat.setAccessibilityHeading(title, true);
         add(content, title, 0);
+        if (required) {
+            TextView reason = ClinicalUi.body(activity, activity.getString(R.string.app_update_required_reason));
+            add(content, reason, 12);
+        }
         TextView versions = ClinicalUi.body(activity, "");
         versions.setTag("update_versions");
         add(content, versions, 16);
@@ -138,10 +168,41 @@ final class AppUpdatePanel {
         Button close = ClinicalUi.button(activity, activity.getString(R.string.app_update_close),
                 ClinicalUi.ButtonRole.SECONDARY);
         add(content, close, 20);
+        close.setTag("update_close");
+        if (required) {
+            automatic.setVisibility(View.GONE);
+            autoHelp.setVisibility(View.GONE);
+            close.setVisibility(View.GONE);
+            TextView safety = ClinicalUi.body(activity, activity.getString(R.string.app_update_required_safety));
+            add(content, safety, 24);
+        }
         ScrollView scroll = new ScrollView(activity);
         scroll.setFillViewport(true);
         scroll.addView(content);
-        AlertDialog dialog = new AlertDialog.Builder(activity).setView(scroll).create();
+        View dialogContent = scroll;
+        if (required) {
+            FrameLayout fullScreen = new FrameLayout(activity);
+            fullScreen.setBackgroundColor(ClinicalUi.window(activity));
+            int inset = ClinicalUi.dp(activity, 16);
+            fullScreen.setPadding(inset, inset, inset, inset);
+            FrameLayout.LayoutParams centered = new FrameLayout.LayoutParams(
+                    Math.min(ClinicalUi.dp(activity, 480),
+                            activity.getResources().getDisplayMetrics().widthPixels - 2 * inset),
+                    ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+            fullScreen.addView(scroll, centered);
+            // Fold/unfold can resize this Activity without recreating it.
+            fullScreen.addOnLayoutChangeListener((view, l, t, r, b, ol, ot, or, ob) -> {
+                int width = Math.min(ClinicalUi.dp(activity, 480), Math.max(1, r - l - 2 * inset));
+                if (scroll.getLayoutParams().width != width) {
+                    scroll.getLayoutParams().width = width;
+                    scroll.requestLayout();
+                }
+            });
+            dialogContent = fullScreen;
+        }
+        AlertDialog dialog = new AlertDialog.Builder(activity).setView(dialogContent).create();
+        dialog.setCancelable(!required);
+        dialog.setCanceledOnTouchOutside(!required);
         boolean[] receiptSeen = {false};
         Runnable render = () -> {
             if (activity.isFinishing() || activity.isDestroyed()) { dialog.dismiss(); return; }
@@ -170,7 +231,7 @@ final class AppUpdatePanel {
             setText(status, receipt ? activity.getString(R.string.app_update_success, BuildConfig.DISPLAY_VERSION)
                     : activity.getString(headline(state)));
             setText(explanation, activity.getString(receipt ? R.string.app_update_success_help
-                    : detail(state, enabled, alarm, onHome)));
+                    : required ? requiredDetail(state, enabled) : detail(state, enabled, alarm, onHome)));
             boolean downloading = "downloading".equals(state);
             progress.setVisibility(working(state) ? View.VISIBLE : View.GONE);
             progress.setIndeterminate(!downloading || AppUpdates.totalBytes <= 0);
@@ -182,7 +243,8 @@ final class AppUpdatePanel {
                     : "confirmation".equals(state) ? R.string.app_update_continue
                     : installStep(state) ? R.string.app_update_install
                     : ("retry".equals(state) || "check_failed".equals(state))
-                        ? R.string.app_update_try_again : R.string.app_update_check;
+                        ? R.string.app_update_try_again : required
+                            ? R.string.app_update_required_action : R.string.app_update_check;
             setText(action, activity.getString(busy ? R.string.app_update_in_progress : button));
             action.setEnabled(!busy && (!installStep(state) || (!alarm && onHome)));
             action.setAlpha(action.isEnabled() ? 1f : 0.5f);
@@ -197,7 +259,8 @@ final class AppUpdatePanel {
                     activity.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                             Uri.parse("package:" + activity.getPackageName())));
                 } else AppUpdates.installNow(activity);
-            } else AppUpdates.check(activity, true, null);
+            } else if (required) AppUpdates.installNow(activity);
+            else AppUpdates.check(activity, true, null);
             render.run();
         });
         automatic.setOnCheckedChangeListener((button, checked) -> {
@@ -221,10 +284,17 @@ final class AppUpdatePanel {
         // Cap width on the unfolded Fold; ScrollView keeps every action reachable
         // in landscape, a narrow cover display and large accessibility font sizes.
         if (dialog.getWindow() != null) {
-            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
-            dialog.getWindow().setLayout(Math.min(ClinicalUi.dp(activity, 480),
+            if (required) {
+                dialog.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
+                        ClinicalUi.window(activity)));
+                dialog.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT);
+            } else {
+                dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+                dialog.getWindow().setLayout(Math.min(ClinicalUi.dp(activity, 480),
                     activity.getResources().getDisplayMetrics().widthPixels - ClinicalUi.dp(activity, 32)),
                     ViewGroup.LayoutParams.WRAP_CONTENT);
+            }
         }
         tick.run();
         return dialog;

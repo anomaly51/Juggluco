@@ -87,6 +87,32 @@ Already downloaded/committed updates cannot be remotely recalled.
 
 ## Verification
 
+### Mandatory online update screen
+
+On phones running Android 6+, a newer compatible release confirmed by the HTTPS
+feed requires updating before ordinary use while internet is validated by Android.
+The full-screen update panel has no Close/Skip/disable-auto control. It shares the
+normal download, verification, permission and OS-confirmation flow. Turning off
+automatic downloads does not disable release discovery or this requirement; the
+Update button explicitly starts download and installation.
+
+Foreground release discovery runs at entry/reconnection and every five minutes.
+A one-second foreground-only UI tick observes network, alarm and editor state;
+it does not send network requests every second. No internet/captive portal/unknown
+connectivity immediately fails open on that tick. Android 5 has no validated-
+internet signal and keeps the previous non-blocking update behavior. A feed error
+alone never invents a new required version. A successful feed with no newer
+compatible release clears the cached requirement, including withdrawn releases.
+
+Safety exceptions: sensor acquisition/services are not gated. Critical alerts
+hide the update gate and prevent installation. A task/editor already open may be
+finished before the gate appears; it is never force-closed and its data is not
+discarded. The More drawer itself is safe to close. OS Home, network settings,
+installation permissions and Play Protect remain under Android's control.
+An installation already committed to Android cannot be recalled by losing internet.
+This behavior begins only once a build containing it is installed; older APKs
+cannot be made blocking remotely by changing release metadata.
+
 Local:
     gradlew.bat --no-daemon "-Pandroid.injected.build.abi=arm64-v8a" :Common:testMobileLibre3SiDexNogoogleDebugUnitTest --tests "tk.glucodata.AppUpdate*Test" --tests "tk.glucodata.MenusContractTest"
     python -m unittest discover -s tools/android_updates -p "test_*.py"
@@ -100,4 +126,13 @@ Device test before enabling unattended private-key releases:
    sensor reconnect and actual + forecast alarm delivery.
 6. Verify denied install permission, denied notifications and OS confirmation.
 7. Repeat after reboot and on the folded/unfolded phone.
+8. With a newer release known, verify the required screen cannot be skipped via
+   Back/outside taps. Turn automatic downloads off before discovery: the screen
+   still appears and Update starts the full flow. Reconnect while staying in Home.
+9. Lose internet (including an offline Wi-Fi/captive portal): Home becomes usable
+   within one foreground tick. Restore internet: the same required screen returns.
+   Start an alert or leave an editor open before discovery: neither is interrupted.
+10. Withdraw the feed release: the next successful check clears the gate. A
+    failed download keeps a retry action; a completed install must clear the gate
+    based on the actual installed version, never just download completion.
 

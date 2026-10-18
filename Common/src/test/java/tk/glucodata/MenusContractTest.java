@@ -42,6 +42,7 @@ public class MenusContractTest {
             R.id.sensor,
             R.id.alerts,
             R.id.settings,
+            R.id.menu_personal_link,
             R.id.about,
             R.id.menu_app_title,
             R.id.menu_app_section
@@ -70,7 +71,7 @@ public class MenusContractTest {
 
     @Test
     public void requiredMenuIdsRemainInflatable() {
-        assertEquals(8, REQUIRED_MENU_IDS.length);
+        assertEquals(9, REQUIRED_MENU_IDS.length);
         for (int id : REQUIRED_MENU_IDS) {
             assertNotNull("Missing phone More view for resource ID " + id,
                     root.findViewById(id));
@@ -151,7 +152,7 @@ public class MenusContractTest {
 
     @Test
     public void visibleDestinationsUseSpacedDirectionalVectorChevrons() {
-        for (int id : new int[]{R.id.sensor, R.id.alerts, R.id.settings}) {
+        for (int id : new int[]{R.id.sensor, R.id.alerts, R.id.settings, R.id.menu_personal_link}) {
             Button action = root.findViewById(id);
             assertNotNull(action.getCompoundDrawablesRelative()[0]);
             assertNotNull(action.getCompoundDrawablesRelative()[2]);
@@ -183,7 +184,7 @@ public class MenusContractTest {
     public void visibleActionsMeetTheTouchContract() {
         int minimum = dp(48);
         int[] actions = {
-                R.id.sensor, R.id.alerts, R.id.settings, R.id.about
+                R.id.sensor, R.id.alerts, R.id.settings, R.id.about, R.id.menu_personal_link
         };
         for (int id : actions) {
             View action = root.findViewById(id);
@@ -192,6 +193,19 @@ public class MenusContractTest {
                     action.getMinimumHeight() >= minimum);
         }
 
+    }
+
+    @Test public void personalLinkIsGreenInManageAndPhotoIsNamedAddSensor() {
+        Button personal = root.findViewById(R.id.menu_personal_link);
+        assertSame(root.findViewById(R.id.settings).getParent(), personal.getParent());
+        assertEquals(View.VISIBLE, personal.getVisibility());
+        assertEquals(context.getString(R.string.personal_connection_title), personal.getText().toString());
+        assertEquals(context.getColor(R.color.menu_personal_link_accent), personal.getCurrentTextColor());
+        assertTrue(androidx.core.graphics.ColorUtils.calculateContrast(personal.getCurrentTextColor(),
+                context.getColor(R.color.modern_secondary_surface)) >= 4.5);
+        assertEquals(context.getString(R.string.menu_add_sensor),
+                ((TextView) root.findViewById(R.id.about)).getText().toString());
+        assertEquals(ViewGroup.LayoutParams.WRAP_CONTENT, personal.getLayoutParams().height);
     }
 
     @Test

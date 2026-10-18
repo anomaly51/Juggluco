@@ -1265,6 +1265,7 @@ void onDashboardGraphViewportMoved() {
 
 void showIntakeComposer() {
     if(isWearable) return;
+    if(AppUpdates.interceptNavigation(this)) return;
     if(intakeComposer!=null&&intakeComposer.isShowing()) return;
     intakeComposer=new IntakeComposer(this);
     intakeComposer.show();
@@ -1281,6 +1282,7 @@ void onIntakeComposerClosed(IntakeComposer composer) {
 
 void showIntakeEvent(int renderKey) {
     if(isWearable) return;
+    if(AppUpdates.interceptNavigation(this)) return;
     IntakeEvent event=IntakeRepository.get(this).findByRenderKey(renderKey);
     if(event==null) return;
     if(intakeEventDetailsSheet!=null&&intakeEventDetailsSheet.isShowing())
@@ -1291,6 +1293,7 @@ void showIntakeEvent(int renderKey) {
 
 void showIntakeEventCluster(int[] renderKeys) {
     if(isWearable) return;
+    if(AppUpdates.interceptNavigation(this)) return;
     List<IntakeEventClusterSheet.Entry> entries=
             IntakeEventClusterSheet.resolve(IntakeRepository.get(this),
                     renderKeys);

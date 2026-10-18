@@ -40,7 +40,7 @@ public class AppUpdateFooterVisualTest {
                 panel.setLayoutParams(params);
                 TextView version=root.findViewById(R.id.modern_menu_version);
                 version.setText(AppUpdates.versionLabel());
-                ((TextView)root.findViewById(R.id.about)).setText(R.string.photo);
+                ((TextView)root.findViewById(R.id.about)).setText(R.string.menu_add_sensor);
                 root.measure(View.MeasureSpec.makeMeasureSpec(size[0],View.MeasureSpec.EXACTLY),
                         View.MeasureSpec.makeMeasureSpec(size[1],View.MeasureSpec.EXACTLY));
                 root.layout(0,0,size[0],size[1]);

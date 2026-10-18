@@ -6,7 +6,7 @@
     <string name="app_update_check">Проверить</string>
     <string name="app_update_allow">Разрешить обновления</string>
     <string name="app_update_pause">Приостановить автообновления</string>
-    <string name="app_update_paused">Выключены. Проверка и установка доступны вручную. Начатая загрузка может завершиться, но автоматической установки не будет.</string>
+    <string name="app_update_paused">Автоматическая загрузка и установка выключены. Проверка новых версий продолжается. При наличии интернета нужно установить доступное обновление, чтобы продолжить. Начатая загрузка может завершиться.</string>
     <string name="app_update_enable">Включить автообновления</string>
     <string name="app_update_checking">Проверка обновлений…</string>
     <string name="app_update_downloading">Загрузка обновления…</string>
@@ -51,4 +51,13 @@
     <string name="app_update_check_failed_title">Не удалось проверить новые версии</string>
     <string name="app_update_check_failed_help">Сервер релизов не ответил. Текущая версия установлена и доступна для использования. Проверьте соединение и повторите проверку.</string>
     <string name="app_update_success_help">Новая версия уже работает. Проверьте подключение сенсора и оповещения после перезапуска.</string>
+    <string name="app_update_available_title">Доступна новая версия</string>
+    <string name="app_update_required_title">Обновите, чтобы продолжить</string>
+    <string name="app_update_required_reason">Вышла новая версия. Установите обновление, чтобы пользоваться приложением онлайн.</string>
+    <string name="app_update_required_action">Обновить</string>
+    <string name="app_update_required_manual">Нажмите «Обновить», чтобы скачать и установить новую версию.</string>
+    <string name="app_update_required_download">Обновление загружается и проверяется. Прогресс появится здесь, затем начнётся установка.</string>
+    <string name="app_update_required_auto">Файл скачан и проверен. Автоматическая установка начнётся здесь. Android может запросить подтверждение.</string>
+    <string name="app_update_required_retry">Не удалось завершить обновление. Проверьте свободное место и соединение, затем нажмите «Повторить попытку». Ваши данные не изменились.</string>
+    <string name="app_update_required_safety">Без интернета приложение остаётся доступным. Во время ожидания показания сенсора и критические тревоги продолжают работать. При установке Android может перезапустить приложение.</string>
 </resources>

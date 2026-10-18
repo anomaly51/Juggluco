@@ -6,7 +6,7 @@
     <string name="app_update_check">Check now</string>
     <string name="app_update_allow">Allow updates</string>
     <string name="app_update_pause">Pause automatic updates</string>
-    <string name="app_update_paused">Off. You can check and install manually. A download already in progress can finish; it will not install automatically.</string>
+    <string name="app_update_paused">Automatic downloads and installation are off. New versions are still checked. When online, you must install an available update to continue. A download already in progress can finish.</string>
     <string name="app_update_enable">Enable automatic updates</string>
     <string name="app_update_checking">Checking for updates…</string>
     <string name="app_update_downloading">Downloading update…</string>
@@ -51,5 +51,14 @@
     <string name="app_update_check_failed_title">Could not check for new versions</string>
     <string name="app_update_check_failed_help">The release server could not be reached. Your current version is installed and ready to use. Check your connection and try again.</string>
     <string name="app_update_success_help">The new version is running. Please check the sensor connection and alerts after the restart.</string>
+    <string name="app_update_available_title">New version available</string>
+    <string name="app_update_required_title">Update to continue</string>
+    <string name="app_update_required_reason">A newer version is available. Update before using the app online.</string>
+    <string name="app_update_required_action">Update</string>
+    <string name="app_update_required_manual">Tap Update to download and install the new version.</string>
+    <string name="app_update_required_download">The update is downloading and being checked. Progress appears here; installation follows.</string>
+    <string name="app_update_required_auto">Downloaded and verified. Automatic installation will start here. Android may ask for confirmation.</string>
+    <string name="app_update_required_retry">The update could not finish. Check available storage and the connection, then tap Try again. Your data is unchanged.</string>
+    <string name="app_update_required_safety">No internet? The app remains available offline. Sensor readings and critical alerts stay active while waiting. Android may restart the app during installation.</string>
 </resources>
 
