@@ -23,12 +23,12 @@ public class PersonalConnectionNameViewTest {
         assertTrue(view.preview.getText().toString().contains("user-"));
         view.input.setText(" Vlad ");
         assertEquals("vlad",view.name());
-        assertEquals("https://vlad.api-api-api.com/",view.preview.getText().toString());
+        assertEquals("https://vlad-xxxxx.api-api-api.com/",view.preview.getText().toString());
         view.showError(R.string.personal_connection_name_taken);
         assertNotNull(view.input.getError());
         view.input.setText("new-name");
         assertNull(view.input.getError());
-        assertEquals("https://new-name.api-api-api.com/",view.preview.getText().toString());
+        assertEquals("https://new-name-xxxxx.api-api-api.com/",view.preview.getText().toString());
         view.input.setText("bad-");
         assertEquals(context.getString(R.string.personal_connection_label_invalid),view.preview.getText().toString());
         assertEquals(view.input.getId(),view.getChildAt(0).getLabelFor());
@@ -43,6 +43,7 @@ public class PersonalConnectionNameViewTest {
                     Context context=new ContextThemeWrapper(RuntimeEnvironment.getApplication(),R.style.AppTheme_ClinicalDark);
                     PersonalConnectionNameView view=new PersonalConnectionNameView(context);
                     view.input.setText("x".repeat(63));
+                    assertEquals(57,view.name().length());
                     view.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),
                             View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED));
                     view.layout(0,0,width,view.getMeasuredHeight());

@@ -10,7 +10,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import java.util.Locale;
 
-/** Small, scrollable-in-dialog name editor with an exact URL preview. */
+/** Small name editor: the server assigns the five-character suffix on save. */
 final class PersonalConnectionNameView extends LinearLayout {
     final EditText input;
     final TextView preview;
@@ -28,7 +28,7 @@ final class PersonalConnectionNameView extends LinearLayout {
         input.setMinHeight(ClinicalUi.dp(context,56));
         input.setTextSize(16);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(63)});
+        input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(57)});
         input.setHint("my-sugar");
         input.setTextColor(ClinicalUi.primaryText(context));
         preview=ClinicalUi.body(context,"");
@@ -53,7 +53,7 @@ final class PersonalConnectionNameView extends LinearLayout {
     private void updatePreview() {
         String value=name();
         preview.setText(value.isEmpty()?getContext().getString(R.string.personal_connection_random_preview):
-                PersonalConnectionPolicy.validLabel(value)?"https://"+value+".api-api-api.com/":
+                PersonalConnectionPolicy.validLabel(value)?"https://"+value+"-xxxxx.api-api-api.com/":
                 getContext().getString(R.string.personal_connection_label_invalid));
     }
 

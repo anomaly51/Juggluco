@@ -16,7 +16,6 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
-import android.widget.Switch;
 import android.widget.TextView;
 
 /** Live, localized update status. Closing this panel does not cancel a download. */
@@ -47,16 +46,14 @@ final class AppUpdatePanel {
         }
     }
 
-    static int detail(String state, boolean automatic, boolean alarm, boolean onHome) {
+    static int detail(String state, boolean alarm, boolean onHome) {
         if (installStep(state) && alarm) return R.string.app_update_wait_alarm;
         if (installStep(state) && !onHome) return R.string.app_update_wait_home;
-        if ("ready".equals(state)) return automatic
-                ? R.string.app_update_ready_auto : R.string.app_update_ready_manual;
+        if ("ready".equals(state)) return R.string.app_update_ready_auto;
         if ("confirmation".equals(state)) return R.string.app_update_confirmation_help;
         if ("installing".equals(state) || "preparing".equals(state))
             return R.string.app_update_install_help;
-        if ("retry".equals(state)) return automatic
-                ? R.string.app_update_retry : R.string.app_update_retry_manual;
+        if ("retry".equals(state)) return R.string.app_update_retry;
         if ("downloading".equals(state) || "verifying".equals(state))
             return R.string.app_update_download_help;
         if ("checking".equals(state)) return R.string.app_update_check_help;
@@ -97,13 +94,13 @@ final class AppUpdatePanel {
         return show(activity, dismissed, true);
     }
 
-    static int requiredDetail(String state, boolean automatic) {
+    static int requiredDetail(String state) {
         switch (state) {
             case "permission": return R.string.app_update_permission;
             case "confirmation": return R.string.app_update_confirmation_help;
             case "preparing": case "installing": return R.string.app_update_install_help;
             case "retry": case "check_failed": return R.string.app_update_required_retry;
-            case "ready": return automatic ? R.string.app_update_required_auto : R.string.app_update_ready_manual;
+            case "ready": return R.string.app_update_required_auto;
             case "downloading": case "verifying": return R.string.app_update_required_download;
             case "checking": return R.string.app_update_check_help;
             default: return R.string.app_update_required_manual;
@@ -153,25 +150,11 @@ final class AppUpdatePanel {
         Button action = ClinicalUi.button(activity, "", ClinicalUi.ButtonRole.PRIMARY);
         action.setTag("update_action");
         add(content, action, 20);
-        Switch automatic = new Switch(activity);
-        automatic.setTag("update_automatic");
-        automatic.setText(R.string.app_update_auto_label);
-        automatic.setTextColor(ClinicalUi.primaryText(activity));
-        automatic.setTextSize(16);
-        automatic.setMinHeight(ClinicalUi.dp(activity, 56));
-        automatic.setSwitchPadding(ClinicalUi.dp(activity, 12));
-        automatic.setChecked(p.getBoolean("enabled", true));
-        add(content, automatic, 16);
-        TextView autoHelp = ClinicalUi.body(activity, "");
-        autoHelp.setTag("update_auto_help");
-        add(content, autoHelp, 0);
         Button close = ClinicalUi.button(activity, activity.getString(R.string.app_update_close),
                 ClinicalUi.ButtonRole.SECONDARY);
         add(content, close, 20);
         close.setTag("update_close");
         if (required) {
-            automatic.setVisibility(View.GONE);
-            autoHelp.setVisibility(View.GONE);
             close.setVisibility(View.GONE);
             TextView safety = ClinicalUi.body(activity, activity.getString(R.string.app_update_required_safety));
             add(content, safety, 24);
@@ -208,7 +191,6 @@ final class AppUpdatePanel {
             if (activity.isFinishing() || activity.isDestroyed()) { dialog.dismiss(); return; }
             String state = p.getString("state", "");
             if ("permission".equals(state) && AppUpdates.canInstall(activity)) state = "ready";
-            boolean enabled = p.getBoolean("enabled", true);
             boolean busy = working(state) || AppUpdates.busy();
             boolean permission = !AppUpdates.canInstall(activity) && installStep(state);
             boolean alarm = installStep(state) && AppUpdates.alarmActive(activity);
@@ -231,7 +213,7 @@ final class AppUpdatePanel {
             setText(status, receipt ? activity.getString(R.string.app_update_success, BuildConfig.DISPLAY_VERSION)
                     : activity.getString(headline(state)));
             setText(explanation, activity.getString(receipt ? R.string.app_update_success_help
-                    : required ? requiredDetail(state, enabled) : detail(state, enabled, alarm, onHome)));
+                    : required ? requiredDetail(state) : detail(state, alarm, onHome)));
             boolean downloading = "downloading".equals(state);
             progress.setVisibility(working(state) ? View.VISIBLE : View.GONE);
             progress.setIndeterminate(!downloading || AppUpdates.totalBytes <= 0);
@@ -248,9 +230,6 @@ final class AppUpdatePanel {
             setText(action, activity.getString(busy ? R.string.app_update_in_progress : button));
             action.setEnabled(!busy && (!installStep(state) || (!alarm && onHome)));
             action.setAlpha(action.isEnabled() ? 1f : 0.5f);
-            automatic.setEnabled(!"preparing".equals(state) && !"installing".equals(state));
-            if (automatic.isChecked() != enabled) automatic.setChecked(enabled);
-            setText(autoHelp, activity.getString(enabled ? R.string.app_update_auto_on : R.string.app_update_paused));
         };
         action.setOnClickListener(v -> {
             String state = p.getString("state", "");
@@ -261,10 +240,6 @@ final class AppUpdatePanel {
                 } else AppUpdates.installNow(activity);
             } else if (required) AppUpdates.installNow(activity);
             else AppUpdates.check(activity, true, null);
-            render.run();
-        });
-        automatic.setOnCheckedChangeListener((button, checked) -> {
-            if (checked != p.getBoolean("enabled", true)) AppUpdates.setAutomatic(activity, checked);
             render.run();
         });
         close.setOnClickListener(v -> dialog.dismiss());

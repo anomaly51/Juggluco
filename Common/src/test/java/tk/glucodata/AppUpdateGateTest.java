@@ -64,7 +64,7 @@ public class AppUpdateGateTest {
     }
 
     @Test public void releaseWithdrawalClearsCachedGateAndDoesNotTouchHistory() throws Exception {
-        AppUpdates.prefs(context).edit().putBoolean("enabled", false).commit();
+        AppUpdates.prefs(context).edit().putLong("observed_version", BuildConfig.VERSION_CODE).commit();
         AppUpdates.rememberRelease(context, AppUpdateReleaseTest.select(
                 AppUpdateReleaseTest.feed(AppUpdateReleaseTest.build())));
         assertTrue(AppUpdates.prefs(context).getBoolean("target_confirmed", false));
@@ -76,7 +76,7 @@ public class AppUpdateGateTest {
         assertFalse(AppUpdates.prefs(context).contains("required_version"));
         assertFalse(AppUpdates.prefs(context).contains("target_confirmed"));
         assertFalse(AppUpdates.prefs(context).contains("target"));
-        assertFalse(AppUpdates.prefs(context).getBoolean("enabled", true));
+        assertEquals(BuildConfig.VERSION_CODE, AppUpdates.prefs(context).getLong("observed_version", 0));
     }
 
     @Test public void feedRefreshCannotRewriteAnExistingInstallerSessionTarget() throws Exception {
@@ -91,7 +91,7 @@ public class AppUpdateGateTest {
         assertEquals(7, AppUpdates.prefs(context).getInt("session", -1));
     }
 
-    @Test public void automaticDownloadsOffStillSchedulesReleaseDiscovery() {
+    @Test public void legacyOptOutCannotSuppressBackgroundJobs() {
         AppUpdates.prefs(context).edit().putBoolean("enabled", false).commit();
         AppUpdates.schedule(context);
         JobScheduler scheduler = (JobScheduler) context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
@@ -111,7 +111,8 @@ public class AppUpdateGateTest {
             assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, dialog.getWindow().getAttributes().width);
             assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, dialog.getWindow().getAttributes().height);
             assertEquals(View.GONE, root.findViewWithTag("update_close").getVisibility());
-            assertEquals(View.GONE, root.findViewWithTag("update_automatic").getVisibility());
+            assertNull(root.findViewWithTag("update_automatic"));
+            assertNull(root.findViewWithTag("update_auto_help"));
             assertFalse(root.findViewWithTag("update_action").isEnabled());
             assertTrue(((TextView) root.findViewWithTag("update_bytes")).getText().toString().contains("25%"));
             dialog.onBackPressed();
@@ -151,10 +152,9 @@ public class AppUpdateGateTest {
     }
 
     @Test public void requiredCopyNeverSaysCloseOrReportsSuccessBeforeInstallation() {
-        assertEquals(R.string.app_update_required_retry, AppUpdatePanel.requiredDetail("check_failed", true));
-        assertEquals(R.string.app_update_required_download, AppUpdatePanel.requiredDetail("downloading", true));
-        assertEquals(R.string.app_update_required_auto, AppUpdatePanel.requiredDetail("ready", true));
-        assertEquals(R.string.app_update_ready_manual, AppUpdatePanel.requiredDetail("ready", false));
-        assertEquals(R.string.app_update_confirmation_help, AppUpdatePanel.requiredDetail("confirmation", true));
+        assertEquals(R.string.app_update_required_retry, AppUpdatePanel.requiredDetail("check_failed"));
+        assertEquals(R.string.app_update_required_download, AppUpdatePanel.requiredDetail("downloading"));
+        assertEquals(R.string.app_update_required_auto, AppUpdatePanel.requiredDetail("ready"));
+        assertEquals(R.string.app_update_confirmation_help, AppUpdatePanel.requiredDetail("confirmation"));
     }
 }

@@ -8,6 +8,7 @@ import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.os.Build;
 import android.os.Looper;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -50,25 +51,38 @@ public class AppUpdateRequiredFlowTest {
     }
 
     void checkFeed(int status, String body) throws Exception {
-        AtomicInteger requests = new AtomicInteger();
+        checkFeed(status, body, 0);
+    }
+
+    void checkFeed(int status, String body, int expectedDownloads) throws Exception {
+        AtomicInteger feedRequests = new AtomicInteger();
+        AtomicInteger downloads = new AtomicInteger();
         AppUpdateDownloadTest.Connection response = new AppUpdateDownloadTest.Connection(
                 status, body.getBytes(StandardCharsets.UTF_8));
         AppUpdates.check(context, false, null, new AtomicBoolean(), url -> {
-            requests.incrementAndGet();
-            assertEquals(AppUpdateRelease.FEED, url.toString());
-            return response;
+            if (AppUpdateRelease.FEED.equals(url.toString())) {
+                feedRequests.incrementAndGet();
+                return response;
+            }
+            assertEquals("https://github.com/anomaly51/Juggluco/releases/download/android-v901/app.apk",
+                    url.toString());
+            downloads.incrementAndGet();
+            // Exercise the actual automatic worker, without downloading or installing a real APK.
+            throw new IOException("Synthetic APK transport failure");
         });
         AppUpdates.IO.submit(() -> {}).get(10, TimeUnit.SECONDS);
         Shadows.shadowOf(Looper.getMainLooper()).idle();
-        assertEquals("Auto-off discovery must fetch metadata, never the APK", 1, requests.get());
+        assertEquals(1, feedRequests.get());
+        assertEquals("Legacy opt-out must not prevent automatic APK requests", expectedDownloads, downloads.get());
         assertFalse(AppUpdates.busy());
     }
 
-    @Test public void discoveryOfflineReconnectAndWithdrawalWorkWithAutomaticDownloadsOff() throws Exception {
+    @Test public void legacyOptOutCannotStopDownloadAndOfflineReconnectAndWithdrawalStillWork() throws Exception {
         assertTrue(AppUpdateGate.internet(context));
         assertFalse(AppUpdateGate.required(context));
-        checkFeed(200, AppUpdateReleaseTest.feed(compatible()));
-        assertEquals("available", AppUpdates.prefs(context).getString("state", ""));
+        checkFeed(200, AppUpdateReleaseTest.feed(compatible()), 1);
+        assertFalse(AppUpdates.prefs(context).contains("enabled"));
+        assertEquals("retry", AppUpdates.prefs(context).getString("state", ""));
         assertTrue(AppUpdateGate.required(context));
         Shadows.shadowOf(capabilities).removeCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
         assertFalse(AppUpdateGate.required(context));
@@ -84,7 +98,7 @@ public class AppUpdateRequiredFlowTest {
         assertFalse(AppUpdateGate.required(context));
         checkFeed(200, "{}");
         assertFalse(AppUpdateGate.required(context));
-        checkFeed(200, AppUpdateReleaseTest.feed(compatible()));
+        checkFeed(200, AppUpdateReleaseTest.feed(compatible()), 1);
         assertTrue(AppUpdateGate.required(context));
         checkFeed(503, "temporarily unavailable");
         assertTrue(AppUpdateGate.required(context));
@@ -99,6 +113,16 @@ public class AppUpdateRequiredFlowTest {
         assertFalse(AppUpdateGate.required(context));
     }
 
+    @Test public void alwaysAutomaticStillRespectsRetryBackoff() throws Exception {
+        String feed = AppUpdateReleaseTest.feed(compatible());
+        checkFeed(200, feed, 1);
+        assertTrue(AppUpdates.prefs(context).getLong("retry_after", 0) > System.currentTimeMillis());
+        checkFeed(200, feed); // Still refreshes metadata, but does not hammer a failed download.
+        assertEquals("retry", AppUpdates.prefs(context).getString("state", ""));
+        AppUpdates.prefs(context).edit().putLong("retry_after", 0).commit();
+        checkFeed(200, feed, 1);
+    }
+
     @Test public void feedFailureAndWithdrawalDoNotLosePendingAndroidConfirmation() throws Exception {
         PackageInstaller installer = context.getPackageManager().getPackageInstaller();
         int session = installer.createSession(new PackageInstaller.SessionParams(
@@ -107,6 +131,7 @@ public class AppUpdateRequiredFlowTest {
         AppUpdates.prefs(context).edit().putInt("session", session).putLong("target", pendingVersion)
                 .putLong("session_at", System.currentTimeMillis()).putString("state", "confirmation").commit();
         checkFeed(200, AppUpdateReleaseTest.feed(compatible()));
+        assertFalse(AppUpdates.prefs(context).contains("enabled"));
         assertEquals(pendingVersion, AppUpdates.prefs(context).getLong("target", 0));
         assertTrue(AppUpdateGate.required(context));
         checkFeed(503, "unavailable");

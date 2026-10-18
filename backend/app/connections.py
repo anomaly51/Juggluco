@@ -63,7 +63,7 @@ class ConnectionRegistry:
             connection.execute('INSERT OR IGNORE INTO viewer_names SELECT dns_label, id FROM installations WHERE dns_label IS NOT NULL')
             # One current address, no compatibility alias. Old DNS links are
             # intentionally revoked; ownership, storage and history stay intact.
-            migrating = connection.execute('PRAGMA user_version').fetchone()[0] < 1
+            migrating = connection.execute('PRAGMA user_version').fetchone()[0] < 2
             for row in connection.execute('SELECT id FROM installations' if migrating else
                                           'SELECT id FROM installations WHERE dns_label IS NULL').fetchall():
                 label = self._new_dns_label(connection)
@@ -71,15 +71,15 @@ class ConnectionRegistry:
                                    (label, row['id']))
                 connection.execute('INSERT INTO viewer_names VALUES (?, ?)', (label, row['id']))
             if migrating:
-                connection.execute('PRAGMA user_version = 1')
+                connection.execute('PRAGMA user_version = 2')
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_legacy_owner "
                            "ON installations(legacy) WHERE legacy = 1")
         return connection
 
     @staticmethod
-    def _new_dns_label(connection):
+    def _new_dns_label(connection, name='user'):
         for _ in range(16):
-            label = domain_label()
+            label = domain_label(name)
             if not connection.execute('SELECT 1 FROM viewer_names WHERE label = ?', (label,)).fetchone():
                 return label
         raise HTTPException(503, 'viewer address allocation busy; retry shortly')
@@ -138,13 +138,12 @@ class ConnectionRegistry:
             if row["rotation_id"] != operation:
                 if label and not valid_custom_name(label):
                     raise HTTPException(422, 'viewer name invalid or reserved')
-                dns_label = label or self._new_dns_label(connection)
-                owner = connection.execute('SELECT installation_id FROM viewer_names WHERE label = ?', (dns_label,)).fetchone()
-                if owner and owner['installation_id'] != identifier:
-                    raise HTTPException(409, 'viewer name unavailable')
-                if dns_label == row['dns_label']:
+                # Keep retries/no-op renames stable; different people may choose
+                # the same readable name, each with their own random suffix.
+                if label and row['dns_label'].rsplit('-', 1)[0] == label:
                     connection.execute('UPDATE installations SET rotation_id = ? WHERE id = ?', (operation, identifier))
                     return connection.execute('SELECT * FROM installations WHERE id = ?', (identifier,)).fetchone()
+                dns_label = self._new_dns_label(connection, label or 'user')
                 # The query-link capability remains independent of the readable
                 # DNS name and is revoked along with the previous address.
                 handle = secrets.token_urlsafe(16)

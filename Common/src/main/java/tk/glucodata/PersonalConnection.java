@@ -192,6 +192,14 @@ public final class PersonalConnection {
                 }
             }
             viewerUrl=nextViewer;
+            // Do not prime the phone's negative DNS cache before ExternalDNS
+            // has published the hostname and the public HTTPS route is live.
+            if(PersonalConnectionPolicy.publicationPending(publicUrl,response.optBoolean("viewer_ready",false))) {
+                retry=true;
+                publish(30,attempts>=4?R.string.personal_connection_publish_delayed:
+                        R.string.personal_connection_dns_pending);
+                return;
+            }
             verifying=true;
             // Server readiness cannot prove DNS/HTTPS on the phone's Wi-Fi,
             // mobile carrier or VPN. Always run the public path locally.
@@ -234,13 +242,14 @@ public final class PersonalConnection {
         } catch(Exception error) {
             retry=verifying||error instanceof java.io.IOException;
             // Never log credential-bearing JSON, URL, response bodies or provider secrets.
-            publish(progress,error instanceof java.net.UnknownHostException?R.string.personal_connection_dns_phone_wait:
+            publish(progress,error instanceof java.net.UnknownHostException?
+                    (verifying?R.string.personal_connection_dns_phone_wait:R.string.personal_connection_server_dns_failed):
                     error instanceof javax.net.ssl.SSLException?R.string.personal_connection_tls_failed:
                     verifying?R.string.personal_connection_verification_retry:R.string.personal_connection_retry);
         } finally {
             busy=false;
             if(retry) {
-                long delay=listeners.isEmpty()?60_000L:Math.min(30_000L,10_000L*attempts);
+                long delay=listeners.isEmpty()||attempts>=4?60_000L:Math.min(30_000L,10_000L*attempts);
                 nextRetry=android.os.SystemClock.elapsedRealtime()+delay;
                 main.postDelayed(retryTask,delay);
             }

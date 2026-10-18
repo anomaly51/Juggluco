@@ -2,8 +2,12 @@ package tk.glucodata;
 
 /** Pure validation shared by connection setup and its settings form. */
 final class PersonalConnectionPolicy {
+    static boolean publicationPending(String publicUrl, boolean serverReady) {
+        return !publicUrl.isEmpty() && !serverReady;
+    }
+
     static boolean validLabel(String value) {
-        return value!=null&&(value.isEmpty()||(validHostLabel(value)&&!value.startsWith("user-")));
+        return value!=null&&(value.isEmpty()||(value.length()<=57&&validHostLabel(value)&&!value.startsWith("user-")));
     }
     private static boolean validHostLabel(String value) {
         return value.matches("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")

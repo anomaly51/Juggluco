@@ -133,7 +133,7 @@ public final class AppUpdates {
         if (Build.VERSION.SDK_INT < 21) return;
         JobScheduler scheduler = (JobScheduler) context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
         if (scheduler == null) return;
-        // Turning off automatic downloads does not turn off release discovery.
+        // Automatic release discovery and downloads are always scheduled.
         try {
             JobInfo existing = Build.VERSION.SDK_INT >= 24 ? scheduler.getPendingJob(JOB) : null;
             if (existing == null) scheduler.schedule(new JobInfo.Builder(JOB,
@@ -215,11 +215,6 @@ public final class AppUpdates {
                     preparedApk = null;
                 }
                 if (pending >= 0) return; // Keep the existing OS confirmation/session.
-                if (!manual && !prefs(app).getBoolean("enabled", true)) {
-                    state(app, preparedRelease != null && preparedRelease.versionCode == release.versionCode
-                            ? (canInstall(app) ? "ready" : "permission") : "available");
-                    return;
-                }
                 if (!manual && previousTarget == release.versionCode
                         && System.currentTimeMillis() < prefs(app).getLong("retry_after", 0)) {
                     state(app, previousState);
@@ -332,19 +327,9 @@ public final class AppUpdates {
                 && !alarmActive(context);
     }
 
-    static boolean installAllowed(boolean automatic, boolean manual) {
-        return automatic || manual;
-    }
-
     static boolean busy() { return BUSY.get(); }
 
-    static void setAutomatic(Context context, boolean enabled) {
-        prefs(context).edit().putBoolean("enabled", enabled).apply();
-        schedule(context);
-        if (enabled) check(context, false, null);
-    }
-
-    /** Explicit install also works with automatic updates off; never bypasses an alarm/editor. */
+    /** Explicit retry/confirmation never bypasses an alarm or an unfinished editor. */
     static void installNow(Activity activity) {
         if (busy() || alarmActive(activity) || MainActivity.onbacknr() != 0) return;
         manualInstall = true;
@@ -376,8 +361,7 @@ public final class AppUpdates {
     private static void prepareInstall(Context context, File apk, AppUpdateRelease release) {
         if (apk == null || release == null) return;
         if (preparedRelease != release) return; // A newer check superseded this deferred attempt.
-        if (!installAllowed(prefs(context).getBoolean("enabled", true), manualInstall)
-                || prefs(context).getInt("session", -1) >= 0) return;
+        if (prefs(context).getInt("session", -1) >= 0) return;
         if (!canInstall(context)) {
             state(context, "permission");
             permissionNotice(context);
@@ -415,8 +399,7 @@ public final class AppUpdates {
                 int sessionId = id;
                 MAIN.post(() -> {
                     try {
-                        if (!installAllowed(prefs(context).getBoolean("enabled", true), manualInstall)
-                                || !safeSurface(context) || !installationNetworkAllowed(context)) {
+                        if (!safeSurface(context) || !installationNetworkAllowed(context)) {
                             abandon(context, sessionId);
                             state(context, "ready");
                             deferInstall(context, apk, release);
@@ -477,6 +460,9 @@ public final class AppUpdates {
 
     static void reconcile(Context context) throws Exception {
         SharedPreferences prefs = prefs(context);
+        // Older versions let users pause updates. Retire that preference on both
+        // app startup and background checks; no update path consults it anymore.
+        if (prefs.contains("enabled")) prefs.edit().remove("enabled").apply();
         long installed = AppUpdateVerifier.version(AppUpdateVerifier.installed(context));
         recordInstalledVersion(context, installed);
         int session = prefs.getInt("session", -1);

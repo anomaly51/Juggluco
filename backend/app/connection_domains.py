@@ -21,14 +21,14 @@ def allowed_viewer_label(label: str) -> bool:
 
 def valid_custom_name(label: str) -> bool:
     # Reserve generated names so people cannot impersonate a fresh installation.
-    return allowed_viewer_label(label) and not label.startswith('user-')
+    return len(label) <= 57 and allowed_viewer_label(label) and not label.startswith('user-')
 
 
-def domain_label() -> str:
-    # 60 random bits, independent of the write credential. The registry checks
-    # collisions under its writer lock and stores the result durably.
-    suffix = base64.b32encode(secrets.token_bytes(8)).decode('ascii').lower()[:12]
-    return 'user-' + suffix
+def domain_label(name: str = 'user') -> str:
+    # A short public address, NOT an authentication secret. Write credentials
+    # remain independent. The registry reserves names and retries collisions.
+    suffix = base64.b32encode(secrets.token_bytes(4)).decode('ascii').lower()[:5]
+    return name + '-' + suffix
 
 
 def is_personal_hostname(host: str | None, settings) -> bool:

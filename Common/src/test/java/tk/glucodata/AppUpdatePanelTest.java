@@ -7,7 +7,6 @@ import android.content.Context;
 import android.content.res.Configuration;
 import android.os.Looper;
 import android.widget.Button;
-import android.widget.Switch;
 import android.widget.TextView;
 import java.time.Duration;
 import java.util.Locale;
@@ -62,12 +61,21 @@ public class AppUpdatePanelTest {
         assertTrue(AppUpdates.prefs(context).getBoolean("update_unseen", false));
     }
 
-    @Test public void manualInstallationRemainsAvailableWhenAutomaticIsOff() {
-        assertTrue(AppUpdates.installAllowed(false, true));
-        assertTrue(AppUpdates.installAllowed(true, false));
-        assertFalse(AppUpdates.installAllowed(false, false));
-        assertEquals(R.string.app_update_ready_manual, AppUpdatePanel.detail("ready", false, false, true));
-        assertEquals(R.string.app_update_retry_manual, AppUpdatePanel.detail("retry", false, false, true));
+    @Test public void readyAndRetryAlwaysDescribeAutomaticUpdates() {
+        assertEquals(R.string.app_update_ready_auto, AppUpdatePanel.detail("ready", false, true));
+        assertEquals(R.string.app_update_retry, AppUpdatePanel.detail("retry", false, true));
+    }
+
+    @Test public void reconciliationRemovesLegacyOptOutWithoutResettingOtherPreferences() throws Exception {
+        for (boolean previouslyEnabled : new boolean[]{false, true}) {
+            AppUpdates.prefs(context).edit().putBoolean("enabled", previouslyEnabled)
+                    .putLong("retry_after", 12345).putString("state", "check_failed").commit();
+            AppUpdates.reconcile(context);
+            AppUpdates.reconcile(context); // Migration is idempotent.
+            assertFalse(AppUpdates.prefs(context).contains("enabled"));
+            assertEquals(12345, AppUpdates.prefs(context).getLong("retry_after", 0));
+            assertEquals("check_failed", AppUpdates.prefs(context).getString("state", ""));
+        }
     }
 
     @Test public void serverTimeoutNeverClaimsAnInstalledUpdateFailed() {
@@ -75,7 +83,7 @@ public class AppUpdatePanelTest {
         assertEquals("retry", AppUpdates.failureState("downloading"));
         assertEquals(R.string.app_update_check_failed_title, AppUpdatePanel.headline("check_failed"));
         assertEquals(R.string.app_update_check_failed_help,
-                AppUpdatePanel.detail("check_failed", true, false, true));
+                AppUpdatePanel.detail("check_failed", false, true));
         AppUpdates.prefs(context).edit().putString("state", "check_failed")
                 .putBoolean("update_unseen", true).putLong("target", BuildConfig.VERSION_CODE).commit();
         assertTrue(AppUpdatePanel.banner(context).startsWith(
@@ -94,9 +102,9 @@ public class AppUpdatePanelTest {
     }
 
     @Test public void waitingReasonsPrioritizeAlarmsAndEditors() {
-        assertEquals(R.string.app_update_wait_alarm, AppUpdatePanel.detail("ready", true, true, true));
-        assertEquals(R.string.app_update_wait_home, AppUpdatePanel.detail("ready", true, false, false));
-        assertEquals(R.string.app_update_confirmation_help, AppUpdatePanel.detail("confirmation", true, false, true));
+        assertEquals(R.string.app_update_wait_alarm, AppUpdatePanel.detail("ready", true, true));
+        assertEquals(R.string.app_update_wait_home, AppUpdatePanel.detail("ready", false, false));
+        assertEquals(R.string.app_update_confirmation_help, AppUpdatePanel.detail("confirmation", false, true));
         assertTrue(AppUpdatePanel.working("verifying"));
         assertTrue(AppUpdatePanel.working("preparing"));
         assertFalse(AppUpdatePanel.working("confirmation"));
@@ -113,12 +121,10 @@ public class AppUpdatePanelTest {
             AlertDialog dialog = AppUpdatePanel.show(activity, () -> dismissed[0] = true);
             TextView bytes = dialog.getWindow().getDecorView().findViewWithTag("update_bytes");
             Button action = dialog.getWindow().getDecorView().findViewWithTag("update_action");
-            Switch automatic = dialog.getWindow().getDecorView().findViewWithTag("update_automatic");
+            assertNull(dialog.getWindow().getDecorView().findViewWithTag("update_automatic"));
+            assertNull(dialog.getWindow().getDecorView().findViewWithTag("update_auto_help"));
             assertTrue(bytes.getText().toString().contains("25%"));
             assertFalse(action.isEnabled());
-            automatic.setChecked(false);
-            assertTrue(dialog.isShowing());
-            assertFalse(AppUpdates.prefs(activity).getBoolean("enabled", true));
             AppUpdates.prefs(activity).edit().putString("state", "current").commit();
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(300));
             assertTrue(dialog.isShowing());
@@ -140,7 +146,7 @@ public class AppUpdatePanelTest {
             for (String state : new String[]{"", "checking", "downloading", "verifying", "ready",
                     "permission", "preparing", "confirmation", "installing", "retry", "current"}) {
                 assertFalse(localized.getString(AppUpdatePanel.headline(state)).isEmpty());
-                assertFalse(localized.getString(AppUpdatePanel.detail(state, true, false, true)).isEmpty());
+                assertFalse(localized.getString(AppUpdatePanel.detail(state, false, true)).isEmpty());
             }
             assertTrue(localized.getString(R.string.app_update_install)
                     .startsWith(language.equals("ru") ? "Установить" : "Install"));

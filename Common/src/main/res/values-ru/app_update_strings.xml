@@ -5,9 +5,6 @@
     <string name="app_update_automatic_description">Обновления загружаются автоматически при подключении к интернету. Установка начинается на главном экране, если нет активных тревог. Android может ненадолго перезапустить приложение или запросить подтверждение.</string>
     <string name="app_update_check">Проверить</string>
     <string name="app_update_allow">Разрешить обновления</string>
-    <string name="app_update_pause">Приостановить автообновления</string>
-    <string name="app_update_paused">Автоматическая загрузка и установка выключены. Проверка новых версий продолжается. При наличии интернета нужно установить доступное обновление, чтобы продолжить. Начатая загрузка может завершиться.</string>
-    <string name="app_update_enable">Включить автообновления</string>
     <string name="app_update_checking">Проверка обновлений…</string>
     <string name="app_update_downloading">Загрузка обновления…</string>
     <string name="app_update_ready">Обновление готово. Вернитесь на главный экран, когда завершите текущую задачу или отключите активную тревогу.</string>
@@ -32,10 +29,8 @@
     <string name="app_update_wait_alarm">Установка ждёт завершения активной тревоги. Показания сенсора и оповещения важнее обновления.</string>
     <string name="app_update_wait_home">Завершите текущую задачу и вернитесь на главный экран. Ввод данных не закроется автоматически.</string>
     <string name="app_update_ready_auto">Файл скачан и проверен. Установите сейчас или закройте это окно — установка начнётся автоматически на главном экране.</string>
-    <string name="app_update_ready_manual">Файл скачан и проверен. Нажмите «Установить обновление», когда будете готовы.</string>
     <string name="app_update_confirmation_help">Нажмите «Продолжить установку», чтобы открыть подтверждение Android. Если Play Protect предложит проверку, пройдите её там. Обновление ещё не установлено.</string>
     <string name="app_update_install_help">Android заменяет приложение. Оно может ненадолго закрыться. После установки снова откройте Juggluco — там будет новая версия.</string>
-    <string name="app_update_retry_manual">Установленная версия не изменилась. Проверьте интернет и свободное место, затем повторите попытку.</string>
     <string name="app_update_download_help">Окно можно закрыть. Загрузка не прерывает получение показаний. Установка — отдельный этап.</string>
     <string name="app_update_check_help">Связываемся с сервером релизов. Результат появится здесь автоматически.</string>
     <string name="app_update_progress">%1$d%% · %2$.1f / %3$.1f МБ</string>
@@ -43,8 +38,6 @@
     <string name="app_update_continue">Продолжить установку</string>
     <string name="app_update_try_again">Повторить попытку</string>
     <string name="app_update_in_progress">Выполняется…</string>
-    <string name="app_update_auto_label">Автообновления</string>
-    <string name="app_update_auto_on">Включены. Загрузка при наличии интернета; установка на главном экране без активных тревог. Android может запросить подтверждение.</string>
     <string name="app_update_close">Закрыть</string>
     <string name="app_update_success">Обновлено до %1$s</string>
     <string name="app_update_open_details">Подробнее об обновлении →</string>

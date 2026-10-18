@@ -23,6 +23,10 @@ final class PersonalLinkVerifier {
     }
     static final class Network implements Transport {
         public void resolve(String host) throws Exception {
+            if(android.os.Build.VERSION.SDK_INT>=29 && !host.matches("[0-9.]+") && !host.contains(":")) {
+                PersonalDnsResolver.resolve(host);
+                return;
+            }
             if(InetAddress.getAllByName(host).length==0) throw new java.net.UnknownHostException();
         }
         public String get(String url) throws Exception {

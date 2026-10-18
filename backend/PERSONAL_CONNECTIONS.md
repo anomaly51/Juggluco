@@ -14,25 +14,26 @@ forecast cursors from device transfers. This follows Android's guidance on
 
 Settings → Connections → Personal link shows the percentage and current status
 in one compact line, without a checklist. All eight setup checks remain
-(10 / 25 / 40 / 55 / 70 / 85 / 95 / 100%), with elapsed time, attempt count
+(10 / 25 / 30 / 40 / 55 / 70 / 85 / 95 / 100%), with elapsed time, attempt count
 and a countdown to the next retry. These percentages
 represent checks, not estimated time. Failures retry after 10–30 seconds while
-the screen is observed, or a minute in the background while the process is alive.
+the screen is observed, then once a minute after four attempts or in the background.
+Publication delays and phone DNS failures have separate actionable status messages.
 Opening the screen or a later launch resumes with the same durable identity.
 The local glucose/alert system does not wait for provisioning.
 
-Android 911 uses `https://user-<12-random-base32-characters>.api-api-api.com/`
+Android 913 uses `https://user-<5-random-base32-characters>.api-api-api.com/`
 on the first launch.
-The suffix has 60 random bits (not a sequential ID); a unique SQLite index and
+The suffix has 25 random bits (not a sequential ID); a unique SQLite index and
 collision retries under the writer lock guarantee that one live address never
 selects two profiles. Owner credentials remain 256-bit and UUIDs do not change.
 This is a deliberate URL-length/privacy trade-off for the small deployment:
-it is harder to guess than a 4–6 character code, but has less entropy than the
-old 128-bit viewer address. Possession of the URL grants read-only access.
+it is a public, guessable address, not an authentication secret.
+Possession of the URL grants read-only access.
 It opens the application at the domain root: no `/viewer/` or `?profile=` is
-needed in the shared address. In Settings, changing the name replaces the entire
-generated label, e.g. `https://my-sugar.api-api-api.com/`, with no prefix or suffix.
-The form previews that URL, folds ASCII case, and permits 1–63 Latin letters,
+needed in the shared address. In Settings, a name gets a random five-character
+suffix, e.g. `https://my-sugar-abc23.api-api-api.com/`.
+The form previews `name-xxxxx` (placeholder, assigned on save), folds ASCII case, and permits 1–57 Latin letters,
 digits and internal hyphens. Leaving it empty generates another random user- name.
 Custom names are deliberately public and guessable, not authentication; the form
 warns that anyone guessing the URL can read glucose. Write credentials never change.
@@ -45,23 +46,30 @@ database or model. The old handle stops working, including existing SSE streams
 (at the next update/heartbeat, at most 15 seconds). Already downloaded copies on
 other devices cannot be remotely erased.
 
-The versioned migration replaces existing `gluco-*`/`g-*` DNS labels once with
+Registry schema version 2 replaces all previous DNS labels once with short
 durable `user-*` labels, as explicitly requested by the owner. There is exactly
 one active DNS address per profile: no redirect or fallback DNS name. Old DNS links
 are rejected immediately and removed from the routing snapshot. UUID, owner
 credential, handle, database and model stay unchanged. Explicit "Change link"
 remains idempotent and revokes the prior address and query handle. Choosing the
-current name is a no-op. A taken name returns 409 without changing either user;
-invalid/reserved names return 422. Android clears only definitively rejected
+current name is a no-op. Different people can use the same name with distinct
+suffixes; collisions retry inside the writer transaction. Invalid/reserved names
+return 422. Android clears only definitively rejected
 operations so another name can be submitted; uncertain requests retain their ID.
 The small viewer_names reservation table retains name ownership, not aliases.
 Retired names are never handed to another installation (browser caches must not
-cross people); the same owner may reclaim their own retired custom name.
+cross people). Returning to an old name creates a fresh suffix, not an old alias.
 
 The server still returns `viewer_url`, `viewer_ready` and the legacy `viewer_path`.
-Android 911 is required for user-* and custom DNS addresses; older APKs must be updated.
+Android 913 waits for server publication and refreshes the phone's DNS lookup.
+Android 911/912 accept the shorter names but lack the DNS-cache recovery flow.
 PWA cache/session/manifest isolation recognizes every non-API host in the viewer
 zone, not just a name prefix. Cached old pages fail closed, never falling back to legacy data.
+Android 913 waits at 30% until the server has verified DNS and public HTTPS, before
+querying the new hostname on the phone. This prevents priming negative DNS caches
+while ExternalDNS is still publishing. On Android 10+, `DnsResolver` uses
+`FLAG_NO_CACHE_LOOKUP` with the default network/provider (including Private DNS/VPN);
+older phones retain the normal resolver. DNS settings and TLS checks are not changed.
 Starting with Android 909, the server's readiness hint is **not**
 enough for 100%: the phone resolves DNS on its own network, validates the public
 TLS endpoint and matching host, fetches the root PWA, its same-origin JS/CSS and
@@ -69,8 +77,8 @@ install manifest, then validates the read-only snapshot API. The owner endpoint
 is queried again to confirm the URL did not change during those checks. Redirects
 are rejected; TLS verification stays enabled; owner credentials are never sent
 to public viewer requests. Network failures remain below 100% with a retry.
-Copy/Open only become available after this cycle succeeds. Change is also enabled
-after a rejected name so it can be corrected without repeating readiness. A new explicit
+Copy/Open only become available after this cycle succeeds. Change is available
+after any finished attempt so a failed name can be replaced. A new explicit
 check never retains a stale 100%. Browser-specific negative DNS caches can still
 lag behind the phone resolver: an old browser tab may need reloading later.
 Link readiness and measurement freshness are separate: show the last sensor
@@ -173,8 +181,8 @@ this change does not auto-promote unvalidated personalized models for new users.
 
 ## Deployment and operating limits
 
-For this naming-format migration, publish Android 911 before promoting the new
-backend + rebuilt PWA; Android 911 also accepts the prior g-* host format. Existing
+For this naming-format migration, publish Android 913 before promoting the new
+backend + rebuilt PWA, so the phone can wait for publication before its first DNS query. Existing
 older Android clients keep uploading through their unchanged device API endpoint,
 but must update to display and verify the new viewer URL. No Vault
 secret needs to be embedded in the APK: installation credentials are generated

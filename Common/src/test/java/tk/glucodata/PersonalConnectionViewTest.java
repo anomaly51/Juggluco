@@ -53,7 +53,7 @@ public class PersonalConnectionViewTest {
         assertEquals(context.getString(R.string.personal_connection_try),view.primary.getText().toString());
         view.render(90,R.string.personal_connection_dns_pending,"https://gluco-abcdefghijklmnopqrstuvwxyz.api-api-api.com/",false,false);
         assertFalse(view.open.isEnabled());
-        assertFalse(view.change.isEnabled());
+        assertTrue("A DNS failure must not trap the user on an unusable link",view.change.isEnabled());
         assertTrue(view.primary.isEnabled());
         assertTrue(view.status.getText().toString().contains("90%"));
         view.render(100,R.string.personal_connection_ready,"https://example.com",false,false);

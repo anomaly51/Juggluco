@@ -4,7 +4,9 @@ The phone app checks the public GitHub Releases feed at startup and every six ho
 with a network-constrained JobScheduler job. Downloads resume from private,
 no-backup storage. No GitHub token, kubeconfig or backend credentials are shipped.
 The More drawer shows the actual build's version at its bottom-right corner and
-an Updates control for permission setup, retry and pausing automatic updates.
+an Updates control for progress, permission setup and retry. Automatic checks,
+downloads and installation attempts are always enabled; there is no opt-out.
+Legacy pause preferences are removed on startup and background checks.
 
 ## Install behavior
 
@@ -92,9 +94,11 @@ Already downloaded/committed updates cannot be remotely recalled.
 On phones running Android 6+, a newer compatible release confirmed by the HTTPS
 feed requires updating before ordinary use while internet is validated by Android.
 The full-screen update panel has no Close/Skip/disable-auto control. It shares the
-normal download, verification, permission and OS-confirmation flow. Turning off
-automatic downloads does not disable release discovery or this requirement; the
-Update button explicitly starts download and installation.
+normal automatic download, verification, permission and OS-confirmation flow.
+Neither the normal nor the required panel exposes a pause/disable control.
+The Update button remains available for retry and Android confirmation; it is
+not an automatic-update toggle. Download retry backoff and alarm/editor safety
+checks still apply.
 
 Foreground release discovery runs at entry/reconnection and every five minutes.
 A one-second foreground-only UI tick observes network, alarm and editor state;
@@ -127,8 +131,9 @@ Device test before enabling unattended private-key releases:
 6. Verify denied install permission, denied notifications and OS confirmation.
 7. Repeat after reboot and on the folded/unfolded phone.
 8. With a newer release known, verify the required screen cannot be skipped via
-   Back/outside taps. Turn automatic downloads off before discovery: the screen
-   still appears and Update starts the full flow. Reconnect while staying in Home.
+   Back/outside taps. Upgrade a legacy installation with automatic updates paused:
+   the preference is removed and downloads start automatically. No screen offers
+   a disable toggle. Reconnect while staying in Home and verify progress updates.
 9. Lose internet (including an offline Wi-Fi/captive portal): Home becomes usable
    within one foreground tick. Restore internet: the same required screen returns.
    Start an alert or leave an editor open before discovery: neither is interrupted.

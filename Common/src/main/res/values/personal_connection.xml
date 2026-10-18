@@ -12,7 +12,9 @@
     <string name="personal_connection_check_page">Loading viewer…</string>
     <string name="personal_connection_check_data">Checking glucose and history…</string>
     <string name="personal_connection_check_final">Final verification…</string>
-    <string name="personal_connection_dns_phone_wait">Waiting for DNS. Retrying automatically.</string>
+    <string name="personal_connection_dns_phone_wait">The server link is live, but this network cannot resolve it yet. Try another network or check Private DNS / VPN. We will retry automatically.</string>
+    <string name="personal_connection_server_dns_failed">Cannot resolve the server. Check internet, Private DNS or VPN. We will retry automatically.</string>
+    <string name="personal_connection_publish_delayed">Server publication is taking longer than expected. Your data is saved. Checking again in the background.</string>
     <string name="personal_connection_tls_failed">HTTPS verification failed. Check the phone’s date and connection.</string>
     <string name="personal_connection_verification_retry">Connection check failed. Retrying automatically.</string>
     <string name="personal_connection_elapsed">Attempt %1$d · elapsed %2$s</string>
@@ -30,7 +32,7 @@
     <string name="personal_connection_conflict">This history already belongs to another installation. Nothing was replaced.</string>
     <string name="personal_connection_capacity">Server is busy or has reached its limit. Try again later.</string>
     <string name="personal_connection_progress">%1$d%% · %2$s</string>
-    <string name="personal_connection_dns_pending">Waiting for DNS and HTTPS…</string>
+    <string name="personal_connection_dns_pending">Publishing the address and checking HTTPS…</string>
     <string name="personal_connection_link_pending">Your personal link will appear here.</string>
     <string name="personal_connection_privacy">Anyone with this link can view your glucose. Read-only.</string>
     <string name="personal_connection_forecast">Your readings, meals, insulin and forecasts stay separate from other phones. New profiles start with the standard forecast, without another person’s personal adjustments.</string>
@@ -42,9 +44,9 @@
     <string name="personal_connection_claim">Connect existing history</string>
     <string name="personal_connection_claim_help">Connect this server’s existing history and forecast model to this phone. Nothing is deleted. This one-time action requires the current backend credential and is only for the owner of that history.</string>
     <string name="personal_connection_label">Link name</string>
-    <string name="personal_connection_label_invalid">Use 1–63 English letters, digits or hyphens. No hyphen at either end. Service names and user- are reserved.</string>
+    <string name="personal_connection_label_invalid">Use 1–57 English letters, digits or hyphens. No hyphen at either end. Service names and user- are reserved.</string>
     <string name="personal_connection_name_taken">This name is unavailable. Choose another; your current link is unchanged.</string>
     <string name="personal_connection_renaming">Saving name…</string>
-    <string name="personal_connection_random_preview">Empty = new user-&lt;random code&gt;.api-api-api.com</string>
-    <string name="personal_connection_rotate_help">Your name replaces the entire random address. Anyone who guesses it can view your glucose. The old link stops working; saved copies remain. History and forecast are kept.</string>
+    <string name="personal_connection_random_preview">Empty = user-xxxxx.api-api-api.com</string>
+    <string name="personal_connection_rotate_help">xxxxx is a random 5-character code assigned on save. Anyone with the link can view your glucose. The old link stops working; history and forecast are kept.</string>
 </resources>

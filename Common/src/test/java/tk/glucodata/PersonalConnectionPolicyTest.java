@@ -4,6 +4,11 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class PersonalConnectionPolicyTest {
+    @Test public void unpublishedDomainsMustNotBeQueriedButLegacyPathsStillWork() {
+        assertTrue(PersonalConnectionPolicy.publicationPending("https://user-abc23.api-api-api.com/",false));
+        assertFalse(PersonalConnectionPolicy.publicationPending("https://user-abc23.api-api-api.com/",true));
+        assertFalse(PersonalConnectionPolicy.publicationPending("",false));
+    }
     @Test public void personalDnsUrlIsHttpsAndBoundToTheConfiguredProductionZone() {
         String base="https://juggluco-general1.api-api-api.com";
         String host="gluco-my-sugar-abcdefghijklmnopqrstuvwxyz.api-api-api.com";
@@ -25,9 +30,9 @@ public class PersonalConnectionPolicyTest {
     @Test public void labelsAreOptionalAndCannotInjectUrlComponents() {
         assertTrue(PersonalConnectionPolicy.validLabel(""));
         assertTrue(PersonalConnectionPolicy.validLabel("my-sugar"));
-        assertTrue(PersonalConnectionPolicy.validLabel("a".repeat(63)));
+        assertTrue(PersonalConnectionPolicy.validLabel("a".repeat(57)));
         assertTrue(PersonalConnectionPolicy.validLabel("vlad"));
-        for(String bad:new String[]{null,"../other","a?profile=x","a/b","-hello","hello-","Сахар","a b","a".repeat(64),
+        for(String bad:new String[]{null,"../other","a?profile=x","a/b","-hello","hello-","Сахар","a b","a".repeat(58),
                 "user-abcdefghijkl","api","internal","juggluco-general1","online-shop-general2"})
             assertFalse(PersonalConnectionPolicy.validLabel(bad));
     }

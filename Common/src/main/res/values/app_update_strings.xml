@@ -5,9 +5,6 @@
     <string name="app_update_automatic_description">Updates download automatically when internet is available. Installation waits until you are on Home and no alert is active. Android may briefly restart the app or ask for confirmation.</string>
     <string name="app_update_check">Check now</string>
     <string name="app_update_allow">Allow updates</string>
-    <string name="app_update_pause">Pause automatic updates</string>
-    <string name="app_update_paused">Automatic downloads and installation are off. New versions are still checked. When online, you must install an available update to continue. A download already in progress can finish.</string>
-    <string name="app_update_enable">Enable automatic updates</string>
     <string name="app_update_checking">Checking for updates…</string>
     <string name="app_update_downloading">Downloading update…</string>
     <string name="app_update_ready">Update ready. Return to Home after the active alert or task is finished.</string>
@@ -32,10 +29,8 @@
     <string name="app_update_wait_alarm">Installation is waiting for an active alert to end. Sensor readings and alerts take priority.</string>
     <string name="app_update_wait_home">Finish your current task and return to Home to install. Your input will not be closed automatically.</string>
     <string name="app_update_ready_auto">Downloaded and verified. Install now, or close this window to let it install automatically on Home.</string>
-    <string name="app_update_ready_manual">Downloaded and verified. Tap Install update when you are ready.</string>
     <string name="app_update_confirmation_help">Tap Continue installation to open the Android confirmation. If Play Protect asks for a check, complete it there. The update is not installed yet.</string>
     <string name="app_update_install_help">Android is replacing the app. It may close briefly. Reopen Juggluco afterwards to see the new version.</string>
-    <string name="app_update_retry_manual">Your installed version is unchanged. Check your internet connection and available storage, then try again.</string>
     <string name="app_update_download_help">You can close this window. Downloading does not interrupt sensor readings. Installation is a separate step.</string>
     <string name="app_update_check_help">Contacting the release server. The result will appear here automatically.</string>
     <string name="app_update_progress">%1$d%% · %2$.1f / %3$.1f MB</string>
@@ -43,8 +38,6 @@
     <string name="app_update_continue">Continue installation</string>
     <string name="app_update_try_again">Try again</string>
     <string name="app_update_in_progress">In progress…</string>
-    <string name="app_update_auto_label">Automatic updates</string>
-    <string name="app_update_auto_on">On. Downloads with internet; installs on Home when no alert is active. Android may ask for confirmation.</string>
     <string name="app_update_close">Close</string>
     <string name="app_update_success">Updated to %1$s</string>
     <string name="app_update_open_details">Update details →</string>

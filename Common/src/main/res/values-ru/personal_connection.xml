@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="personal_connection_dns_pending">Ожидаем DNS и HTTPS…</string>
+    <string name="personal_connection_dns_pending">Публикуем адрес и проверяем HTTPS…</string>
     <string name="personal_connection_title">Персональная ссылка</string>
     <string name="personal_connection_waiting">Ожидание подключения</string>
     <string name="personal_connection_identity">Создаём ID телефона</string>
@@ -13,7 +13,9 @@
     <string name="personal_connection_check_page">Загружаем сайт…</string>
     <string name="personal_connection_check_data">Проверяем сахар и историю…</string>
     <string name="personal_connection_check_final">Финальная проверка…</string>
-    <string name="personal_connection_dns_phone_wait">Ожидаем DNS. Повторим автоматически.</string>
+    <string name="personal_connection_dns_phone_wait">Ссылка на сервере работает, но эта сеть пока не находит адрес. Попробуйте другую сеть или проверьте частный DNS / VPN. Повторим автоматически.</string>
+    <string name="personal_connection_server_dns_failed">Не найден адрес сервера. Проверьте интернет, частный DNS или VPN. Повторим автоматически.</string>
+    <string name="personal_connection_publish_delayed">Публикация на сервере заняла больше времени. Данные сохранены. Продолжаем проверку в фоне.</string>
     <string name="personal_connection_tls_failed">Ошибка проверки HTTPS. Проверьте дату телефона и подключение.</string>
     <string name="personal_connection_verification_retry">Проверка не пройдена. Повторим автоматически.</string>
     <string name="personal_connection_elapsed">Попытка %1$d · прошло %2$s</string>
@@ -42,9 +44,9 @@
     <string name="personal_connection_claim">Подключить текущую историю</string>
     <string name="personal_connection_claim_help">Привязать текущую историю и модель этого сервера к телефону. Данные не удаляются. Это однократное действие с текущим ключом Backend; его должен выполнять только владелец этой истории.</string>
     <string name="personal_connection_label">Имя ссылки</string>
-    <string name="personal_connection_label_invalid">1–63 латинские буквы, цифры или дефисы. Дефис не по краям. Служебные имена и user- зарезервированы.</string>
+    <string name="personal_connection_label_invalid">1–57 латинских букв, цифр или дефисов. Дефис не по краям. Служебные имена и user- зарезервированы.</string>
     <string name="personal_connection_name_taken">Это имя недоступно. Выберите другое; текущая ссылка не изменилась.</string>
     <string name="personal_connection_renaming">Сохраняем имя…</string>
-    <string name="personal_connection_random_preview">Пусто = новый user-&lt;случайный код&gt;.api-api-api.com</string>
-    <string name="personal_connection_rotate_help">Имя заменит весь случайный адрес. Угадавший его сможет видеть сахар. Старая ссылка отключится; скачанные копии останутся. История и прогноз сохранятся.</string>
+    <string name="personal_connection_random_preview">Пусто = user-xxxxx.api-api-api.com</string>
+    <string name="personal_connection_rotate_help">xxxxx — случайный код из 5 символов, выдаётся при сохранении. Любой, у кого есть ссылка, видит сахар. Старая ссылка отключится; история и прогноз сохранятся.</string>
 </resources>
