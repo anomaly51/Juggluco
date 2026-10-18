@@ -1,7 +1,7 @@
 replicas: 1
 image:
   repository: harbor.internal.api-api-api.com/applications/juggluco
-  tag: sha-f03011359fb7
+  tag: sha-ba42e3e43d0d
   pullPolicy: IfNotPresent
 registry:
   server: harbor.internal.api-api-api.com
@@ -64,6 +64,7 @@ forecastRetry:
 config:
   databasePath: /data/juggluco.db
   personalConnections: true
+  connectionViewerDomain: api-api-api.com
   connectionRegistrationLimit: 100
   connectionRuntimeLimit: 32
   connectionAiDailyLimit: 100
@@ -72,6 +73,10 @@ config:
   viewerPublic: true
   trustedProxyCidrs: 10.42.0.0/16
   openrouterAudioLanguage: ru
+# Exact per-installation HTTPRoutes are reconciled by a restricted sidecar.
+# The existing cluster ExternalDNS and wildcard HTTPS certificate handle DNS/TLS.
+personalDns:
+  enabled: true
 resources:
   requests:
     cpu: 100m
